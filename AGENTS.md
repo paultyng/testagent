@@ -19,18 +19,34 @@ v1 ships a drop-in fake for Claude Code: argv compatibility for the flags orches
 
 ## Design conventions
 
-- **Schema types are duplicated, not imported.** `Settings` and `MCPConfig` mirror Claude Code's on-disk shapes. testagent stays self-contained.
-- **Stdlib-first; deps are deliberate.** Each non-stdlib dep is justified in the commit message that adds it (`mark3labs/mcp-go`, `lipgloss`, `bubbletea`, `bubbles`, `go-isatty`).
-- **Interactive vs non-interactive split.** TTY stdin → bubbletea TUI (`tui.go`, alt-screen, concurrent input during the thinking spinner). Piped stdin or `--print` → `runScannerLoop` (line-scanner, inline rendering). The `mattn/go-isatty` check on `os.Stdin` is the gate; e2e tests pipe stdin so they always hit the scanner path.
+- **Schema types are duplicated, not imported.** `Settings` and `MCPConfig` mirror Claude Code's on-disk shapes and live in `cmd/claude/settings.go` (vendor-specific, not shared with the engine).
+- **Stdlib-first; deps are deliberate.** Each non-stdlib dep is justified in the commit message that adds it (`mark3labs/mcp-go`, `lipgloss`, `bubbletea`, `bubbles`, `go-isatty`, `spf13/cobra`).
+- **Interactive vs non-interactive split.** TTY stdin → bubbletea TUI (`internal/engine/tui.go`, alt-screen, concurrent input during the thinking spinner). Piped stdin → scanner loop (`internal/engine/scanner.go`, line-based, inline rendering). `--print/-p` is a third path (`cmd/claude/print.go`, one-shot output formatter). The `mattn/go-isatty` check on `os.Stdin` is the TUI/scanner gate; e2e tests pipe stdin so they always hit the scanner path.
 - **Conventional Commits.** One commit per phase. Each phase's commit leaves the tree buildable and tested.
 - **Tests:** `t.Parallel()`, table-driven, real `httptest`/`exec`-driven integration over mocks where possible (see `e2e_test.go`). Fixtures in `testdata/`.
 - **Debug output goes to stderr.** Verbose / debug logging (e.g. `--verbose` hook traces) is plain text, one event per line, never ANSI-styled — it gets grepped and piped. Stdout stays reserved for stream-json frames and TUI rendering.
 
+## Layout
+
+```
+main.go                     # cobra root + bare-invocation default-to-claude
+cmd/claude/                 # claude subcommand: vendor flags, Settings/MCPConfig, runPrint
+cmd/codex/                  # stub subcommand, validates per-vendor cobra contract
+internal/engine/            # Globals + Deps + Run; TUI + scanner + spinner
+internal/hooks/             # Sender (HTTP hook POSTs)
+internal/mcp/               # Client (MCP HTTP handshake + tools/call)
+internal/slash/             # Handler (slash-command grammar)
+internal/render/            # lipgloss style tokens + intent helpers
+e2e_test.go                 # builds the binary, pipes stdin, asserts behavior
+Taskfile.yaml               # build / test / lint / ci / gen:demo / dumpcli:claude
+```
+
+The argv shape is `testagent [global-flags] <subcommand> [subcommand-flags]`. Bare invocation prepends `claude` so v0 scripts (no subcommand) keep working. Lone `--help` / `-h` routes to root help, not claude help.
+
 ## Future conventions (apply when phase 3+ lands)
 
-- **One subcommand per emulated agent type**: `testagent claude ...`, `testagent codex ...`, `testagent gemini ...`, etc. The current bare invocation is the implicit `claude` mode.
-- **One package per agent type** under `internal/agents/<vendor>/` containing the vendor's argv shape, payload encoders, and any vendor-specific quirks. Shared engine in `internal/`.
-- **Package boundaries** worth carving as the codebase grows: `internal/slash` (command grammar + dispatcher), `internal/hooks` (HTTP hook sender), `internal/mcp` (MCP client), `internal/render` (lipgloss wrappers). Currently all in `package main` for v1 simplicity.
+- **More vendors** under `cmd/<vendor>/`: gemini, copilot, aider, amp, q, goose, crush.
+- **Vendor-specific quirks** stay in their own subcommand package; engine stays vendor-neutral.
 
 ## Fixtures
 

@@ -1,0 +1,39 @@
+version: '3'
+
+tasks:
+  build:
+    desc: Compile the testagent binary at the module root.
+    cmds:
+      - go build .
+
+  test:
+    desc: Run the full test suite.
+    cmds:
+      - go test ./...
+
+  lint:
+    desc: Vet + gofmt drift check.
+    cmds:
+      - go vet ./...
+      - gofmt -l .
+
+  ci:
+    desc: Local CI dry-run — lint, test, build.
+    deps: [lint, test, build]
+
+  gen:demo:
+    desc: Re-render demo/hero.gif from demo/hero.tape via vhs.
+    cmds:
+      - vhs demo/hero.tape
+
+  dumpcli:claude:
+    desc: Capture the claude subcommand's --help for compat-matrix drift detection.
+    cmds:
+      - mkdir -p compat
+      - go run . claude --help > compat/claude.cli.txt
+
+  dumpcli:root:
+    desc: Capture the root --help for compat tracking.
+    cmds:
+      - mkdir -p compat
+      - go run . --help > compat/root.cli.txt

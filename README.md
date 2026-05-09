@@ -16,7 +16,20 @@ go install github.com/paultyng/testagent@latest
 
 ## What it does
 
-Argv-compatible with Claude Code's flag surface:
+The argv shape is `testagent [global-flags] <subcommand> [subcommand-flags] [positional]`. Bare invocation defaults to the `claude` subcommand, so existing scripts that pre-date the split keep working:
+
+```sh
+testagent --session-id sid-x --settings ./s.json   # defaults to: testagent claude ...
+testagent claude --session-id sid-x --settings ./s.json   # same thing, explicit
+```
+
+**Global flags** (engine-level — same across vendors):
+
+- `--history-cap N` — interactive scrollback cap (default 1000; 0 = unlimited)
+- `--verbose` / `-v` — log every hook POST to stderr (`hook <event> POST <url> <status> <elapsed> <bodysize> [err=...]`)
+- `--auto-exit DUR`, `--exit-after N`, `--delay DUR` — pacing knobs for headless tests
+
+**Claude subcommand flags** (argv-compatible with Claude Code):
 
 - `--session-id <uuid>` / `--resume <uuid>` — session identity
 - `--settings <path>` — Claude-shaped settings JSON; URLs receive HTTP hook POSTs
@@ -26,9 +39,8 @@ Argv-compatible with Claude Code's flag surface:
 - `--print` / `-p` — non-interactive one-shot
 - `--output-format text|json|stream-json` — output shape for `--print`
 - `-n` / `--name` — banner label
-- `--delay`, `--auto-exit`, `--exit-after` — pacing knobs for headless tests
-- `--history-cap N` — interactive scrollback cap (default 1000; 0 = unlimited)
-- `--verbose` / `-v` — log every hook POST to stderr (`hook <event> POST <url> <status> <elapsed> <bodysize> [err=...]`)
+
+**Codex subcommand** is a stub — accepts `--session` and `--model` and prints "not yet implemented." Real codex behavior tracked at [#13](https://github.com/paultyng/testagent/issues/13).
 
 In interactive mode, lines starting with `/` are slash commands that synthesize specific UI primitives. Type `/help` for the list:
 
@@ -65,6 +77,8 @@ When `--mcp-config` lists servers, testagent (via `mark3labs/mcp-go`) performs t
 ## Non-interactive (`--print`)
 
 ```sh
+testagent claude --print --output-format stream-json "summarize the diff"
+# or, equivalently:
 testagent --print --output-format stream-json "summarize the diff"
 ```
 
