@@ -6,4 +6,6 @@
 .claude/*.json
 .claude/*.md
 testdata/captures/
+compat/
+RELEASE_PLAN.md
 .DS_Store

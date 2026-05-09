@@ -79,6 +79,19 @@ The matrix should cover approximately:
 - ~15 slash-command rows
 - ~10 REPL-behavior rows
 
+## Issue linking (mandatory)
+
+Every `✗ planned` and `partial` row must link to its tracking issue when one
+exists. Format: `Tracked in [#N](https://github.com/paultyng/testagent/issues/N)`
+in the Notes column. Discover candidates via `gh issue list --repo
+paultyng/testagent --state open` and match by feature description (e.g.
+PreCompact hook → #12, `!`-shell prefix → #17). If no issue exists for a
+`✗ planned` row, note `Tracked in: TODO open issue` so a follow-up can be
+filed.
+
+A `not relevant` row that *does* have an open issue (because someone proposed
+adding it to testagent) should be flipped to `✗ planned` with the link.
+
 ## Hard constraint
 
 Do not invent flag or command names. If a page is unreachable after one retry, leave the row as `| \`--flag\` | TODO: source | — |`. Do not file issues or post comments as part of this skill run.
