@@ -32,7 +32,7 @@ v1 ships a drop-in fake for Claude Code: argv compatibility for the flags orches
 main.go                     # cobra root + bare-invocation default-to-claude
 cmd/claude/                 # claude subcommand: vendor flags, Settings/MCPConfig, runPrint
 cmd/codex/                  # stub subcommand, validates per-vendor cobra contract
-internal/engine/            # Globals + Deps + Run; TUI + scanner + spinner
+internal/engine/            # Globals + Deps + Run; TUI + scanner + spinner + token-stream helper
 internal/hooks/             # Sender (HTTP hook POSTs)
 internal/mcp/               # Client (MCP HTTP handshake + tools/call)
 internal/slash/             # Handler (slash-command grammar)

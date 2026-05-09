@@ -118,11 +118,13 @@ func runScanner(ctx context.Context, g Globals, d Deps, shutdown func(string)) {
 		}
 
 		// Slash commands drive UI primitives (fake-tool blocks, panels, MCP
-		// calls, etc.) without going through the echo path. They don't fire
-		// OnPrompt — except /think, which signals via outcome.Prompt that it
-		// should run through the same prompt path as raw input.
+		// calls, etc.) without going through the echo path. /think and
+		// /stream are duration overrides — they signal via outcome.Prompt
+		// that the message should run through the same prompt path as raw
+		// input.
 		promptLine := input
-		thinkDur := g.Delay
+		thinkDur := g.ThinkDelay
+		streamDur := g.StreamDelay
 		if outcome := d.Slash.Dispatch(ctx, input); outcome.Handled {
 			if outcome.Exit {
 				shutdown(outcome.Reason)
@@ -145,15 +147,19 @@ func runScanner(ctx context.Context, g Globals, d Deps, shutdown func(string)) {
 				fmt.Print(render.Prompt())
 				continue
 			}
-			if outcome.Prompt == "" && !outcome.HasThinkDuration {
+			if outcome.Prompt == "" {
 				// Pure slash side-effect (panel, fake-tool, mcp-call, etc.).
 				fmt.Print(render.Prompt())
 				continue
 			}
-			// /think — route the message through the regular prompt path.
+			// /think or /stream — route the message through the regular
+			// prompt path with one of the durations overridden.
 			promptLine = outcome.Prompt
 			if outcome.HasThinkDuration {
 				thinkDur = outcome.ThinkDuration
+			}
+			if outcome.HasStreamDuration {
+				streamDur = outcome.StreamDuration
 			}
 		}
 
@@ -167,8 +173,11 @@ func runScanner(ctx context.Context, g Globals, d Deps, shutdown func(string)) {
 		// (matches the visual shape of real Claude's "thinking…" state).
 		showThinking(os.Stdout, thinkDur)
 
-		// Echo response with color.
-		fmt.Println(render.Echo(g.Name, promptLine))
+		// Stream the echo response token-by-token at streamDur per token.
+		// The assembled bytes match the prior single-Println shape, just
+		// paced — so e2e regex assertions over the full echo string keep
+		// matching.
+		streamEcho(os.Stdout, g.Name, promptLine, streamDur)
 		fmt.Print(render.Prompt())
 		lastAssistant = fmt.Sprintf("[%s] %s", g.Name, promptLine)
 

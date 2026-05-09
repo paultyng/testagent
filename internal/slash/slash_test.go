@@ -17,7 +17,7 @@ import (
 )
 
 func newTestHandler(out *bytes.Buffer) *Handler {
-	return New(0, hooks.NewSender(nil, "sid-test", "/tmp", "", "default", nil), mcp.NewClient(nil), out)
+	return New(hooks.NewSender(nil, "sid-test", "/tmp", "", "default", nil), mcp.NewClient(nil), out)
 }
 
 func TestSlash_NotASlash(t *testing.T) {
@@ -34,22 +34,55 @@ func TestSlash_NotASlash(t *testing.T) {
 	}
 }
 
+// TestSlash_Stream and TestSlash_Think both assert the duration-prefix
+// parser. /stream sets Stream{Duration,HasStreamDuration}; /think sets the
+// ThinkDuration pair. Both require a duration as the first token; missing
+// or unparseable durations write a usage line and return Prompt="" so the
+// caller treats the dispatch as a pure side effect.
 func TestSlash_Stream(t *testing.T) {
 	t.Parallel()
 
-	out := &bytes.Buffer{}
-	h := newTestHandler(out)
-	h.Dispatch(context.Background(), "/stream hello world")
-	got := strings.TrimRight(out.String(), "\n")
-	if got != "hello world" {
-		t.Errorf("got %q, want %q", got, "hello world")
+	cases := []struct {
+		name, line string
+		wantPrompt string
+		wantDur    time.Duration
+		wantHasDur bool
+		wantUsage  bool // expect a usage line written to out
+	}{
+		{name: "duration + text", line: "/stream 50ms hello world", wantPrompt: "hello world", wantDur: 50 * time.Millisecond, wantHasDur: true},
+		{name: "duration only (empty body)", line: "/stream 100ms", wantUsage: true},
+		{name: "no duration", line: "/stream hello world", wantUsage: true},
+		{name: "bad duration", line: "/stream 5seconds hello", wantUsage: true},
+		{name: "negative clamps", line: "/stream -10ms quick", wantPrompt: "quick", wantDur: 0, wantHasDur: true},
+		{name: "explicit zero", line: "/stream 0 immediate echo", wantPrompt: "immediate echo", wantDur: 0, wantHasDur: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := &bytes.Buffer{}
+			h := newTestHandler(out)
+			outcome := h.Dispatch(context.Background(), tc.line)
+
+			if !outcome.Handled {
+				t.Errorf("Handled = false, want true")
+			}
+			if outcome.Prompt != tc.wantPrompt {
+				t.Errorf("Prompt = %q, want %q", outcome.Prompt, tc.wantPrompt)
+			}
+			if outcome.StreamDuration != tc.wantDur {
+				t.Errorf("StreamDuration = %v, want %v", outcome.StreamDuration, tc.wantDur)
+			}
+			if outcome.HasStreamDuration != tc.wantHasDur {
+				t.Errorf("HasStreamDuration = %v, want %v", outcome.HasStreamDuration, tc.wantHasDur)
+			}
+			gotUsage := strings.Contains(out.String(), "usage: /stream")
+			if gotUsage != tc.wantUsage {
+				t.Errorf("usage written? got %v, want %v (out=%q)", gotUsage, tc.wantUsage, out.String())
+			}
+		})
 	}
 }
 
-// TestSlash_Think asserts cmdThink populates Outcome.Prompt and
-// ThinkDuration correctly. The actual hook firing + animation is the
-// caller's responsibility (main.go scanner loop, tui.go Update) and is
-// covered by TestE2E_*.
 func TestSlash_Think(t *testing.T) {
 	t.Parallel()
 
@@ -58,13 +91,15 @@ func TestSlash_Think(t *testing.T) {
 		wantPrompt string
 		wantDur    time.Duration
 		wantHasDur bool
+		wantUsage  bool
 	}{
-		{name: "text only", line: "/think pondering deeply", wantPrompt: "pondering deeply"},
 		{name: "duration + text", line: "/think 5s working", wantPrompt: "working", wantDur: 5 * time.Second, wantHasDur: true},
-		{name: "non-duration first token", line: "/think 5seconds working", wantPrompt: "5seconds working"},
-		{name: "duration only (no message)", line: "/think 1h", wantDur: time.Hour, wantHasDur: true},
+		{name: "duration only (empty body)", line: "/think 1h", wantUsage: true},
+		{name: "no duration", line: "/think pondering deeply", wantUsage: true},
+		{name: "bad duration", line: "/think 5seconds working", wantUsage: true},
 		{name: "explicit zero — instant echo", line: "/think 0 done", wantPrompt: "done", wantDur: 0, wantHasDur: true},
-		{name: "bare /think — bare prompt with default duration", line: "/think"},
+		{name: "negative clamps", line: "/think -5s clamped", wantPrompt: "clamped", wantDur: 0, wantHasDur: true},
+		{name: "bare /think", line: "/think", wantUsage: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -85,42 +120,41 @@ func TestSlash_Think(t *testing.T) {
 			if outcome.HasThinkDuration != tc.wantHasDur {
 				t.Errorf("HasThinkDuration = %v, want %v", outcome.HasThinkDuration, tc.wantHasDur)
 			}
-			// cmdThink doesn't render directly — the caller does.
-			if out.Len() != 0 {
-				t.Errorf("cmdThink wrote to out (should be caller's responsibility): %q", out.String())
+			gotUsage := strings.Contains(out.String(), "usage: /think")
+			if gotUsage != tc.wantUsage {
+				t.Errorf("usage written? got %v, want %v (out=%q)", gotUsage, tc.wantUsage, out.String())
 			}
 		})
 	}
 }
 
-func TestParseThinkArgs(t *testing.T) {
+func TestParseDurationPrefix(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		in          string
-		wantDur     time.Duration
-		wantHasExpl bool
-		wantMsg     string
+		in       string
+		wantDur  time.Duration
+		wantMsg  string
+		wantOk   bool
 	}{
-		{in: "5s working on it", wantDur: 5 * time.Second, wantHasExpl: true, wantMsg: "working on it"},
-		{in: "200ms quick", wantDur: 200 * time.Millisecond, wantHasExpl: true, wantMsg: "quick"},
-		{in: "working on it", wantDur: 0, wantHasExpl: false, wantMsg: "working on it"},
-		{in: "5seconds working", wantDur: 0, wantHasExpl: false, wantMsg: "5seconds working"},
-		{in: "5s", wantDur: 5 * time.Second, wantHasExpl: true, wantMsg: ""},
-		{in: "", wantDur: 0, wantHasExpl: false, wantMsg: ""},
-		{in: "1h", wantDur: time.Hour, wantHasExpl: true, wantMsg: ""},
-		{in: "0 done", wantDur: 0, wantHasExpl: true, wantMsg: "done"}, // explicit zero — caller treats as "instant"
-		{in: "-5s clamped", wantDur: 0, wantHasExpl: true, wantMsg: "clamped"},
-		{in: "  10ms  padded", wantDur: 10 * time.Millisecond, wantHasExpl: true, wantMsg: "padded"},
+		{in: "5s working on it", wantDur: 5 * time.Second, wantMsg: "working on it", wantOk: true},
+		{in: "200ms quick", wantDur: 200 * time.Millisecond, wantMsg: "quick", wantOk: true},
+		{in: "5s", wantDur: 5 * time.Second, wantMsg: "", wantOk: true},
+		{in: "1h", wantDur: time.Hour, wantMsg: "", wantOk: true},
+		{in: "0 done", wantDur: 0, wantMsg: "done", wantOk: true},
+		{in: "-5s clamped", wantDur: 0, wantMsg: "clamped", wantOk: true},
+		{in: "  10ms  padded", wantDur: 10 * time.Millisecond, wantMsg: "padded", wantOk: true},
+		{in: "working on it", wantOk: false},
+		{in: "5seconds working", wantOk: false},
+		{in: "", wantOk: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
 			t.Parallel()
-			req := parseThinkArgs(tc.in)
-			if req.Duration != tc.wantDur || req.HasExplicit != tc.wantHasExpl || req.Message != tc.wantMsg {
-				t.Errorf("parseThinkArgs(%q) = {%v, %v, %q}, want {%v, %v, %q}",
-					tc.in, req.Duration, req.HasExplicit, req.Message,
-					tc.wantDur, tc.wantHasExpl, tc.wantMsg)
+			d, msg, ok := parseDurationPrefix(tc.in)
+			if d != tc.wantDur || msg != tc.wantMsg || ok != tc.wantOk {
+				t.Errorf("parseDurationPrefix(%q) = (%v, %q, %v), want (%v, %q, %v)",
+					tc.in, d, msg, ok, tc.wantDur, tc.wantMsg, tc.wantOk)
 			}
 		})
 	}
@@ -135,7 +169,8 @@ func TestSlash_Help_Format(t *testing.T) {
 	body := out.String()
 
 	wantPhrases := []string{
-		"/think [<duration>]",      // duration-aware /think advertised
+		"/think <duration>",        // duration-required /think advertised
+		"/stream <duration>",       // duration-required /stream advertised
 		"/fake-tool ",              // renamed from /tool
 		"/fake-tool-result ",       // renamed from /result
 		"/mcp-call ",               // renamed from /mcp to avoid collision with real Claude's /mcp
@@ -444,9 +479,9 @@ func TestSlash_DispatchString(t *testing.T) {
 		wantInOut string // substring assertion when wantBody is empty
 	}{
 		{
-			name:      "stream returns rendered text",
+			name:      "stream usage when duration missing",
 			line:      "/stream hello world",
-			wantInOut: "hello world",
+			wantInOut: "usage: /stream",
 			wantHand:  true,
 		},
 		{

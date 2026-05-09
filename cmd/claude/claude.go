@@ -24,11 +24,12 @@ import (
 // reads. Owned by main; the pointer is populated by cobra before RunE
 // fires.
 type RootFlags struct {
-	HistoryCap int
-	Verbose    bool
-	AutoExit   time.Duration
-	ExitAfter  int
-	Delay      time.Duration
+	HistoryCap  int
+	Verbose     bool
+	AutoExit    time.Duration
+	ExitAfter   int
+	ThinkDelay  time.Duration
+	StreamDelay time.Duration
 }
 
 // stringSlice implements pflag.Value for repeatable string flags (--add-dir).
@@ -99,7 +100,7 @@ Bare invocation (testagent <flags>) defaults to this subcommand.`,
 				mcpServers = mcpConfig.MCPServers
 			}
 			mcpClient := mcp.NewClient(mcpServers)
-			slashHandler := slash.New(30*time.Millisecond, hookSender, mcpClient, os.Stdout)
+			slashHandler := slash.New(hookSender, mcpClient, os.Stdout)
 
 			// Non-interactive mode (--print / -p): one-shot, exit when done.
 			if printMode {
@@ -125,15 +126,16 @@ Bare invocation (testagent <flags>) defaults to this subcommand.`,
 			statusLine := loadedStatus(settings, mcpConfig, systemPrompt, addDirs)
 
 			g := engine.Globals{
-				Emulator:   "Claude",
-				Name:       name,
-				SessionID:  sid,
-				Resumed:    resume != "",
-				Delay:      rf.Delay,
-				ExitAfter:  rf.ExitAfter,
-				AutoExit:   rf.AutoExit,
-				HistoryCap: rf.HistoryCap,
-				StatusLine: statusLine,
+				Emulator:    "Claude",
+				Name:        name,
+				SessionID:   sid,
+				Resumed:     resume != "",
+				ThinkDelay:  rf.ThinkDelay,
+				StreamDelay: rf.StreamDelay,
+				ExitAfter:   rf.ExitAfter,
+				AutoExit:    rf.AutoExit,
+				HistoryCap:  rf.HistoryCap,
+				StatusLine:  statusLine,
 			}
 			d := engine.Deps{
 				Hooks: hookSender,

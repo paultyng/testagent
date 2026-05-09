@@ -27,10 +27,9 @@ import (
 
 // Handler dispatches slash commands and renders their output.
 type Handler struct {
-	streamDelay time.Duration
-	hooks       *hooks.Sender
-	mcp         *mcp.Client
-	out         io.Writer
+	hooks *hooks.Sender
+	mcp   *mcp.Client
+	out   io.Writer
 
 	// pendingToolMu guards pendingTool. Slash dispatches can run concurrently
 	// in TUI mode (cmdSlashDispatch is a tea.Cmd goroutine), so the
@@ -39,14 +38,12 @@ type Handler struct {
 	pendingTool   *pendingToolCall
 }
 
-// New returns a Handler wired with the supplied dependencies. streamDelay
-// paces /stream output; pass 0 to disable per-token delay.
-func New(streamDelay time.Duration, sender *hooks.Sender, client *mcp.Client, out io.Writer) *Handler {
+// New returns a Handler wired with the supplied dependencies.
+func New(sender *hooks.Sender, client *mcp.Client, out io.Writer) *Handler {
 	return &Handler{
-		streamDelay: streamDelay,
-		hooks:       sender,
-		mcp:         client,
-		out:         out,
+		hooks: sender,
+		mcp:   client,
+		out:   out,
 	}
 }
 
@@ -78,17 +75,20 @@ type Outcome struct {
 
 	// Prompt, when non-empty, signals the caller to run this slash command
 	// through the regular prompt-handling path (UserPromptSubmit hook →
-	// thinking animation → echo → Stop hook). Set by /think after parsing
-	// the optional leading duration. Without this signal, /think and raw
-	// input would diverge — they're meant to be functionally identical.
+	// thinking animation → token-streamed echo → Stop hook). Set by /think
+	// and /stream after parsing the required leading duration.
 	Prompt string
 
-	// ThinkDuration overrides the caller's default --delay for this turn.
-	// Zero means "use the caller's default." HasThinkDuration distinguishes
-	// "no duration parsed, use default" from "explicit /think 0 done"
-	// (immediate echo, zero-thinking).
+	// ThinkDuration, when HasThinkDuration is true, overrides the caller's
+	// default per-turn thinking time. Set by /think.
 	ThinkDuration    time.Duration
 	HasThinkDuration bool
+
+	// StreamDuration, when HasStreamDuration is true, overrides the caller's
+	// default per-token stream interval. Set by /stream. Zero is allowed
+	// (instant emit, no per-token delay).
+	StreamDuration    time.Duration
+	HasStreamDuration bool
 }
 
 // DispatchString is the TUI-friendly entry point. It captures all rendered
@@ -122,9 +122,9 @@ func (h *Handler) dispatchTo(ctx context.Context, line string, out io.Writer) Ou
 	case "help", "?":
 		h.cmdHelp(out)
 	case "stream":
-		h.cmdStream(out, rest)
+		return h.cmdStream(out, rest)
 	case "think":
-		return h.cmdThink(rest)
+		return h.cmdThink(out, rest)
 	case "panel":
 		h.cmdPanel(out, rest)
 	case "fake-tool":
@@ -163,8 +163,8 @@ func (h *Handler) cmdHelp(out io.Writer) {
 		{`/mcp-call <server.tool> <json-args>`, "calls a connected MCP tool and prints its result"},
 		{"/panel <text>", "prints text in a rounded-border box"},
 		{"/restart [clear|compact]", "fires SessionEnd then SessionStart without leaving the process (default reason: clear)"},
-		{"/stream <text>", "prints text token-by-token at the configured pacing"},
-		{`/think [<duration>] <text>`, "prompts as if typed raw; the optional duration overrides the default thinking time (3s)"},
+		{`/stream <duration> <message>`, "prompts as if typed raw, with the per-token stream interval overridden"},
+		{`/think <duration> <message>`, "prompts as if typed raw, with the thinking-spinner duration overridden"},
 	} {
 		fmt.Fprintf(out, "  %-40s %s\n",
 			render.MuteStyle.Render(line.usage),
@@ -173,76 +173,75 @@ func (h *Handler) cmdHelp(out io.Writer) {
 	fmt.Fprintln(out, render.MuteSoftStyle.Render("input not starting with / is echoed back."))
 }
 
-// /stream <text> — token-paced streaming text.
-func (h *Handler) cmdStream(out io.Writer, text string) {
-	if text == "" {
-		fmt.Fprintln(out)
-		return
+// /think <duration> <message> — routes <message> through the regular
+// prompt-handling path (UserPromptSubmit → thinking animation → token-
+// streamed echo → Stop) with the spinner duration overridden.
+//
+// Duration is required: bare /think (or /think with no parseable duration)
+// writes a usage line to out and returns Handled=true with no Prompt so
+// the caller treats it as a pure side effect.
+func (h *Handler) cmdThink(out io.Writer, rest string) Outcome {
+	dur, msg, ok := parseDurationPrefix(rest)
+	if !ok || msg == "" {
+		// Plain text — no styling — so piped consumers don't see ANSI on
+		// stdout (per AGENTS.md "Debug output goes to stderr ... never
+		// ANSI-styled"; usage lines aren't debug, but the same hygiene
+		// applies to stdout fragments).
+		fmt.Fprintln(out, "usage: /think <duration> <message>")
+		return Outcome{Handled: true}
 	}
-	tokens := strings.Fields(text)
-	for i, t := range tokens {
-		if i > 0 {
-			fmt.Fprint(out, " ")
-		}
-		fmt.Fprint(out, t)
-		if h.streamDelay > 0 {
-			time.Sleep(h.streamDelay)
-		}
-	}
-	fmt.Fprintln(out)
-}
-
-// /think [<duration>] <text> — functionally identical to typing <text> as
-// raw input, with the addition of an optional leading time.Duration that
-// overrides the default thinking time for that turn. Returns a Outcome
-// with Prompt and (optionally) ThinkDuration set; the dispatcher routes
-// the message back through the prompt-handling path so hooks fire and the
-// thinking animation runs.
-func (h *Handler) cmdThink(rest string) Outcome {
-	req := parseThinkArgs(rest)
 	return Outcome{
 		Handled:          true,
-		Prompt:           req.Message,
-		ThinkDuration:    req.Duration,
-		HasThinkDuration: req.HasExplicit,
+		Prompt:           msg,
+		ThinkDuration:    dur,
+		HasThinkDuration: true,
 	}
 }
 
-// ThinkRequest is the parsed form of /think arguments.
-type ThinkRequest struct {
-	Duration    time.Duration // explicit duration when HasExplicit is true; otherwise 0
-	HasExplicit bool          // true iff the first token parsed via time.ParseDuration
-	Message     string        // the message to prompt with (may be empty)
+// /stream <duration> <message> — same as /think, but overrides the per-
+// token stream interval rather than the spinner duration. Duration is
+// required.
+func (h *Handler) cmdStream(out io.Writer, rest string) Outcome {
+	dur, msg, ok := parseDurationPrefix(rest)
+	if !ok || msg == "" {
+		fmt.Fprintln(out, "usage: /stream <duration> <message>")
+		return Outcome{Handled: true}
+	}
+	return Outcome{
+		Handled:           true,
+		Prompt:            msg,
+		StreamDuration:    dur,
+		HasStreamDuration: true,
+	}
 }
 
-// parseThinkArgs splits rest into a ThinkRequest. If the first whitespace-
-// delimited token parses via time.ParseDuration, it's the duration (negative
-// values clamp to zero) and the remainder is the message. Otherwise the full
-// rest is the message and HasExplicit is false; callers substitute their
-// default thinking duration.
+// parseDurationPrefix splits rest into (duration, message). The first
+// whitespace-delimited token must parse via time.ParseDuration (negative
+// values clamp to zero). Returns ok=false if the prefix isn't a valid
+// duration; callers render a usage line in that case.
 //
 // Examples:
 //
-//	"5s working on it" → {5s, true, "working on it"}
-//	"working on it"    → {0, false, "working on it"}      // caller uses default
-//	"5seconds working" → {0, false, "5seconds working"}   // first token rejected
-//	"5s"               → {5s, true, ""}                   // duration only
-//	""                 → {0, false, ""}                   // bare /think
-//	"0 done"           → {0, true, "done"}                // explicit zero (instant)
-//	"-5s clamp"        → {0, true, "clamp"}               // negative clamps
-func parseThinkArgs(rest string) ThinkRequest {
+//	"5s working on it" → {5s, "working on it", true}
+//	"100ms hi"         → {100ms, "hi", true}
+//	"5s"               → {5s, "", true}                   // empty msg
+//	"working on it"    → {0, "", false}                   // no duration
+//	""                 → {0, "", false}                   // empty
+//	"-5s clamp"        → {0, "clamp", true}               // negative clamps
+func parseDurationPrefix(rest string) (time.Duration, string, bool) {
 	rest = strings.TrimSpace(rest)
 	if rest == "" {
-		return ThinkRequest{}
+		return 0, "", false
 	}
 	first, tail := splitFirstWord(rest)
-	if d, err := time.ParseDuration(first); err == nil {
-		if d < 0 {
-			d = 0
-		}
-		return ThinkRequest{Duration: d, HasExplicit: true, Message: strings.TrimSpace(tail)}
+	d, err := time.ParseDuration(first)
+	if err != nil {
+		return 0, "", false
 	}
-	return ThinkRequest{Message: rest}
+	if d < 0 {
+		d = 0
+	}
+	return d, strings.TrimSpace(tail), true
 }
 
 // /panel <text> — rounded-border panel via lipgloss.

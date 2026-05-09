@@ -29,15 +29,27 @@ type model struct {
 	d Deps
 
 	history []string // rendered scrollback
-	pending []string // queued prompts submitted while thinking
+	pending []string // queued prompts submitted while a turn is in flight
 
 	input textinput.Model
 	spin  spinner.Model
 
+	// Turn lifecycle. A turn moves through two phases: thinking (spinner
+	// runs for thinkDur) and streaming (per-token echo). turnTag is bumped
+	// on each new turn AND on cancel, so any in-flight tick/chunk msg with
+	// a stale tag is ignored.
 	thinking      bool
 	thinkingInput string // current prompt being processed
 	thinkStart    time.Time
-	thinkTag      int // increments on each new thinking turn so stale ticks are ignored
+	turnTag       int
+
+	// Streaming state, valid only while streaming==true.
+	streaming     bool
+	streamTokens  []string // tokens of the assembled echo body (post-name)
+	streamIdx     int      // next token index to emit
+	streamLineIdx int      // index in m.history of the line being grown
+	streamFinal   string   // full "[Name] body" — payload for the Stop hook
+	streamDelay   time.Duration
 
 	width, height int
 
@@ -47,14 +59,33 @@ type model struct {
 	bannerDone bool
 }
 
-// thinkingDoneMsg fires when the simulated thinking delay elapses for tag tag.
-// name and body let the handler render a styled echo in scrollback while the
-// Stop-hook payload (last_assistant_message) keeps the plain "[name] body"
-// shape — ANSI codes must not leak into the wire payload.
+// thinkingDoneMsg fires when the simulated thinking delay elapses for tag.
+// The handler closes out the spinner phase ("Thought for Ns" marker), seeds
+// the streaming phase by appending an EchoHeader placeholder line and
+// tokenizing body, then schedules the first streamChunkMsg. The plain
+// "[name] body" payload is captured here as streamFinal so the eventual
+// streamDoneMsg / cancel can fire the Stop hook with ANSI-free text.
+// streamDelay is the per-token interval the streaming phase will use for
+// this turn.
 type thinkingDoneMsg struct {
+	tag         int
+	name        string
+	body        string
+	streamDelay time.Duration
+}
+
+// streamChunkMsg ticks once per token during the streaming phase. tag
+// matches the turnTag at scheduling time; stale chunks (cancelled or
+// superseded turns) are dropped.
+type streamChunkMsg struct {
+	tag int
+}
+
+// streamDoneMsg fires after the last token has been appended. The handler
+// fires the Stop hook and drains the pending queue.
+type streamDoneMsg struct {
 	tag  int
-	name string
-	body string
+	body string // assembled "[Name] body" payload for OnStop
 }
 
 // slashDoneMsg fires when an asynchronously-dispatched slash command finishes.
@@ -88,7 +119,8 @@ type mcpConnectMsg struct {
 // autoExitMsg fires when --auto-exit elapses.
 type autoExitMsg struct{}
 
-// cancelMsg fires when the user presses Esc during a thinking turn.
+// cancelMsg fires when the user presses Esc during an in-flight turn
+// (either thinking or streaming).
 type cancelMsg struct{}
 
 // newModel builds the initial model. The textinput and spinner are
@@ -195,7 +227,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitReason = "other"
 			return m, tea.Quit
 		case tea.KeyEsc:
-			if m.thinking {
+			if m.thinking || m.streaming {
 				return m, func() tea.Msg { return cancelMsg{} }
 			}
 		case tea.KeyEnter:
@@ -204,8 +236,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if line == "" {
 				return m, nil
 			}
-			if m.thinking {
-				// Queue everything (regular + slash) while thinking.
+			if m.thinking || m.streaming {
+				// Queue everything (regular + slash) while a turn is in flight.
 				m.pending = append(m.pending, line)
 				m.appendHistoryCapped(render.MuteStyle.Render("[queued] " + line))
 				return m, nil
@@ -220,24 +252,81 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case cancelMsg:
 		if m.thinking {
-			m.thinkTag++ // invalidate any pending thinkingDoneMsg
+			m.turnTag++ // invalidate any pending thinkingDoneMsg
 			m.thinking = false
 			elapsed := time.Since(m.thinkStart).Truncate(time.Second)
 			m.appendHistoryCapped(render.ThoughtMarkerStyle.Render(fmt.Sprintf("Interrupted (after %s)", elapsed)))
 			// Fire OnStop with empty last-assistant-message and stop_hook_active=true.
 			cmds = append(cmds, cmdHookStop(m.d.Hooks, "", true))
+		} else if m.streaming {
+			m.turnTag++ // invalidate any pending streamChunkMsg
+			m.streaming = false
+			// Reconstruct the plain-text partial body from the tokens that
+			// were emitted before cancel — reading the styled history line
+			// would leak ANSI codes into the hook payload.
+			partial := fmt.Sprintf("[%s] %s", m.g.Name, strings.Join(m.streamTokens[:m.streamIdx], " "))
+			m.appendHistoryCapped(render.ThoughtMarkerStyle.Render("Interrupted"))
+			cmds = append(cmds, cmdHookStop(m.d.Hooks, partial, true))
+			m.streamTokens = nil
 		}
 
 	case thinkingDoneMsg:
-		if !m.thinking || msg.tag != m.thinkTag {
+		if !m.thinking || msg.tag != m.turnTag {
 			// Stale tick from a cancelled or superseded turn.
 			break
 		}
 		m.thinking = false
 		elapsed := time.Since(m.thinkStart).Truncate(time.Second)
 		m.appendHistoryCapped(render.ThoughtMarkerStyle.Render(fmt.Sprintf("Thought for %s", elapsed)))
-		m.appendHistoryCapped(render.Echo(msg.name, msg.body))
-		cmds = append(cmds, cmdHookStop(m.d.Hooks, fmt.Sprintf("[%s] %s", msg.name, msg.body), false))
+		// Transition into streaming. Append the echo header as a placeholder
+		// line and grow it token-by-token via streamChunkMsg.
+		m.streaming = true
+		m.streamTokens = strings.Fields(msg.body)
+		m.streamIdx = 0
+		m.streamFinal = fmt.Sprintf("[%s] %s", msg.name, msg.body)
+		m.streamDelay = msg.streamDelay
+		m.appendHistoryCapped(render.EchoHeader(msg.name))
+		m.streamLineIdx = len(m.history) - 1
+		// If the body is empty (e.g., explicit /think 5s "") skip straight
+		// to streamDoneMsg so Stop fires consistently.
+		if len(m.streamTokens) == 0 {
+			cmds = append(cmds, cmdStreamDone(m.turnTag, m.streamFinal))
+		} else {
+			cmds = append(cmds, cmdStreamChunk(m.streamDelay, m.turnTag))
+		}
+
+	case streamChunkMsg:
+		if !m.streaming || msg.tag != m.turnTag {
+			break
+		}
+		if m.streamIdx >= len(m.streamTokens) {
+			cmds = append(cmds, cmdStreamDone(m.turnTag, m.streamFinal))
+			break
+		}
+		tok := m.streamTokens[m.streamIdx]
+		m.streamIdx++
+		// Append the token (with a leading space if not the first) to the
+		// growing history line. If the line index has shifted due to history-
+		// cap rotation between ticks, fall back to creating a new line.
+		if m.streamLineIdx < 0 || m.streamLineIdx >= len(m.history) {
+			m.appendHistoryCapped(render.EchoHeader(m.g.Name) + " " + tok)
+			m.streamLineIdx = len(m.history) - 1
+		} else {
+			m.history[m.streamLineIdx] = m.history[m.streamLineIdx] + " " + tok
+		}
+		if m.streamIdx < len(m.streamTokens) {
+			cmds = append(cmds, cmdStreamChunk(m.streamDelay, m.turnTag))
+		} else {
+			cmds = append(cmds, cmdStreamDone(m.turnTag, m.streamFinal))
+		}
+
+	case streamDoneMsg:
+		if !m.streaming || msg.tag != m.turnTag {
+			break
+		}
+		m.streaming = false
+		m.streamTokens = nil
+		cmds = append(cmds, cmdHookStop(m.d.Hooks, msg.body, false))
 		m.count++
 		if m.g.ExitAfter > 0 && m.count >= m.g.ExitAfter {
 			m.appendHistoryCapped(render.MuteStyle.Render(fmt.Sprintf("[exit-after %d reached]", m.g.ExitAfter)))
@@ -273,11 +362,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmdSlashRestart(m.d.Slash, m.d.Hooks, msg.outcome.RestartReason))
 			break
 		}
-		// /think — run the message through the regular prompt path so hooks
-		// fire and the thinking animation runs. Outcome carries the optional
-		// duration override.
-		if msg.outcome.Prompt != "" || msg.outcome.HasThinkDuration {
-			return m, m.startPromptTurn(msg.outcome.Prompt, msg.outcome.ThinkDuration, msg.outcome.HasThinkDuration)
+		// /think or /stream — run the message through the regular prompt
+		// path so hooks fire and the thinking animation + streamed echo
+		// run. Outcome carries the duration overrides.
+		if msg.outcome.Prompt != "" {
+			return m, m.startPromptTurn(
+				msg.outcome.Prompt,
+				msg.outcome.ThinkDuration, msg.outcome.HasThinkDuration,
+				msg.outcome.StreamDuration, msg.outcome.HasStreamDuration,
+			)
 		}
 
 	case hookErrMsg:
@@ -329,29 +422,38 @@ func (m *model) startTurn(line string) tea.Cmd {
 		return cmdSlashDispatch(m.d.Slash, line)
 	}
 
-	return m.startPromptTurn(line, 0, false)
+	return m.startPromptTurn(line, 0, false, 0, false)
 }
 
 // startPromptTurn fires UserPromptSubmit + the thinking animation for a
-// message. Used by raw-input prompts and by /think (which routes through the
-// same code path so it shares hooks + animation behavior). hasOverride
-// distinguishes "no duration parsed → use default" from "explicit /think 0 …
-// → no thinking, immediate echo."
-func (m *model) startPromptTurn(line string, override time.Duration, hasOverride bool) tea.Cmd {
-	delay := m.g.Delay
-	if hasOverride {
-		delay = override
+// message. Used by raw-input prompts and by /think and /stream (which route
+// through the same code path so they share hooks + animation behavior).
+// thinkOverride / hasThinkOverride and streamOverride / hasStreamOverride
+// let callers swap in per-turn durations; absent overrides use the engine
+// globals.
+func (m *model) startPromptTurn(
+	line string,
+	thinkOverride time.Duration, hasThinkOverride bool,
+	streamOverride time.Duration, hasStreamOverride bool,
+) tea.Cmd {
+	thinkDur := m.g.ThinkDelay
+	if hasThinkOverride {
+		thinkDur = thinkOverride
+	}
+	streamDur := m.g.StreamDelay
+	if hasStreamOverride {
+		streamDur = streamOverride
 	}
 
 	m.thinking = true
 	m.thinkingInput = line
 	m.thinkStart = time.Now()
-	m.thinkTag++
-	tag := m.thinkTag
+	m.turnTag++
+	tag := m.turnTag
 
 	return tea.Batch(
 		cmdHookPrompt(m.d.Hooks, line, m.g.Name),
-		cmdThink(delay, tag, m.g.Name, line),
+		cmdThink(thinkDur, streamDur, tag, m.g.Name, line),
 		m.spin.Tick,
 	)
 }
@@ -380,7 +482,10 @@ func (m model) View() string {
 
 // appendHistoryCapped appends a line (with any trailing newlines stripped so
 // View can add its own separator deterministically) and evicts oldest entries
-// when the cap is exceeded. cap=0 disables eviction.
+// when the cap is exceeded. cap=0 disables eviction. When eviction shifts
+// the slice down, m.streamLineIdx is rebased so an in-flight stream's
+// growing line still points at the same row (or goes negative, in which case
+// the chunk handler's bounds check creates a new line).
 func (m *model) appendHistoryCapped(line string) {
 	m.history = append(m.history, strings.TrimRight(line, "\n"))
 	limit := m.g.HistoryCap
@@ -390,15 +495,45 @@ func (m *model) appendHistoryCapped(line string) {
 	if len(m.history) > limit {
 		drop := len(m.history) - limit
 		m.history = m.history[drop:]
+		if m.streaming {
+			m.streamLineIdx -= drop
+		}
 	}
 }
 
 // cmdThink returns a tea.Cmd that fires thinkingDoneMsg after delay. The tag
-// lets the model ignore the response if the turn was cancelled in the meantime.
-func cmdThink(delay time.Duration, tag int, name, body string) tea.Cmd {
+// lets the model ignore the response if the turn was cancelled in the
+// meantime. streamDelay rides along so the streaming phase honors the
+// per-turn override without a second flag plumbing dance. delay<=0 fires
+// immediately on the bubbletea event loop (tea.Tick's behavior with a
+// zero duration is implementation-defined).
+func cmdThink(delay, streamDelay time.Duration, tag int, name, body string) tea.Cmd {
+	if delay <= 0 {
+		return func() tea.Msg {
+			return thinkingDoneMsg{tag: tag, name: name, body: body, streamDelay: streamDelay}
+		}
+	}
 	return tea.Tick(delay, func(time.Time) tea.Msg {
-		return thinkingDoneMsg{tag: tag, name: name, body: body}
+		return thinkingDoneMsg{tag: tag, name: name, body: body, streamDelay: streamDelay}
 	})
+}
+
+// cmdStreamChunk schedules the next streamChunkMsg after delay. delay==0
+// fires the next chunk immediately on the bubbletea event loop (no
+// perceptible pause).
+func cmdStreamChunk(delay time.Duration, tag int) tea.Cmd {
+	if delay <= 0 {
+		return func() tea.Msg { return streamChunkMsg{tag: tag} }
+	}
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		return streamChunkMsg{tag: tag}
+	})
+}
+
+// cmdStreamDone fires streamDoneMsg immediately. body is the assembled
+// "[Name] message" payload that the OnStop hook receives.
+func cmdStreamDone(tag int, body string) tea.Cmd {
+	return func() tea.Msg { return streamDoneMsg{tag: tag, body: body} }
 }
 
 // cmdSlashDispatch runs a slash command on a goroutine and returns its

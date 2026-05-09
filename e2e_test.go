@@ -171,7 +171,7 @@ func TestE2E_SlashFlow(t *testing.T) {
 	cmd := exec.CommandContext(ctx, bin,
 		"-n", "E2E",
 		"--session-id", "e2e-session",
-		"--delay", "5ms",
+		"--think-delay", "5ms",
 		"--settings", settingsPath,
 		"--mcp-config", mcpConfigPath,
 	)

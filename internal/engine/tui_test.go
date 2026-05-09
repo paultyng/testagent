@@ -21,7 +21,7 @@ import (
 // testOpts is the optional override bag for newTestModel.
 type testOpts struct {
 	Name       string
-	Delay      time.Duration
+	ThinkDelay time.Duration
 	HistoryCap int
 	Hooks      *hooks.Sender
 	MCP        *mcp.Client
@@ -33,7 +33,7 @@ func newTestModel(opt *testOpts) model {
 	g := Globals{
 		Name:       "Test",
 		SessionID:  "sid-test",
-		Delay:      10 * time.Millisecond,
+		ThinkDelay: 10 * time.Millisecond,
 		HistoryCap: 1000,
 	}
 	d := Deps{
@@ -44,8 +44,8 @@ func newTestModel(opt *testOpts) model {
 		if opt.Name != "" {
 			g.Name = opt.Name
 		}
-		if opt.Delay != 0 {
-			g.Delay = opt.Delay
+		if opt.ThinkDelay != 0 {
+			g.ThinkDelay = opt.ThinkDelay
 		}
 		if opt.HistoryCap != 0 {
 			g.HistoryCap = opt.HistoryCap
@@ -57,7 +57,7 @@ func newTestModel(opt *testOpts) model {
 			d.MCP = opt.MCP
 		}
 	}
-	d.Slash = slash.New(0, d.Hooks, d.MCP, io.Discard)
+	d.Slash = slash.New(d.Hooks, d.MCP, io.Discard)
 	return newModel(g, d)
 }
 
@@ -77,6 +77,27 @@ func pressEnter(m model) (model, tea.Cmd) {
 	return newM.(model), cmd
 }
 
+// drainStream advances the model through a turn's streaming phase by
+// synthesizing successive streamChunkMsg / streamDoneMsg until streaming
+// ends. Mirrors what the bubbletea runtime would do for tea.Tick output.
+func drainStream(t *testing.T, m model) model {
+	t.Helper()
+	for i := 0; m.streaming && i < 200; i++ {
+		var msg tea.Msg
+		if m.streamIdx >= len(m.streamTokens) {
+			msg = streamDoneMsg{tag: m.turnTag, body: m.streamFinal}
+		} else {
+			msg = streamChunkMsg{tag: m.turnTag}
+		}
+		newM, _ := m.Update(msg)
+		m = newM.(model)
+	}
+	if m.streaming {
+		t.Fatalf("drainStream: model still streaming after 200 ticks")
+	}
+	return m
+}
+
 func TestModel_EnterSubmitsAndEchoes(t *testing.T) {
 	t.Parallel()
 
@@ -91,20 +112,26 @@ func TestModel_EnterSubmitsAndEchoes(t *testing.T) {
 		t.Fatalf("expected non-nil cmd from Enter submit")
 	}
 
-	// Drain commands until we see thinkingDoneMsg, then feed it back.
-	// tea.Tick is asynchronous in the runtime; here we synthesize the
-	// thinkingDoneMsg directly to advance past the delay.
-	doneMsg := thinkingDoneMsg{tag: m.thinkTag, name: "Test", body: "hi"}
+	// Synthesize thinkingDoneMsg to advance past the spinner phase. The
+	// handler transitions into streaming and schedules the first chunk.
+	doneMsg := thinkingDoneMsg{tag: m.turnTag, name: "Test", body: "hi", streamDelay: 0}
 	newM, _ := m.Update(doneMsg)
 	m = newM.(model)
 
 	if m.thinking {
 		t.Errorf("expected thinking=false after thinkingDoneMsg")
 	}
+	if !m.streaming {
+		t.Errorf("expected streaming=true after thinkingDoneMsg")
+	}
+
+	// Drive the streaming phase to completion (chunk msgs + final done).
+	m = drainStream(t, m)
+
 	foundEcho := false
 	foundThought := false
 	for _, line := range m.history {
-		if strings.Contains(line, "[Test] hi") {
+		if strings.Contains(line, "[Test]") && strings.Contains(line, "hi") {
 			foundEcho = true
 		}
 		if strings.Contains(line, "Thought for ") {
@@ -137,10 +164,13 @@ func TestModel_TypingDuringThinkingIsQueued(t *testing.T) {
 		t.Errorf("pending = %v, want [b]", m.pending)
 	}
 
-	// Complete the first turn — the next prompt should re-enter thinking.
-	doneMsg := thinkingDoneMsg{tag: m.thinkTag, name: "Test", body: "a"}
+	// Complete the first turn end-to-end: thinking → streaming → done.
+	// Only after streamDoneMsg does the queue drain.
+	doneMsg := thinkingDoneMsg{tag: m.turnTag, name: "Test", body: "a", streamDelay: 0}
 	newM, _ := m.Update(doneMsg)
 	m = newM.(model)
+	m = drainStream(t, m)
+
 	if !m.thinking {
 		t.Errorf("expected thinking=true after first turn drained the queue")
 	}
@@ -230,7 +260,7 @@ func TestModel_EscCancelsThinking(t *testing.T) {
 	if !m.thinking {
 		t.Fatal("expected thinking=true")
 	}
-	originalTag := m.thinkTag
+	originalTag := m.turnTag
 
 	// Esc should send cancelMsg.
 	newM, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -250,7 +280,7 @@ func TestModel_EscCancelsThinking(t *testing.T) {
 	if m.thinking {
 		t.Errorf("expected thinking=false after Esc")
 	}
-	if m.thinkTag == originalTag {
+	if m.turnTag == originalTag {
 		t.Errorf("thinkTag should have advanced past %d", originalTag)
 	}
 	found := false
@@ -327,7 +357,7 @@ func TestCmdSlashRestart_FiresHooksInOrder(t *testing.T) {
 		hooks.SessionStart: {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/start", Timeout: 1}}}},
 		hooks.SessionEnd:   {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/end", Timeout: 1}}}},
 	}, "sid-test", "/tmp", "", "default", nil)
-	handler := slash.New(0, hookSender, mcp.NewClient(nil), io.Discard)
+	handler := slash.New(hookSender, mcp.NewClient(nil), io.Discard)
 
 	// Stage a pending /fake-tool so we can prove its PostToolUse drains
 	// before SessionEnd.
