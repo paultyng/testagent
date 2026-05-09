@@ -23,7 +23,7 @@ v1 ships a drop-in fake for Claude Code: argv compatibility for the flags orches
 - **Stdlib-first; deps are deliberate.** Each non-stdlib dep is justified in the commit message that adds it (`mark3labs/mcp-go`, `lipgloss`, `bubbletea`, `bubbles`, `go-isatty`, `spf13/cobra`).
 - **Interactive vs non-interactive split.** TTY stdin → bubbletea TUI (`internal/engine/tui.go`, alt-screen, concurrent input during the thinking spinner). Piped stdin → scanner loop (`internal/engine/scanner.go`, line-based, inline rendering). `--print/-p` is a third path (`cmd/claude/print.go`, one-shot output formatter). The `mattn/go-isatty` check on `os.Stdin` is the TUI/scanner gate; e2e tests pipe stdin so they always hit the scanner path.
 - **Conventional Commits.** One commit per phase. Each phase's commit leaves the tree buildable and tested.
-- **Tests:** `t.Parallel()`, table-driven, real `httptest`/`exec`-driven integration over mocks where possible (see `e2e_test.go`). Fixtures in `testdata/`.
+- **Tests:** `t.Parallel()`, table-driven, real `httptest`/`exec`-driven integration over mocks where possible (see `e2e_test.go`). Fixtures in `testdata/`. Time-dependent helpers (anything that calls `time.Sleep` / `time.NewTimer` / `tea.Tick` outside real network IO) use `testing/synctest` so virtual time advances without real wall-clock waits — see `internal/engine/{spinner,stream}_test.go` for the pattern.
 - **Debug output goes to stderr.** Verbose / debug logging (e.g. `--verbose` hook traces) is plain text, one event per line, never ANSI-styled — it gets grepped and piped. Stdout stays reserved for stream-json frames and TUI rendering.
 
 ## Layout
