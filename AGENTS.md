@@ -40,4 +40,4 @@ Real-Claude protocol shapes are captured from a real Claude session run against 
 When a PR changes user-visible behavior:
 
 - **Re-render `demo/hero.gif`** if the change affects what the hero shows (banner, slash output, thinking animation, etc.).
-- **For a focused per-PR animation**, paste the tape body inline in a PR comment (in a fenced ```` ```vhs ```` block) and **attach the rendered gif to the same comment** via GitHub's drag-and-drop upload. Do NOT commit the tape or gif to `demo/`. Per-PR demos are review aids, not project artifacts — they live with the PR thread and disappear when the branch is deleted.
+- **For a focused per-PR animation**, paste the tape body and the rendered gif into the **PR description or a PR comment** — usually inside a `<details><summary>demo</summary>…</details>` collapse so it doesn't dominate the page. Tape goes in a fenced ```` ```vhs ```` block; gif gets attached via GitHub's drag-and-drop upload. Do NOT commit the tape or gif to `demo/`. Per-PR demos are review aids, not project artifacts — they live with the PR thread and disappear when the branch is deleted.
