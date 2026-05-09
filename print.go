@@ -5,6 +5,9 @@
 // Output shapes mirror Claude Code's --print formats so consumers parsing
 // stream-json from a real claude binary can parse testagent's output the
 // same way.
+//
+// --verbose hook trace lines (when enabled) go to stderr via the HookSender,
+// so stdout stays clean for stream-json consumers reading JSONL frames.
 
 package main
 

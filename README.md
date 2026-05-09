@@ -26,6 +26,7 @@ Argv-compatible with Claude Code's flag surface:
 - `-n` / `--name` — banner label
 - `--delay`, `--auto-exit`, `--exit-after` — pacing knobs for headless tests
 - `--history-cap N` — interactive scrollback cap (default 1000; 0 = unlimited)
+- `--verbose` / `-v` — log every hook POST to stderr (`hook <event> POST <url> <status> <elapsed> <bodysize> [err=...]`)
 
 In interactive mode, lines starting with `/` are slash commands that synthesize specific UI primitives. Type `/help` for the list:
 

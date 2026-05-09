@@ -17,7 +17,7 @@ func newTestModel(opt *tuiOptions) model {
 		cwd:        "/tmp",
 		delay:      10 * time.Millisecond,
 		historyCap: 1000,
-		hooks:      NewHookSender(nil, "sid-test", "/tmp", "", "default"),
+		hooks:      NewHookSender(nil, "sid-test", "/tmp", "", "default", nil),
 		mcp:        NewMCPClient(nil),
 	}
 	if opt != nil {
