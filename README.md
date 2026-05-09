@@ -34,11 +34,10 @@ In interactive mode, lines starting with `/` are slash commands that synthesize 
 
 - `/exit [code]`
 - `/mcp <server.tool> <json-args>`
-- `/md <markdown>`
 - `/panel <text>`
 - `/result <json-or-text>`
 - `/stream <text>`
-- `/think <text>`
+- `/think [<duration>] <text>`
 - `/tool <name> <json-args>`
 
 Anything else is echoed back, just like the original PTY-echo behavior.

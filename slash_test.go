@@ -54,11 +54,91 @@ func TestSlash_Stream(t *testing.T) {
 func TestSlash_Think(t *testing.T) {
 	t.Parallel()
 
+	cases := []struct {
+		name, line, wantInOut string
+		wantNoOutput          bool
+		// We don't assert on sleep timing here — that's covered by
+		// TestParseThinkArgs against the parser. cmdThink only sleeps
+		// for short, parsed durations in tests, and the dispatcher is
+		// synchronous so a well-behaved test won't see flakes.
+	}{
+		{name: "text only", line: "/think pondering deeply", wantInOut: "pondering deeply"},
+		{name: "duration + text", line: "/think 1ms working", wantInOut: "working"},
+		{name: "non-duration first token", line: "/think 5seconds working", wantInOut: "5seconds working"},
+		{name: "duration only (sleeps; no message)", line: "/think 1ms", wantNoOutput: true},
+		{name: "empty", line: "/think", wantNoOutput: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := &bytes.Buffer{}
+			h := newTestSlashHandler(out)
+			h.Dispatch(context.Background(), tc.line)
+			if tc.wantNoOutput {
+				if out.Len() != 0 {
+					t.Errorf("expected empty output, got %q", out.String())
+				}
+				return
+			}
+			if !strings.Contains(out.String(), tc.wantInOut) {
+				t.Errorf("output %q missing %q", out.String(), tc.wantInOut)
+			}
+		})
+	}
+}
+
+func TestParseThinkArgs(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		in       string
+		wantDur  time.Duration
+		wantMsg  string
+	}{
+		{in: "5s working on it", wantDur: 5 * time.Second, wantMsg: "working on it"},
+		{in: "200ms quick", wantDur: 200 * time.Millisecond, wantMsg: "quick"},
+		{in: "working on it", wantDur: 0, wantMsg: "working on it"},
+		{in: "5seconds working", wantDur: 0, wantMsg: "5seconds working"},
+		{in: "5s", wantDur: 5 * time.Second, wantMsg: ""},
+		{in: "", wantDur: 0, wantMsg: ""},
+		{in: "1h", wantDur: time.Hour, wantMsg: ""},
+		{in: "-5s clamped", wantDur: 0, wantMsg: "clamped"}, // negative clamped to 0, still consumes token
+		{in: "  10ms  padded", wantDur: 10 * time.Millisecond, wantMsg: "padded"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			t.Parallel()
+			d, m := parseThinkArgs(tc.in)
+			if d != tc.wantDur || m != tc.wantMsg {
+				t.Errorf("parseThinkArgs(%q) = (%v, %q), want (%v, %q)",
+					tc.in, d, m, tc.wantDur, tc.wantMsg)
+			}
+		})
+	}
+}
+
+func TestSlash_Help_Format(t *testing.T) {
+	t.Parallel()
+
 	out := &bytes.Buffer{}
 	h := newTestSlashHandler(out)
-	h.Dispatch(context.Background(), "/think pondering deeply")
-	if !strings.Contains(out.String(), "pondering deeply") {
-		t.Errorf("output missing think text: %q", out.String())
+	h.Dispatch(context.Background(), "/help")
+	body := out.String()
+
+	wantPhrases := []string{
+		"/think [<duration>]",          // duration-aware /think advertised
+		"synthetic tool-use block",      // /tool's distinguishing phrasing
+		"connected MCP tool",            // /mcp's distinguishing phrasing
+		"exits testagent",               // verb-led /exit description
+		"prints this list",              // verb-led /help description
+	}
+	for _, p := range wantPhrases {
+		if !strings.Contains(body, p) {
+			t.Errorf("/help missing phrase %q\n--- /help body ---\n%s", p, body)
+		}
+	}
+	if strings.Contains(body, "/md ") {
+		t.Errorf("/help still references /md (should be dropped):\n%s", body)
 	}
 }
 

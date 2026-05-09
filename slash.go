@@ -2,8 +2,7 @@
 //
 // During an interactive session, lines starting with "/" are interpreted as
 // directives that synthesize specific UI elements (streamed text, tool-use
-// blocks, panels, markdown, MCP calls) instead of going through the default
-// echo path.
+// blocks, panels, MCP calls) instead of going through the default echo path.
 
 package main
 
@@ -19,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -124,8 +122,6 @@ func (h *SlashHandler) dispatchTo(ctx context.Context, line string, out io.Write
 		h.cmdStream(out, rest)
 	case "think":
 		h.cmdThink(out, rest)
-	case "md":
-		h.cmdMarkdown(out, rest)
 	case "panel":
 		h.cmdPanel(out, rest)
 	case "tool":
@@ -155,15 +151,14 @@ func (h *SlashHandler) cmdHelp(out io.Writer) {
 	for _, line := range []struct {
 		usage, doc string
 	}{
-		{"/exit [code]", "end the session (default code 0)"},
-		{"/help", "show this list"},
-		{`/mcp <server.tool> <json-args>`, "invoke a connected MCP tool"},
-		{"/md <markdown>", "render markdown via glamour"},
-		{"/panel <text>", "rounded-border panel"},
-		{`/result <json-or-text>`, "complete tool block; fires PostToolUse with response + duration"},
-		{"/stream <text>", "token-paced streaming text"},
-		{"/think <text>", "dim italic 'thinking' trace"},
-		{`/tool <name> <json-args>`, "tool-use block; pairs with /result"},
+		{"/exit [code]", "exits testagent (default code 0)"},
+		{"/help", "prints this list"},
+		{`/mcp <server.tool> <json-args>`, "calls a connected MCP tool and prints its result"},
+		{"/panel <text>", "prints text in a rounded-border box"},
+		{`/result <json-or-text>`, "completes the pending /tool and fires PostToolUse with the response"},
+		{"/stream <text>", "prints text token-by-token at the configured pacing"},
+		{`/think [<duration>] <text>`, "prints a dim italic thought; if duration parses, sleeps that long after"},
+		{`/tool <name> <json-args>`, "prints a synthetic tool-use block; pair with /result to fire PostToolUse"},
 	} {
 		fmt.Fprintf(out, "  %-40s %s\n",
 			styleToolArgs.Render(line.usage),
@@ -191,23 +186,41 @@ func (h *SlashHandler) cmdStream(out io.Writer, text string) {
 	fmt.Fprintln(out)
 }
 
-// /think <text> — dim italic "thinking" trace, not part of the visible response.
-func (h *SlashHandler) cmdThink(out io.Writer, text string) {
-	if text == "" {
+// /think [<duration>] <text> — dim italic "thinking" trace. If the first
+// whitespace-delimited token parses via time.ParseDuration, it's consumed
+// as a sleep override (the message is rendered first, then the sleep runs)
+// so demos can pin a thought to the screen for a known duration. Negative
+// durations clamp to zero.
+func (h *SlashHandler) cmdThink(out io.Writer, rest string) {
+	d, msg := parseThinkArgs(rest)
+	if msg == "" && d == 0 {
 		return
 	}
-	fmt.Fprintln(out, styleThink.Render(text))
+	if msg != "" {
+		fmt.Fprintln(out, styleThink.Render(msg))
+	}
+	if d > 0 {
+		time.Sleep(d)
+	}
 }
 
-// /md <markdown> — render via glamour (auto-detects terminal capabilities).
-// Falls back to plain text on render failure.
-func (h *SlashHandler) cmdMarkdown(out io.Writer, md string) {
-	rendered, err := glamour.Render(md, "auto")
-	if err != nil {
-		fmt.Fprintln(out, md)
-		return
+// parseThinkArgs splits rest into (duration, message). If the first token
+// parses via time.ParseDuration, it's the duration and the remainder is the
+// message. Otherwise duration is zero and rest is the full message.
+// Negative durations are clamped to zero.
+func parseThinkArgs(rest string) (time.Duration, string) {
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return 0, ""
 	}
-	fmt.Fprint(out, rendered)
+	first, tail := splitFirstWord(rest)
+	if d, err := time.ParseDuration(first); err == nil {
+		if d < 0 {
+			d = 0
+		}
+		return d, strings.TrimSpace(tail)
+	}
+	return 0, rest
 }
 
 // /panel <text> — rounded-border panel via lipgloss.
