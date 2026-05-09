@@ -1,4 +1,4 @@
-package main
+package render
 
 import (
 	"strings"
@@ -25,14 +25,14 @@ func TestStyleHelpers(t *testing.T) {
 		got      string
 		mustHave []string
 	}{
-		{name: "renderPrompt", got: renderPrompt(), mustHave: []string{">"}},
-		{name: "renderEcho", got: renderEcho("agent", "hi"), mustHave: []string{"[agent]", "hi"}},
-		{name: "renderLifecycle", got: renderLifecycle("mcp connected: 3 tools"), mustHave: []string{"[mcp connected: 3 tools]"}},
-		{name: "renderLifecycleWarn", got: renderLifecycleWarn("hook UserPromptSubmit error: timeout"), mustHave: []string{"[hook UserPromptSubmit error: timeout]"}},
-		{name: "renderToolHeader", got: renderToolHeader("▶ ", "read_file"), mustHave: []string{"▶ read_file"}},
-		{name: "renderResultOk", got: renderResultOk(), mustHave: []string{"✓"}},
-		{name: "renderResultErr", got: renderResultErr(), mustHave: []string{"✗"}},
-		{name: "renderThoughtMarker", got: renderThoughtMarker("Thought for 5s"), mustHave: []string{"Thought for 5s"}},
+		{name: "Prompt", got: Prompt(), mustHave: []string{">"}},
+		{name: "Echo", got: Echo("agent", "hi"), mustHave: []string{"[agent]", "hi"}},
+		{name: "Lifecycle", got: Lifecycle("mcp connected: 3 tools"), mustHave: []string{"[mcp connected: 3 tools]"}},
+		{name: "LifecycleWarn", got: LifecycleWarn("hook UserPromptSubmit error: timeout"), mustHave: []string{"[hook UserPromptSubmit error: timeout]"}},
+		{name: "ToolHeader", got: ToolHeader("▶ ", "read_file"), mustHave: []string{"▶ read_file"}},
+		{name: "ResultOk", got: ResultOk(), mustHave: []string{"✓"}},
+		{name: "ResultErr", got: ResultErr(), mustHave: []string{"✗"}},
+		{name: "ThoughtMarker", got: ThoughtMarker("Thought for 5s"), mustHave: []string{"Thought for 5s"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -20,8 +20,9 @@ import (
 	"unsafe"
 
 	"github.com/charmbracelet/lipgloss"
-
 	"github.com/mattn/go-isatty"
+
+	"github.com/paultyng/testagent/internal/render"
 )
 
 // Settings mirrors Claude Code's settings.json shape (hooks + permissions).
@@ -256,21 +257,21 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 		sessionLabel = "resumed"
 	}
 	bannerContent := lipgloss.JoinVertical(lipgloss.Left,
-		accentSession.Render(opts.name),
-		bannerMeta.Faint(true).Render(sessionLabel+" "+opts.sessionID),
-		mute.Render("Type anything; /help for commands"),
+		render.SessionStyle.Render(opts.name),
+		render.BannerMetaStyle.Faint(true).Render(sessionLabel+" "+opts.sessionID),
+		render.MuteStyle.Render("Type anything; /help for commands"),
 	)
-	fmt.Println(styleBanner.Render(bannerContent))
+	fmt.Println(render.BannerStyle.Render(bannerContent))
 
 	if opts.statusLine != "" {
-		fmt.Println(renderLifecycle(opts.statusLine))
+		fmt.Println(render.Lifecycle(opts.statusLine))
 	}
 
 	// Connect to MCP servers (best-effort; logged on failure, session continues).
 	if err := opts.mcp.Connect(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "testagent: mcp Connect: %v\n", err)
 	} else if tools := opts.mcp.Tools(); len(tools) > 0 {
-		fmt.Println(renderLifecycle(fmt.Sprintf("mcp connected: %d tools", len(tools))))
+		fmt.Println(render.Lifecycle(fmt.Sprintf("mcp connected: %d tools", len(tools))))
 	}
 
 	// SessionStart fires after MCP is up so orchestrators see a complete boot
@@ -284,13 +285,13 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 		fmt.Fprintf(os.Stderr, "testagent: hook OnSessionStart: %v\n", err)
 	}
 
-	fmt.Print(renderPrompt())
+	fmt.Print(render.Prompt())
 
 	// Auto-exit after a duration (for headless tests where no input is sent).
 	if opts.autoExit > 0 {
 		go func() {
 			time.Sleep(opts.autoExit)
-			fmt.Printf("\n%s\n", renderLifecycle(fmt.Sprintf("auto-exit after %s", opts.autoExit)))
+			fmt.Printf("\n%s\n", render.Lifecycle(fmt.Sprintf("auto-exit after %s", opts.autoExit)))
 			shutdown("other")
 			os.Exit(0)
 		}()
@@ -300,7 +301,7 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 	go func() {
 		for range winchCh {
 			rows, cols := getTermSize()
-			fmt.Printf("\n%s\n%s", renderLifecycle(fmt.Sprintf("resized: %dx%d", cols, rows)), renderPrompt())
+			fmt.Printf("\n%s\n%s", render.Lifecycle(fmt.Sprintf("resized: %dx%d", cols, rows)), render.Prompt())
 		}
 	}()
 
@@ -313,7 +314,7 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 	for {
 		select {
 		case <-sigCh:
-			fmt.Printf("\n%s\n", accentErr.Render("Goodbye!"))
+			fmt.Printf("\n%s\n", render.ErrorStyle.Render("Goodbye!"))
 			shutdown("other")
 			os.Exit(0)
 		default:
@@ -325,12 +326,12 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 
 		input := strings.TrimSpace(scanner.Text())
 		if input == "" {
-			fmt.Print(renderPrompt())
+			fmt.Print(render.Prompt())
 			continue
 		}
 
 		if input == "exit" || input == "quit" {
-			fmt.Println(accentErr.Render("Goodbye!"))
+			fmt.Println(render.ErrorStyle.Render("Goodbye!"))
 			shutdown("logout")
 			return
 		}
@@ -366,7 +367,7 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 			}
 			if outcome.Prompt == "" && !outcome.HasThinkDuration {
 				// Pure slash side-effect (panel, fake-tool, mcp-call, etc.).
-				fmt.Print(renderPrompt())
+				fmt.Print(render.Prompt())
 				continue
 			}
 			// /think — route the message through the regular prompt path.
@@ -387,8 +388,8 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 		showThinking(os.Stdout, thinkDur)
 
 		// Echo response with color.
-		fmt.Println(renderEcho(opts.name, promptLine))
-		fmt.Print(renderPrompt())
+		fmt.Println(render.Echo(opts.name, promptLine))
+		fmt.Print(render.Prompt())
 		lastAssistant = fmt.Sprintf("[%s] %s", opts.name, promptLine)
 
 		if err := opts.hooks.OnStop(ctx, lastAssistant, false); err != nil {
@@ -396,7 +397,7 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 		}
 
 		if opts.exitAfter > 0 && count >= opts.exitAfter {
-			fmt.Printf("\n%s\n", renderLifecycle(fmt.Sprintf("exit-after %d reached", opts.exitAfter)))
+			fmt.Printf("\n%s\n", render.Lifecycle(fmt.Sprintf("exit-after %d reached", opts.exitAfter)))
 			shutdown("other")
 			return
 		}
@@ -513,8 +514,8 @@ func showThinking(out io.Writer, total time.Duration) {
 			// "Thinking…" wears the warm thinking token; the parenthetical
 			// timer + interrupt hint stays mute so it doesn't compete.
 			fmt.Fprintf(out, "\033[1A\033[2K%s%s\n",
-				renderThinking(fmt.Sprintf("%s Thinking…", frames[i%len(frames)])),
-				mute.Render(fmt.Sprintf(" (%s · esc to interrupt)", elapsed)))
+				render.Thinking(fmt.Sprintf("%s Thinking…", frames[i%len(frames)])),
+				render.MuteStyle.Render(fmt.Sprintf(" (%s · esc to interrupt)", elapsed)))
 			remaining := time.Until(deadline)
 			if remaining <= 0 {
 				break
@@ -528,7 +529,7 @@ func showThinking(out io.Writer, total time.Duration) {
 		// Replace the spinner row with the static "Thought for Ns" marker.
 		// Cursor ends on the row below, ready for the caller's echo.
 		elapsed := time.Since(start).Truncate(time.Second)
-		fmt.Fprintf(out, "\033[1A\033[2K%s\n", renderThoughtMarker(fmt.Sprintf("Thought for %s", elapsed)))
+		fmt.Fprintf(out, "\033[1A\033[2K%s\n", render.ThoughtMarker(fmt.Sprintf("Thought for %s", elapsed)))
 		return
 	}
 
@@ -536,7 +537,7 @@ func showThinking(out io.Writer, total time.Duration) {
 	// see a consistent shape regardless of how short the thinking phase was.
 	time.Sleep(total)
 	elapsed := time.Since(start).Truncate(time.Second)
-	fmt.Fprintln(out, renderThoughtMarker(fmt.Sprintf("Thought for %s", elapsed)))
+	fmt.Fprintln(out, render.ThoughtMarker(fmt.Sprintf("Thought for %s", elapsed)))
 }
 
 func getTermSize() (rows, cols int) {

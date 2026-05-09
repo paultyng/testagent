@@ -17,6 +17,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/paultyng/testagent/internal/render"
 )
 
 // tuiOptions bundles inputs runTUI needs from main().
@@ -106,21 +108,18 @@ type autoExitMsg struct{}
 // cancelMsg fires when the user presses Esc during a thinking turn.
 type cancelMsg struct{}
 
-// Styling tokens (accentOk, accentEcho, mute, thoughtMarker, styleBanner,
-// accentSession, bannerMeta) live in style.go.
-
 // newModel builds the initial model. The textinput and spinner are
 // bubbles components; both honor m.width on each Update.
 func newModel(opts tuiOptions) model {
 	ti := textinput.New()
 	ti.Placeholder = ""
-	ti.Prompt = renderPrompt()
+	ti.Prompt = render.Prompt()
 	ti.Focus()
 	ti.CharLimit = 0
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
-	sp.Style = thinking
+	sp.Style = render.ThinkingStyle
 
 	return model{
 		opts:  opts,
@@ -137,11 +136,11 @@ func banner(opts tuiOptions) string {
 		sessionLabel = "resumed"
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left,
-		accentSession.Render(opts.name),
-		bannerMeta.Faint(true).Render(sessionLabel+" "+opts.sessionID),
-		mute.Render("Type anything; /help for commands"),
+		render.SessionStyle.Render(opts.name),
+		render.BannerMetaStyle.Faint(true).Render(sessionLabel+" "+opts.sessionID),
+		render.MuteStyle.Render("Type anything; /help for commands"),
 	)
-	return styleBanner.Render(content)
+	return render.BannerStyle.Render(content)
 }
 
 // Init seeds the initial command batch: spinner ticks (so it animates when
@@ -176,7 +175,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !m.bannerDone {
 		m.history = append(m.history, banner(m.opts))
 		if m.opts.statusLine != "" {
-			m.history = append(m.history, mute.Render("["+m.opts.statusLine+"]"))
+			m.history = append(m.history, render.MuteStyle.Render("["+m.opts.statusLine+"]"))
 		}
 		m.bannerDone = true
 	}
@@ -211,7 +210,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.thinking {
 				// Queue everything (regular + slash) while thinking.
 				m.pending = append(m.pending, line)
-				m.appendHistoryCapped(mute.Render("[queued] " + line))
+				m.appendHistoryCapped(render.MuteStyle.Render("[queued] " + line))
 				return m, nil
 			}
 			cmd := m.startTurn(line)
@@ -227,7 +226,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.thinkTag++ // invalidate any pending thinkingDoneMsg
 			m.thinking = false
 			elapsed := time.Since(m.thinkStart).Truncate(time.Second)
-			m.appendHistoryCapped(thoughtMarker.Render(fmt.Sprintf("Interrupted (after %s)", elapsed)))
+			m.appendHistoryCapped(render.ThoughtMarkerStyle.Render(fmt.Sprintf("Interrupted (after %s)", elapsed)))
 			// Fire OnStop with empty last-assistant-message and stop_hook_active=true.
 			cmds = append(cmds, cmdHookStop(m.opts.hooks, "", true))
 		}
@@ -239,12 +238,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.thinking = false
 		elapsed := time.Since(m.thinkStart).Truncate(time.Second)
-		m.appendHistoryCapped(thoughtMarker.Render(fmt.Sprintf("Thought for %s", elapsed)))
-		m.appendHistoryCapped(renderEcho(msg.name, msg.body))
+		m.appendHistoryCapped(render.ThoughtMarkerStyle.Render(fmt.Sprintf("Thought for %s", elapsed)))
+		m.appendHistoryCapped(render.Echo(msg.name, msg.body))
 		cmds = append(cmds, cmdHookStop(m.opts.hooks, fmt.Sprintf("[%s] %s", msg.name, msg.body), false))
 		m.count++
 		if m.opts.exitAfter > 0 && m.count >= m.opts.exitAfter {
-			m.appendHistoryCapped(mute.Render(fmt.Sprintf("[exit-after %d reached]", m.opts.exitAfter)))
+			m.appendHistoryCapped(render.MuteStyle.Render(fmt.Sprintf("[exit-after %d reached]", m.opts.exitAfter)))
 			m.quitReason = "other"
 			return m, tea.Quit
 		}
@@ -288,21 +287,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			// Hook errors get the LifecycleWarn token (yellow) so they don't
 			// vanish into the mute lifecycle-note stream.
-			m.appendHistoryCapped(renderLifecycleWarn(fmt.Sprintf("hook %s error: %v", msg.stage, msg.err)))
+			m.appendHistoryCapped(render.LifecycleWarn(fmt.Sprintf("hook %s error: %v", msg.stage, msg.err)))
 		}
 
 	case mcpConnectMsg:
 		if msg.err != nil {
-			m.appendHistoryCapped(mute.Render(fmt.Sprintf("[mcp connect failed: %v]", msg.err)))
+			m.appendHistoryCapped(render.MuteStyle.Render(fmt.Sprintf("[mcp connect failed: %v]", msg.err)))
 		} else if msg.tools > 0 {
-			m.appendHistoryCapped(mute.Render(fmt.Sprintf("[mcp connected: %d tools]", msg.tools)))
+			m.appendHistoryCapped(render.MuteStyle.Render(fmt.Sprintf("[mcp connected: %d tools]", msg.tools)))
 		}
 		if msg.startErr != nil {
-			m.appendHistoryCapped(renderLifecycleWarn(fmt.Sprintf("hook OnSessionStart error: %v", msg.startErr)))
+			m.appendHistoryCapped(render.LifecycleWarn(fmt.Sprintf("hook OnSessionStart error: %v", msg.startErr)))
 		}
 
 	case autoExitMsg:
-		m.appendHistoryCapped(mute.Render(fmt.Sprintf("[auto-exit after %s]", m.opts.autoExit)))
+		m.appendHistoryCapped(render.MuteStyle.Render(fmt.Sprintf("[auto-exit after %s]", m.opts.autoExit)))
 		m.quitReason = "other"
 		return m, tea.Quit
 
@@ -324,7 +323,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // the command(s) to run for this turn.
 func (m *model) startTurn(line string) tea.Cmd {
 	// Echo the user prompt into history (matching the scanner path's "> line").
-	m.appendHistoryCapped(renderPrompt() + line)
+	m.appendHistoryCapped(render.Prompt() + line)
 
 	if strings.HasPrefix(line, "/") {
 		// Slash dispatch. We render synchronously (most slash commands are
@@ -374,8 +373,8 @@ func (m model) View() string {
 		// Spinner glyph (already styled by m.spin.Style = thinking) +
 		// "thinking…" in the same warm token, then the mute parenthetical.
 		b.WriteString(m.spin.View())
-		b.WriteString(renderThinking(" thinking…"))
-		b.WriteString(mute.Render(fmt.Sprintf(" (%s · esc to interrupt)", elapsed)))
+		b.WriteString(render.Thinking(" thinking…"))
+		b.WriteString(render.MuteStyle.Render(fmt.Sprintf(" (%s · esc to interrupt)", elapsed)))
 		b.WriteString("\n")
 	}
 	b.WriteString(m.input.View())
