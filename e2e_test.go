@@ -214,6 +214,12 @@ func TestE2E_SlashFlow(t *testing.T) {
 		if got[0]["tool_name"] != "read_file" {
 			t.Errorf("tool_name = %v, want read_file", got[0]["tool_name"])
 		}
+		if resp, _ := got[0]["tool_response"].(map[string]any); resp == nil || resp["contents"] != "package foo" {
+			t.Errorf("tool_response = %v, want {contents:package foo}", got[0]["tool_response"])
+		}
+		if dur, _ := got[0]["duration_ms"].(float64); dur < 0 {
+			t.Errorf("duration_ms = %v, want >= 0", got[0]["duration_ms"])
+		}
 	}
 	if got := hr.get("/hooks/stop"); len(got) != 1 {
 		t.Errorf("Stop count = %d, want 1", len(got))

@@ -16,6 +16,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/glamour"
@@ -62,6 +63,23 @@ type SlashHandler struct {
 	hooks          *HookSender
 	mcp            *MCPClient
 	out            io.Writer
+
+	// pendingToolMu guards pendingTool. Slash dispatches can run concurrently
+	// in TUI mode (cmdSlashDispatch is a tea.Cmd goroutine), so the
+	// /tool→/result pairing state needs synchronization.
+	pendingToolMu sync.Mutex
+	pendingTool   *pendingToolCall
+}
+
+// pendingToolCall tracks a /tool that hasn't been completed by /result yet.
+// /result fires the PostToolUse hook with the captured tool_input plus the
+// supplied tool_response and the measured duration. /tool followed by /tool
+// flushes the prior with empty response; shutdown flushes whatever's left.
+type pendingToolCall struct {
+	toolUseID string
+	name      string
+	input     any
+	startedAt time.Time
 }
 
 // SlashOutcome reports control-flow signals from a slash command.
@@ -113,7 +131,7 @@ func (h *SlashHandler) dispatchTo(ctx context.Context, line string, out io.Write
 	case "tool":
 		h.cmdTool(ctx, out, rest)
 	case "result":
-		h.cmdResult(out, rest)
+		h.cmdResult(ctx, out, rest)
 	case "mcp":
 		h.cmdMCP(ctx, out, rest)
 	case "exit":
@@ -142,10 +160,10 @@ func (h *SlashHandler) cmdHelp(out io.Writer) {
 		{`/mcp <server.tool> <json-args>`, "invoke a connected MCP tool"},
 		{"/md <markdown>", "render markdown via glamour"},
 		{"/panel <text>", "rounded-border panel"},
-		{`/result <json-or-text>`, "complete the matching tool block"},
+		{`/result <json-or-text>`, "complete tool block; fires PostToolUse with response + duration"},
 		{"/stream <text>", "token-paced streaming text"},
 		{"/think <text>", "dim italic 'thinking' trace"},
-		{`/tool <name> <json-args>`, "tool-use block + fires PostToolUse hook"},
+		{`/tool <name> <json-args>`, "tool-use block; pairs with /result"},
 	} {
 		fmt.Fprintf(out, "  %-40s %s\n",
 			styleToolArgs.Render(line.usage),
@@ -197,8 +215,10 @@ func (h *SlashHandler) cmdPanel(out io.Writer, text string) {
 	fmt.Fprintln(out, stylePanel.Render(text))
 }
 
-// /tool <name> <json-args> — tool-use block (header + indented args) and
-// fires the PostToolUse hook. The block prints; the matching /result completes it.
+// /tool <name> <json-args> — render the tool-use block and record the call
+// as pending. The matching /result completes it and fires PostToolUse with
+// the full payload (input + response + duration). Submitting another /tool
+// while one is pending flushes the prior with empty response.
 func (h *SlashHandler) cmdTool(ctx context.Context, out io.Writer, rest string) {
 	name, jsonArgs := splitFirstWord(rest)
 	if name == "" {
@@ -211,27 +231,79 @@ func (h *SlashHandler) cmdTool(ctx context.Context, out io.Writer, rest string) 
 		styleToolHeader.Render("▶ "+name),
 		styleToolArgs.Render(string(prettyArgs)))
 
-	toolUseID := "toolu_" + randomHex(12)
-	if err := h.hooks.OnToolUse(ctx, toolUseID, name, args, "", 0); err != nil {
-		fmt.Fprintf(os.Stderr, "testagent: hook OnToolUse: %v\n", err)
+	// Flush any prior pending /tool that never got a /result.
+	if prior := h.takePending(); prior != nil {
+		fmt.Fprintf(os.Stderr, "testagent: /tool replaced pending %q without /result\n", prior.name)
+		h.firePendingHook(ctx, prior, nil)
+	}
+	h.setPending(&pendingToolCall{
+		toolUseID: "toolu_" + randomHex(12),
+		name:      name,
+		input:     args,
+		startedAt: time.Now(),
+	})
+}
+
+// /result <json-or-text> — render the matching tool result with a checkmark
+// and fire PostToolUse with the captured /tool input + this response +
+// measured duration. JSON results are stored structured; non-JSON as the
+// raw string. With no pending /tool, only renders (no synthetic hook —
+// inventing a tool_use_id and tool_name would produce dishonest fixtures).
+func (h *SlashHandler) cmdResult(ctx context.Context, out io.Writer, rest string) {
+	mark := styleResultMark.Render("✓")
+	var response any
+	switch {
+	case rest == "":
+		fmt.Fprintf(out, "%s %s\n", mark, styleResultBody.Render("(empty result)"))
+	default:
+		var parsed any
+		if err := json.Unmarshal([]byte(rest), &parsed); err == nil {
+			pretty, _ := json.MarshalIndent(parsed, "  ", "  ")
+			fmt.Fprintf(out, "%s\n  %s\n", mark, styleResultBody.Render(string(pretty)))
+			response = parsed
+		} else {
+			fmt.Fprintf(out, "%s %s\n", mark, rest)
+			response = rest
+		}
+	}
+
+	if pending := h.takePending(); pending != nil {
+		h.firePendingHook(ctx, pending, response)
 	}
 }
 
-// /result <json-or-text> — render the matching tool result with a checkmark.
-// JSON is pretty-printed; raw text passes through.
-func (h *SlashHandler) cmdResult(out io.Writer, rest string) {
-	mark := styleResultMark.Render("✓")
-	if rest == "" {
-		fmt.Fprintf(out, "%s %s\n", mark, styleResultBody.Render("(empty result)"))
-		return
+// FlushPendingTool fires PostToolUse for any in-flight /tool with a nil
+// response. Called from shutdown paths (/exit, signal, EOF, auto-exit) so
+// dangling /tool calls don't silently lose their hook event.
+func (h *SlashHandler) FlushPendingTool(ctx context.Context) {
+	if pending := h.takePending(); pending != nil {
+		fmt.Fprintf(os.Stderr, "testagent: /tool %q flushed on shutdown without /result\n", pending.name)
+		h.firePendingHook(ctx, pending, nil)
 	}
-	var parsed any
-	if err := json.Unmarshal([]byte(rest), &parsed); err == nil {
-		pretty, _ := json.MarshalIndent(parsed, "  ", "  ")
-		fmt.Fprintf(out, "%s\n  %s\n", mark, styleResultBody.Render(string(pretty)))
-		return
+}
+
+func (h *SlashHandler) setPending(p *pendingToolCall) {
+	h.pendingToolMu.Lock()
+	defer h.pendingToolMu.Unlock()
+	h.pendingTool = p
+}
+
+func (h *SlashHandler) takePending() *pendingToolCall {
+	h.pendingToolMu.Lock()
+	defer h.pendingToolMu.Unlock()
+	p := h.pendingTool
+	h.pendingTool = nil
+	return p
+}
+
+// firePendingHook posts PostToolUse for a captured /tool. response is the
+// /result body (parsed JSON or raw string) or nil when flushing a dangling
+// /tool. Errors are logged to stderr and do not abort the session.
+func (h *SlashHandler) firePendingHook(ctx context.Context, p *pendingToolCall, response any) {
+	dur := time.Since(p.startedAt).Milliseconds()
+	if err := h.hooks.OnToolUse(ctx, p.toolUseID, p.name, p.input, response, dur); err != nil {
+		fmt.Fprintf(os.Stderr, "testagent: hook OnToolUse: %v\n", err)
 	}
-	fmt.Fprintf(out, "%s %s\n", mark, rest)
 }
 
 // /mcp <qualified-tool> <json-args> — invoke a real connected MCP tool.

@@ -53,7 +53,7 @@ When stdin is **not** a TTY (piped input, `--print`), testagent falls back to a 
 
 ## Hooks
 
-When `--settings` declares hook URLs, testagent POSTs Claude-Code-shaped event bodies on the appropriate lifecycle moments: `UserPromptSubmit` per user input, `Stop` after each assistant response, `PostToolUse` per `/tool` invocation, `SessionEnd` on shutdown.
+When `--settings` declares hook URLs, testagent POSTs Claude-Code-shaped event bodies on the appropriate lifecycle moments: `UserPromptSubmit` per user input, `Stop` after each assistant response, `PostToolUse` when a `/tool` block is closed by `/result` (with the captured `tool_input`, the supplied `tool_response`, and measured `duration_ms`), `SessionEnd` on shutdown.
 
 ## MCP
 
