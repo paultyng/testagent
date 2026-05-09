@@ -6,8 +6,9 @@
 // stream-json from a real claude binary can parse testagent's output the
 // same way.
 //
-// --verbose hook trace lines (when enabled) go to stderr via the HookSender,
-// so stdout stays clean for stream-json consumers reading JSONL frames.
+// --verbose hook trace lines (when enabled) go to stderr via the hook
+// sender, so stdout stays clean for stream-json consumers reading JSONL
+// frames.
 
 package main
 
@@ -21,6 +22,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/paultyng/testagent/internal/hooks"
 )
 
 // printOptions bundles the inputs runPrint needs from main().
@@ -31,7 +34,7 @@ type printOptions struct {
 	model        string
 	outputFormat string // "text" | "json" | "stream-json"
 	positional   []string
-	hooks        *HookSender
+	hooks        *hooks.Sender
 	mcp          *MCPClient
 }
 

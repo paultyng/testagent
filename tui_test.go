@@ -12,6 +12,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/paultyng/testagent/internal/hooks"
 )
 
 // newTestModel builds a model wired up against in-memory hook/MCP/slash
@@ -23,7 +25,7 @@ func newTestModel(opt *tuiOptions) model {
 		cwd:        "/tmp",
 		delay:      10 * time.Millisecond,
 		historyCap: 1000,
-		hooks:      NewHookSender(nil, "sid-test", "/tmp", "", "default", nil),
+		hooks:      hooks.NewSender(nil, "sid-test", "/tmp", "", "default", nil),
 		mcp:        NewMCPClient(nil),
 	}
 	if opt != nil {
@@ -317,19 +319,16 @@ func TestCmdSlashRestart_FiresHooksInOrder(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	settings := &Settings{
-		Hooks: map[string][]HookMatcher{
-			hookEventPostToolUse:  {{Hooks: []Hook{{Type: "http", URL: srv.URL + "/tool-use", Timeout: 1}}}},
-			hookEventSessionStart: {{Hooks: []Hook{{Type: "http", URL: srv.URL + "/start", Timeout: 1}}}},
-			hookEventSessionEnd:   {{Hooks: []Hook{{Type: "http", URL: srv.URL + "/end", Timeout: 1}}}},
-		},
-	}
-	hooks := NewHookSender(settings, "sid-test", "/tmp", "", "default", nil)
+	hookSender := hooks.NewSender(map[string][]hooks.Matcher{
+		hooks.PostToolUse:  {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/tool-use", Timeout: 1}}}},
+		hooks.SessionStart: {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/start", Timeout: 1}}}},
+		hooks.SessionEnd:   {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/end", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
 	slash := &SlashHandler{
 		name:      "Test",
 		sessionID: "sid-test",
 		cwd:       "/tmp",
-		hooks:     hooks,
+		hooks:     hookSender,
 		mcp:       NewMCPClient(nil),
 		out:       io.Discard,
 	}
@@ -338,7 +337,7 @@ func TestCmdSlashRestart_FiresHooksInOrder(t *testing.T) {
 	// before SessionEnd.
 	slash.Dispatch(context.Background(), `/fake-tool read_file {"path":"foo.go"}`)
 
-	cmd := cmdSlashRestart(slash, hooks, "compact")
+	cmd := cmdSlashRestart(slash, hookSender, "compact")
 	if cmd == nil {
 		t.Fatal("cmdSlashRestart returned nil cmd")
 	}

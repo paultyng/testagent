@@ -22,25 +22,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-isatty"
 
+	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/render"
 )
 
 // Settings mirrors Claude Code's settings.json shape (hooks + permissions).
 type Settings struct {
-	Hooks       map[string][]HookMatcher `json:"hooks,omitempty"`
-	Permissions *Permissions             `json:"permissions,omitempty"`
-}
-
-type HookMatcher struct {
-	Matcher string `json:"matcher"`
-	Hooks   []Hook `json:"hooks"`
-}
-
-type Hook struct {
-	Type    string            `json:"type"`
-	URL     string            `json:"url"`
-	Timeout int               `json:"timeout"`
-	Headers map[string]string `json:"headers,omitempty"`
+	Hooks       map[string][]hooks.Matcher `json:"hooks,omitempty"`
+	Permissions *Permissions               `json:"permissions,omitempty"`
 }
 
 type Permissions struct {
@@ -76,7 +65,7 @@ type scannerOptions struct {
 	exitAfter      int
 	autoExit       time.Duration
 	statusLine     string
-	hooks          *HookSender
+	hooks          *hooks.Sender
 	mcp            *MCPClient
 	slash          *SlashHandler
 }
@@ -134,7 +123,11 @@ func main() {
 	if verbose {
 		debugW = os.Stderr
 	}
-	hooks := NewHookSender(settings, sid, cwd, transcriptPath, permissionMode, debugW)
+	var matchers map[string][]hooks.Matcher
+	if settings != nil {
+		matchers = settings.Hooks
+	}
+	hookSender := hooks.NewSender(matchers, sid, cwd, transcriptPath, permissionMode, debugW)
 	mcpClient := NewMCPClient(mcpConfig)
 	slash := &SlashHandler{
 		name:           name,
@@ -143,7 +136,7 @@ func main() {
 		cwd:            cwd,
 		transcriptPath: transcriptPath,
 		permissionMode: permissionMode,
-		hooks:          hooks,
+		hooks:          hookSender,
 		mcp:            mcpClient,
 		out:            os.Stdout,
 	}
@@ -151,7 +144,7 @@ func main() {
 		// Flush any in-flight /fake-tool that never got a /fake-tool-result so its
 		// PostToolUse fires (with empty response) before SessionEnd.
 		slash.FlushPendingTool(context.Background())
-		if err := hooks.OnSessionEnd(context.Background(), reason); err != nil {
+		if err := hookSender.OnSessionEnd(context.Background(), reason); err != nil {
 			fmt.Fprintf(os.Stderr, "testagent: hook OnSessionEnd: %v\n", err)
 		}
 		if err := mcpClient.Close(); err != nil {
@@ -172,7 +165,7 @@ func main() {
 			cwd:          cwd,
 			outputFormat: *outputFormat,
 			positional:   flag.Args(),
-			hooks:        hooks,
+			hooks:        hookSender,
 			mcp:          mcpClient,
 		}, os.Stdin, os.Stdout))
 	}
@@ -206,7 +199,7 @@ func main() {
 			statusLine:     statusLine,
 			settings:       settings,
 			mcpConfig:      mcpConfig,
-			hooks:          hooks,
+			hooks:          hookSender,
 			mcp:            mcpClient,
 			slash:          slash,
 		}, quitCh)
@@ -230,7 +223,7 @@ func main() {
 		exitAfter:      *exitAfter,
 		autoExit:       *autoExit,
 		statusLine:     statusLine,
-		hooks:          hooks,
+		hooks:          hookSender,
 		slash:          slash,
 		mcp:            mcpClient,
 	}, shutdown)

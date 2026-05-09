@@ -1,4 +1,4 @@
-package main
+package hooks
 
 import (
 	"bytes"
@@ -52,26 +52,24 @@ func captureServer(t *testing.T) (*httptest.Server, *[]captured, *sync.Mutex) {
 	return srv, &recs, &mu
 }
 
-// settingsWithHooks builds a Settings whose event maps to a single matcher with
-// one HTTP hook per supplied URL. Headers are applied to every hook.
-func settingsWithHooks(event string, headers map[string]string, urls ...string) *Settings {
+// matchersFor builds a single-event matcher map with one HTTP hook per URL.
+// Headers are applied to every hook.
+func matchersFor(event string, headers map[string]string, urls ...string) map[string][]Matcher {
 	hooks := make([]Hook, 0, len(urls))
 	for _, u := range urls {
 		hooks = append(hooks, Hook{Type: "http", URL: u, Headers: headers})
 	}
-	return &Settings{
-		Hooks: map[string][]HookMatcher{
-			event: {{Matcher: "*", Hooks: hooks}},
-		},
+	return map[string][]Matcher{
+		event: {{Matcher: "*", Hooks: hooks}},
 	}
 }
 
-func newTestSender(t *testing.T, settings *Settings) *HookSender {
+func newTestSender(t *testing.T, matchers map[string][]Matcher) *Sender {
 	t.Helper()
-	return NewHookSender(settings, "session-xyz", "/tmp/cwd", "/tmp/transcript.jsonl", "auto", nil)
+	return NewSender(matchers, "session-xyz", "/tmp/cwd", "/tmp/transcript.jsonl", "auto", nil)
 }
 
-func TestHookSender_NilSettings_NoOp(t *testing.T) {
+func TestSender_NilMatchers_NoOp(t *testing.T) {
 	t.Parallel()
 	sender := newTestSender(t, nil)
 	ctx := context.Background()
@@ -89,12 +87,11 @@ func TestHookSender_NilSettings_NoOp(t *testing.T) {
 	}
 }
 
-func TestHookSender_NoMatchingEvent_NoOp(t *testing.T) {
+func TestSender_NoMatchingEvent_NoOp(t *testing.T) {
 	t.Parallel()
 	srv, recs, mu := captureServer(t)
-	// Settings register Stop only — OnPrompt should be a no-op.
-	settings := settingsWithHooks(hookEventStop, nil, srv.URL+"/hooks/stop")
-	sender := newTestSender(t, settings)
+	// Matchers register Stop only — OnPrompt should be a no-op.
+	sender := newTestSender(t, matchersFor(Stop, nil, srv.URL+"/hooks/stop"))
 	if err := sender.OnPrompt(context.Background(), "hi", "title"); err != nil {
 		t.Fatalf("OnPrompt: %v", err)
 	}
@@ -105,12 +102,11 @@ func TestHookSender_NoMatchingEvent_NoOp(t *testing.T) {
 	}
 }
 
-func TestHookSender_OnPrompt_PayloadAndHeaders(t *testing.T) {
+func TestSender_OnPrompt_PayloadAndHeaders(t *testing.T) {
 	t.Parallel()
 	srv, recs, mu := captureServer(t)
 	headers := map[string]string{"X-Session-Id": "abc-123"}
-	settings := settingsWithHooks(hookEventUserPromptSubmit, headers, srv.URL+"/hooks/prompt")
-	sender := newTestSender(t, settings)
+	sender := newTestSender(t, matchersFor(UserPromptSubmit, headers, srv.URL+"/hooks/prompt"))
 
 	if err := sender.OnPrompt(context.Background(), "hello world", "My Session"); err != nil {
 		t.Fatalf("OnPrompt: %v", err)
@@ -147,11 +143,10 @@ func TestHookSender_OnPrompt_PayloadAndHeaders(t *testing.T) {
 	}
 }
 
-func TestHookSender_OnToolUse_PayloadAndHeaders(t *testing.T) {
+func TestSender_OnToolUse_PayloadAndHeaders(t *testing.T) {
 	t.Parallel()
 	srv, recs, mu := captureServer(t)
-	settings := settingsWithHooks(hookEventPostToolUse, map[string]string{"X-Idea-Slug": "demo"}, srv.URL+"/hooks/tool-use")
-	sender := newTestSender(t, settings)
+	sender := newTestSender(t, matchersFor(PostToolUse, map[string]string{"X-Idea-Slug": "demo"}, srv.URL+"/hooks/tool-use"))
 
 	toolInput := map[string]any{"command": "ls -la"}
 	toolResponse := map[string]any{"stdout": "file1\nfile2", "exit_code": float64(0)}
@@ -202,11 +197,10 @@ func TestHookSender_OnToolUse_PayloadAndHeaders(t *testing.T) {
 	}
 }
 
-func TestHookSender_OnStop_Payload(t *testing.T) {
+func TestSender_OnStop_Payload(t *testing.T) {
 	t.Parallel()
 	srv, recs, mu := captureServer(t)
-	settings := settingsWithHooks(hookEventStop, nil, srv.URL+"/hooks/stop")
-	sender := newTestSender(t, settings)
+	sender := newTestSender(t, matchersFor(Stop, nil, srv.URL+"/hooks/stop"))
 
 	if err := sender.OnStop(context.Background(), "all done", true); err != nil {
 		t.Fatalf("OnStop: %v", err)
@@ -233,11 +227,10 @@ func TestHookSender_OnStop_Payload(t *testing.T) {
 	}
 }
 
-func TestHookSender_OnSessionStart_Payload(t *testing.T) {
+func TestSender_OnSessionStart_Payload(t *testing.T) {
 	t.Parallel()
 	srv, recs, mu := captureServer(t)
-	settings := settingsWithHooks(hookEventSessionStart, nil, srv.URL+"/hooks/start")
-	sender := newTestSender(t, settings)
+	sender := newTestSender(t, matchersFor(SessionStart, nil, srv.URL+"/hooks/start"))
 
 	if err := sender.OnSessionStart(context.Background(), "startup"); err != nil {
 		t.Fatalf("OnSessionStart: %v", err)
@@ -262,11 +255,10 @@ func TestHookSender_OnSessionStart_Payload(t *testing.T) {
 	}
 }
 
-func TestHookSender_OnSessionEnd_Payload(t *testing.T) {
+func TestSender_OnSessionEnd_Payload(t *testing.T) {
 	t.Parallel()
 	srv, recs, mu := captureServer(t)
-	settings := settingsWithHooks(hookEventSessionEnd, nil, srv.URL+"/hooks/end")
-	sender := newTestSender(t, settings)
+	sender := newTestSender(t, matchersFor(SessionEnd, nil, srv.URL+"/hooks/end"))
 
 	if err := sender.OnSessionEnd(context.Background(), "clear"); err != nil {
 		t.Fatalf("OnSessionEnd: %v", err)
@@ -291,30 +283,28 @@ func TestHookSender_OnSessionEnd_Payload(t *testing.T) {
 	}
 }
 
-func TestHookSender_MultipleHooksFire(t *testing.T) {
+func TestSender_MultipleHooksFire(t *testing.T) {
 	t.Parallel()
 	srv, recs, mu := captureServer(t)
 	// Two HTTP hooks under one matcher, plus a second matcher with a third hook.
-	settings := &Settings{
-		Hooks: map[string][]HookMatcher{
-			hookEventUserPromptSubmit: {
-				{
-					Matcher: "*",
-					Hooks: []Hook{
-						{Type: "http", URL: srv.URL + "/a"},
-						{Type: "http", URL: srv.URL + "/b"},
-					},
+	matchers := map[string][]Matcher{
+		UserPromptSubmit: {
+			{
+				Matcher: "*",
+				Hooks: []Hook{
+					{Type: "http", URL: srv.URL + "/a"},
+					{Type: "http", URL: srv.URL + "/b"},
 				},
-				{
-					Matcher: "*",
-					Hooks: []Hook{
-						{Type: "http", URL: srv.URL + "/c"},
-					},
+			},
+			{
+				Matcher: "*",
+				Hooks: []Hook{
+					{Type: "http", URL: srv.URL + "/c"},
 				},
 			},
 		},
 	}
-	sender := newTestSender(t, settings)
+	sender := newTestSender(t, matchers)
 	if err := sender.OnPrompt(context.Background(), "p", "t"); err != nil {
 		t.Fatalf("OnPrompt: %v", err)
 	}
@@ -334,23 +324,21 @@ func TestHookSender_MultipleHooksFire(t *testing.T) {
 	}
 }
 
-func TestHookSender_NonHTTPHookSkipped(t *testing.T) {
+func TestSender_NonHTTPHookSkipped(t *testing.T) {
 	t.Parallel()
 	srv, recs, mu := captureServer(t)
-	settings := &Settings{
-		Hooks: map[string][]HookMatcher{
-			hookEventStop: {
-				{
-					Matcher: "*",
-					Hooks: []Hook{
-						{Type: "command", URL: "shouldnotfire"},
-						{Type: "http", URL: srv.URL + "/hooks/stop"},
-					},
+	matchers := map[string][]Matcher{
+		Stop: {
+			{
+				Matcher: "*",
+				Hooks: []Hook{
+					{Type: "command", URL: "shouldnotfire"},
+					{Type: "http", URL: srv.URL + "/hooks/stop"},
 				},
 			},
 		},
 	}
-	sender := newTestSender(t, settings)
+	sender := newTestSender(t, matchers)
 	if err := sender.OnStop(context.Background(), "msg", false); err != nil {
 		t.Fatalf("OnStop: %v", err)
 	}
@@ -361,7 +349,7 @@ func TestHookSender_NonHTTPHookSkipped(t *testing.T) {
 	}
 }
 
-func TestHookSender_OneHookFailingDoesNotBlockOthers(t *testing.T) {
+func TestSender_OneHookFailingDoesNotBlockOthers(t *testing.T) {
 	t.Parallel()
 	var goodHits int32
 	goodSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -374,20 +362,18 @@ func TestHookSender_OneHookFailingDoesNotBlockOthers(t *testing.T) {
 	}))
 	t.Cleanup(badSrv.Close)
 
-	settings := &Settings{
-		Hooks: map[string][]HookMatcher{
-			hookEventStop: {
-				{
-					Matcher: "*",
-					Hooks: []Hook{
-						{Type: "http", URL: badSrv.URL + "/bad"},
-						{Type: "http", URL: goodSrv.URL + "/good"},
-					},
+	matchers := map[string][]Matcher{
+		Stop: {
+			{
+				Matcher: "*",
+				Hooks: []Hook{
+					{Type: "http", URL: badSrv.URL + "/bad"},
+					{Type: "http", URL: goodSrv.URL + "/good"},
 				},
 			},
 		},
 	}
-	sender := newTestSender(t, settings)
+	sender := newTestSender(t, matchers)
 	err := sender.OnStop(context.Background(), "msg", false)
 	if err == nil {
 		t.Fatal("expected aggregated error, got nil")
@@ -397,7 +383,7 @@ func TestHookSender_OneHookFailingDoesNotBlockOthers(t *testing.T) {
 	}
 }
 
-func TestHookSender_HookTimeoutHonored(t *testing.T) {
+func TestSender_HookTimeoutHonored(t *testing.T) {
 	t.Parallel()
 	// Server that blocks until either the request context is canceled or the
 	// test ends. Cleanup order (LIFO) must close `block` BEFORE srv.Close so
@@ -412,15 +398,13 @@ func TestHookSender_HookTimeoutHonored(t *testing.T) {
 	t.Cleanup(srv.Close)
 	t.Cleanup(func() { close(block) })
 
-	settings := &Settings{
-		Hooks: map[string][]HookMatcher{
-			hookEventStop: {{
-				Matcher: "*",
-				Hooks:   []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}, // 1 second
-			}},
-		},
+	matchers := map[string][]Matcher{
+		Stop: {{
+			Matcher: "*",
+			Hooks:   []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}, // 1 second
+		}},
 	}
-	sender := newTestSender(t, settings)
+	sender := newTestSender(t, matchers)
 	start := time.Now()
 	err := sender.OnStop(context.Background(), "msg", false)
 	elapsed := time.Since(start)
@@ -432,20 +416,18 @@ func TestHookSender_HookTimeoutHonored(t *testing.T) {
 	}
 }
 
-func TestHookSender_DefaultTimeoutWhenZero(t *testing.T) {
+func TestSender_DefaultTimeoutWhenZero(t *testing.T) {
 	t.Parallel()
-	// Hook.Timeout=0 should fall back to defaultHookTimeout, not be zero.
+	// Hook.Timeout=0 should fall back to defaultTimeout, not be zero.
 	// We assert behavior by checking the request reaches the server quickly.
 	srv, recs, mu := captureServer(t)
-	settings := &Settings{
-		Hooks: map[string][]HookMatcher{
-			hookEventSessionEnd: {{
-				Matcher: "*",
-				Hooks:   []Hook{{Type: "http", URL: srv.URL, Timeout: 0}},
-			}},
-		},
+	matchers := map[string][]Matcher{
+		SessionEnd: {{
+			Matcher: "*",
+			Hooks:   []Hook{{Type: "http", URL: srv.URL, Timeout: 0}},
+		}},
 	}
-	sender := newTestSender(t, settings)
+	sender := newTestSender(t, matchers)
 	if err := sender.OnSessionEnd(context.Background(), "clear"); err != nil {
 		t.Fatalf("OnSessionEnd: %v", err)
 	}
@@ -456,7 +438,7 @@ func TestHookSender_DefaultTimeoutWhenZero(t *testing.T) {
 	}
 }
 
-func TestHookSender_PostToolUseTableDriven(t *testing.T) {
+func TestSender_PostToolUseTableDriven(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name         string
@@ -491,8 +473,7 @@ func TestHookSender_PostToolUseTableDriven(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			srv, recs, mu := captureServer(t)
-			settings := settingsWithHooks(hookEventPostToolUse, nil, srv.URL+"/hooks/tool-use")
-			sender := newTestSender(t, settings)
+			sender := newTestSender(t, matchersFor(PostToolUse, nil, srv.URL+"/hooks/tool-use"))
 			if err := sender.OnToolUse(context.Background(), "tu", tc.toolName, tc.toolInput, tc.toolResponse, tc.duration); err != nil {
 				t.Fatalf("OnToolUse: %v", err)
 			}
@@ -512,7 +493,7 @@ func TestHookSender_PostToolUseTableDriven(t *testing.T) {
 	}
 }
 
-func TestHookSender_Verbose_EmitsLinePerHook(t *testing.T) {
+func TestSender_Verbose_EmitsLinePerHook(t *testing.T) {
 	t.Parallel()
 
 	var hits int32
@@ -523,17 +504,15 @@ func TestHookSender_Verbose_EmitsLinePerHook(t *testing.T) {
 	defer srv.Close()
 
 	var dbg bytes.Buffer
-	settings := &Settings{
-		Hooks: map[string][]HookMatcher{
-			"Stop": {
-				{Hooks: []Hook{
-					{Type: "http", URL: srv.URL + "/a", Timeout: 1},
-					{Type: "http", URL: srv.URL + "/b", Timeout: 1},
-				}},
-			},
+	matchers := map[string][]Matcher{
+		Stop: {
+			{Hooks: []Hook{
+				{Type: "http", URL: srv.URL + "/a", Timeout: 1},
+				{Type: "http", URL: srv.URL + "/b", Timeout: 1},
+			}},
 		},
 	}
-	h := NewHookSender(settings, "sid", "/tmp", "", "default", &dbg)
+	h := NewSender(matchers, "sid", "/tmp", "", "default", &dbg)
 	if err := h.OnStop(context.Background(), "msg", false); err != nil {
 		t.Fatalf("OnStop: %v", err)
 	}
@@ -552,7 +531,7 @@ func TestHookSender_Verbose_EmitsLinePerHook(t *testing.T) {
 	}
 }
 
-func TestHookSender_Verbose_RecordsErrorStatus(t *testing.T) {
+func TestSender_Verbose_RecordsErrorStatus(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -561,12 +540,10 @@ func TestHookSender_Verbose_RecordsErrorStatus(t *testing.T) {
 	defer srv.Close()
 
 	var dbg bytes.Buffer
-	settings := &Settings{
-		Hooks: map[string][]HookMatcher{
-			"Stop": {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
-		},
+	matchers := map[string][]Matcher{
+		Stop: {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
 	}
-	h := NewHookSender(settings, "sid", "/tmp", "", "default", &dbg)
+	h := NewSender(matchers, "sid", "/tmp", "", "default", &dbg)
 	_ = h.OnStop(context.Background(), "msg", false)
 
 	out := dbg.String()
@@ -578,16 +555,14 @@ func TestHookSender_Verbose_RecordsErrorStatus(t *testing.T) {
 	}
 }
 
-func TestHookSender_Verbose_RecordsTransportError(t *testing.T) {
+func TestSender_Verbose_RecordsTransportError(t *testing.T) {
 	t.Parallel()
 
 	var dbg bytes.Buffer
-	settings := &Settings{
-		Hooks: map[string][]HookMatcher{
-			"Stop": {{Hooks: []Hook{{Type: "http", URL: "http://127.0.0.1:1", Timeout: 1}}}},
-		},
+	matchers := map[string][]Matcher{
+		Stop: {{Hooks: []Hook{{Type: "http", URL: "http://127.0.0.1:1", Timeout: 1}}}},
 	}
-	h := NewHookSender(settings, "sid", "/tmp", "", "default", &dbg)
+	h := NewSender(matchers, "sid", "/tmp", "", "default", &dbg)
 	_ = h.OnStop(context.Background(), "msg", false)
 
 	out := dbg.String()
@@ -599,7 +574,7 @@ func TestHookSender_Verbose_RecordsTransportError(t *testing.T) {
 	}
 }
 
-func TestHookSender_Verbose_DisabledByDefault(t *testing.T) {
+func TestSender_Verbose_DisabledByDefault(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -607,14 +582,12 @@ func TestHookSender_Verbose_DisabledByDefault(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	settings := &Settings{
-		Hooks: map[string][]HookMatcher{
-			"Stop": {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
-		},
+	matchers := map[string][]Matcher{
+		Stop: {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
 	}
 	// debugWriter == nil → no output collected anywhere; this test asserts
 	// the no-debug path doesn't panic and behaves like before.
-	h := NewHookSender(settings, "sid", "/tmp", "", "default", nil)
+	h := NewSender(matchers, "sid", "/tmp", "", "default", nil)
 	if err := h.OnStop(context.Background(), "msg", false); err != nil {
 		t.Fatalf("OnStop: %v", err)
 	}

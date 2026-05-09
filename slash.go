@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/render"
 )
 
@@ -29,7 +30,7 @@ type SlashHandler struct {
 	cwd            string
 	transcriptPath string
 	permissionMode string
-	hooks          *HookSender
+	hooks          *hooks.Sender
 	mcp            *MCPClient
 	out            io.Writer
 

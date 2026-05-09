@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/paultyng/testagent/internal/hooks"
 )
 
 func TestRunPrint_TextFormat(t *testing.T) {
@@ -18,7 +20,7 @@ func TestRunPrint_TextFormat(t *testing.T) {
 		cwd:          "/tmp",
 		outputFormat: "text",
 		positional:   []string{"hello", "world"},
-		hooks:        NewHookSender(nil, "sid-1", "/tmp", "", "default", nil),
+		hooks:        hooks.NewSender(nil, "sid-1", "/tmp", "", "default", nil),
 		mcp:          NewMCPClient(nil),
 	}, strings.NewReader(""), stdout)
 
@@ -41,7 +43,7 @@ func TestRunPrint_JSONFormat(t *testing.T) {
 		cwd:          "/tmp",
 		outputFormat: "json",
 		positional:   []string{"summarize"},
-		hooks:        NewHookSender(nil, "sid-2", "/tmp", "", "default", nil),
+		hooks:        hooks.NewSender(nil, "sid-2", "/tmp", "", "default", nil),
 		mcp:          NewMCPClient(nil),
 	}, strings.NewReader(""), stdout)
 
@@ -72,7 +74,7 @@ func TestRunPrint_StreamJSONFormat(t *testing.T) {
 		cwd:          "/work",
 		outputFormat: "stream-json",
 		positional:   []string{"do", "the", "thing"},
-		hooks:        NewHookSender(nil, "sid-3", "/work", "", "default", nil),
+		hooks:        hooks.NewSender(nil, "sid-3", "/work", "", "default", nil),
 		mcp:          NewMCPClient(nil),
 	}, strings.NewReader(""), stdout)
 
@@ -124,7 +126,7 @@ func TestRunPrint_StdinFallback(t *testing.T) {
 		name:         "Echo",
 		sessionID:    "sid-4",
 		outputFormat: "text",
-		hooks:        NewHookSender(nil, "sid-4", "/tmp", "", "default", nil),
+		hooks:        hooks.NewSender(nil, "sid-4", "/tmp", "", "default", nil),
 		mcp:          NewMCPClient(nil),
 	}, strings.NewReader("piped prompt\n"), stdout)
 
@@ -145,7 +147,7 @@ func TestRunPrint_MissingPrompt(t *testing.T) {
 		name:         "Echo",
 		sessionID:    "sid-5",
 		outputFormat: "text",
-		hooks:        NewHookSender(nil, "sid-5", "/tmp", "", "default", nil),
+		hooks:        hooks.NewSender(nil, "sid-5", "/tmp", "", "default", nil),
 		mcp:          NewMCPClient(nil),
 	}, strings.NewReader(""), stdout)
 

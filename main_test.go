@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/paultyng/testagent/internal/hooks"
 )
 
 func TestLoadSettings(t *testing.T) {
@@ -164,7 +166,7 @@ func TestLoadedStatus(t *testing.T) {
 		},
 		{
 			name: "everything loaded",
-			settings: &Settings{Hooks: map[string][]HookMatcher{
+			settings: &Settings{Hooks: map[string][]hooks.Matcher{
 				"Stop": nil, "PostToolUse": nil, "SessionEnd": nil,
 			}},
 			mcpConfig:    &MCPConfig{MCPServers: map[string]MCPServer{"fileserver": {}}},
@@ -174,7 +176,7 @@ func TestLoadedStatus(t *testing.T) {
 		},
 		{
 			name:     "only hooks",
-			settings: &Settings{Hooks: map[string][]HookMatcher{"Stop": nil}},
+			settings: &Settings{Hooks: map[string][]hooks.Matcher{"Stop": nil}},
 			want:     "hooks: stop",
 		},
 	}

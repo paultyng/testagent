@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/paultyng/testagent/internal/hooks"
 )
 
 func newTestSlashHandler(out *bytes.Buffer) *SlashHandler {
@@ -19,7 +21,7 @@ func newTestSlashHandler(out *bytes.Buffer) *SlashHandler {
 		streamDelay: 0,
 		sessionID:   "sid-test",
 		cwd:         "/tmp",
-		hooks:       NewHookSender(nil, "sid-test", "/tmp", "", "default", nil),
+		hooks:       hooks.NewSender(nil, "sid-test", "/tmp", "", "default", nil),
 		mcp:         NewMCPClient(nil),
 		out:         out,
 	}
@@ -188,10 +190,8 @@ func TestSlash_FakeToolAlone_NoHookYet(t *testing.T) {
 
 	out := &bytes.Buffer{}
 	h := newTestSlashHandler(out)
-	h.hooks = NewHookSender(&Settings{
-		Hooks: map[string][]HookMatcher{
-			"PostToolUse": {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
-		},
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
 	}, "sid-test", "/tmp", "", "default", nil)
 
 	h.Dispatch(context.Background(), `/fake-tool read_file {"path":"foo.go"}`)
@@ -223,10 +223,8 @@ func TestSlash_FakeToolResultPair(t *testing.T) {
 
 	out := &bytes.Buffer{}
 	h := newTestSlashHandler(out)
-	h.hooks = NewHookSender(&Settings{
-		Hooks: map[string][]HookMatcher{
-			"PostToolUse": {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
-		},
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
 	}, "sid-test", "/tmp", "", "default", nil)
 
 	h.Dispatch(context.Background(), `/fake-tool read_file {"path":"foo.go"}`)
@@ -268,10 +266,8 @@ func TestSlash_OrphanFakeToolResult(t *testing.T) {
 
 	out := &bytes.Buffer{}
 	h := newTestSlashHandler(out)
-	h.hooks = NewHookSender(&Settings{
-		Hooks: map[string][]HookMatcher{
-			"PostToolUse": {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
-		},
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
 	}, "sid-test", "/tmp", "", "default", nil)
 
 	h.Dispatch(context.Background(), `/fake-tool-result {"orphan":true}`)
@@ -303,10 +299,8 @@ func TestSlash_FlushPendingTool(t *testing.T) {
 
 	out := &bytes.Buffer{}
 	h := newTestSlashHandler(out)
-	h.hooks = NewHookSender(&Settings{
-		Hooks: map[string][]HookMatcher{
-			"PostToolUse": {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
-		},
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
 	}, "sid-test", "/tmp", "", "default", nil)
 
 	h.Dispatch(context.Background(), `/fake-tool dangling {}`)
@@ -344,10 +338,8 @@ func TestSlash_SecondToolReplacesPending(t *testing.T) {
 
 	out := &bytes.Buffer{}
 	h := newTestSlashHandler(out)
-	h.hooks = NewHookSender(&Settings{
-		Hooks: map[string][]HookMatcher{
-			"PostToolUse": {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
-		},
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
 	}, "sid-test", "/tmp", "", "default", nil)
 
 	h.Dispatch(context.Background(), `/fake-tool first {}`)
