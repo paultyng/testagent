@@ -92,6 +92,71 @@ is set, then runs `goreleaser release --clean` against the current tag.
 Artifacts land in `dist/` and are uploaded to the GitHub release for the
 tag.
 
+## Writing release notes
+
+goreleaser auto-generates a flat commit list from `^feat:` / `^fix:` /
+`^refactor:` commits (configured in `.goreleaser.yaml`'s `changelog`
+filter). That list is honest but unstructured; before publishing, edit
+the GitHub release page to **prepend a curated summary** in three
+buckets that orchestrators care about. Keep the auto-generated commit
+list at the bottom — it's a useful audit trail.
+
+### Structure
+
+```markdown
+## Breaking changes
+
+- Removed `--foo` flag; orchestrators previously using it should switch
+  to `--bar` ([#123](https://github.com/paultyng/testagent/issues/123)).
+- `Stop` hook payload renamed `last_message` → `last_assistant_message`;
+  update parsers (PR [#456](https://github.com/paultyng/testagent/pull/456)).
+
+## New
+
+- `/link <url> [text]` slash command emits an OSC 8 hyperlink so
+  orchestrators can script clickable links in tests
+  ([#24](https://github.com/paultyng/testagent/issues/24),
+  PR [#27](https://github.com/paultyng/testagent/pull/27)).
+- `--stream-delay` flag overrides per-token echo cadence (default 30ms).
+
+## Fixed
+
+- `runPrint` now honors `--resume` when firing `SessionStart` (was
+  always emitting `source="startup"`)
+  ([#25](https://github.com/paultyng/testagent/issues/25),
+  PR [#26](https://github.com/paultyng/testagent/pull/26)).
+```
+
+### Conventions
+
+- **Order matters.** Breaking changes first (consumers must read them);
+  new features second; fixes last.
+- **Omit empty buckets.** A patch release that's pure bug fixes has only
+  a `## Fixed` section.
+- **One bullet per change**, not per commit. If three commits land one
+  feature, write one bullet citing the PR.
+- **Cite the issue + PR**, in that order, with full markdown links. For
+  changes that landed without an issue, just the PR. For multi-PR
+  features, list all PRs.
+- **Lead with the user-visible effect**, not the implementation. "Banner
+  now shows the emulator type prefix" beats "added `Emulator` field to
+  `engine.Globals`."
+- **Migration hints under breaking changes.** If a flag was renamed,
+  show the old → new mapping. If a payload field was renamed, mention
+  the parser update.
+- **Pre-1.0 caveat** for v0.x releases that contain breaking changes:
+  add a one-line reminder at the top that the v0.x line is not
+  semver-stable, and pin to a specific version if your tests need
+  determinism.
+
+### Where to write them
+
+Edit the GitHub release page directly after goreleaser publishes
+(it creates the release with `prerelease: auto` honored from the tag).
+The auto-generated commit list goes below your curated three-bucket
+summary. Don't re-run goreleaser to amend notes — just edit the
+release.
+
 ## Signing
 
 Not yet. v0.x releases are unsigned. Cosign / Sigstore keyless signing
