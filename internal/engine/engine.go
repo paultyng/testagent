@@ -23,15 +23,16 @@ import (
 // loops. Values come from the caller's flag set; the engine treats them as
 // immutable for the lifetime of Run.
 type Globals struct {
-	Emulator   string // "Claude", "Codex", etc. — vendor type prefix shown in the banner
-	Name       string // user-supplied session label (--name)
-	SessionID  string
-	Resumed    bool
-	Delay      time.Duration
-	ExitAfter  int
-	AutoExit   time.Duration
-	HistoryCap int    // 0 = unlimited
-	StatusLine string // shown under the banner; empty = omitted
+	Emulator    string        // "Claude", "Codex", etc. — vendor type prefix shown in the banner
+	Name        string        // user-supplied session label (--name)
+	SessionID   string
+	Resumed     bool
+	Delay       time.Duration // default thinking-spinner duration per turn
+	StreamDelay time.Duration // default per-token interval for the response stream
+	ExitAfter   int
+	AutoExit    time.Duration
+	HistoryCap  int    // 0 = unlimited
+	StatusLine  string // shown under the banner; empty = omitted
 }
 
 // Deps are the runtime dependencies the engine drives. All fields are

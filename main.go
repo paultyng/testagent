@@ -48,7 +48,8 @@ func main() {
 	pf.BoolVarP(&rf.Verbose, "verbose", "v", false, "log hook activity to stderr")
 	pf.DurationVar(&rf.AutoExit, "auto-exit", 0, "auto-exit after duration (0 = disabled)")
 	pf.IntVar(&rf.ExitAfter, "exit-after", 0, "auto-exit after N interactions (0 = never)")
-	pf.DurationVar(&rf.Delay, "delay", 3*time.Second, "simulated thinking delay before response (also the default for /think)")
+	pf.DurationVar(&rf.Delay, "delay", 2*time.Second, "default thinking-spinner duration per turn (override per-turn with /think)")
+	pf.DurationVar(&rf.StreamDelay, "stream-delay", 30*time.Millisecond, "default per-token stream interval for the response (override per-turn with /stream)")
 
 	root.AddCommand(claude.NewCommand(rf))
 	root.AddCommand(codex.NewCommand(rf))
