@@ -4,7 +4,9 @@ Context for AI agents working on this repo. (Cursor, Claude Code, and others rea
 
 ## What is testagent?
 
-A fake CLI agent for testing orchestration tooling that drives real coding agents (Claude Code, Codex, Gemini, GitHub Copilot CLI, etc.). Runs as an interactive PTY process; emits the same kinds of terminal artifacts (boxed tool-use blocks, streaming text, in-place updates) and the same protocol traffic (HTTP hooks, MCP JSON-RPC) as a real agent — without calling any LLM API.
+A fake CLI agent for testing orchestration tooling that drives real coding agents (Claude Code, Codex, Gemini, GitHub Copilot CLI, etc.). Runs as an interactive PTY process; emits the same kinds of terminal artifacts (boxed tool-use blocks, streaming text, in-place updates) and the same protocol traffic (HTTP hooks, MCP JSON-RPC) as a real agent — without calling any LLM.
+
+The product framing is **deterministic output for tests**, not "no LLM" as a virtue. Wiring a local LLM into a test harness is a valid choice for some workflows; testagent is explicitly not that. Every assertion-relevant byte (slash dispatch, hook payloads, MCP frames, stream-json shapes) is scripted by the user, not generated, so tests stay stable across runs.
 
 v1 ships a drop-in fake for Claude Code: argv compatibility for the flags orchestrators commonly emit, HTTP hooks (`UserPromptSubmit` / `PostToolUse` / `Stop` / `SessionEnd`), an MCP HTTP client that handshakes and dispatches `tools/call`, `--print --output-format stream-json` for non-interactive callers, a slash-command grammar for driving UI primitives interactively, and lipgloss/glamour rendering for plausible-shape output.
 
