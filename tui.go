@@ -80,10 +80,16 @@ type hookErrMsg struct {
 	err   error
 }
 
-// mcpConnectMsg fires after the initial best-effort MCP connect attempt.
+// mcpConnectMsg fires after the initial best-effort MCP connect attempt
+// and the boot SessionStart. Both run in the same goroutine (cmdBoot) so
+// SessionStart fires synchronously after mcp.Connect returns — that way
+// SessionStart lands on the wire even if the user quits before this message
+// is delivered to Update, and cannot race with user input that produces its
+// own hooks.
 type mcpConnectMsg struct {
-	err   error
-	tools int
+	err      error
+	tools    int
+	startErr error
 }
 
 // autoExitMsg fires when --auto-exit elapses.
@@ -141,18 +147,21 @@ func banner(opts tuiOptions) string {
 }
 
 // Init seeds the initial command batch: spinner ticks (so it animates when
-// thinking starts), textinput cursor blink, MCP connect, and optional
-// auto-exit timer. The banner and status line are appended to history here
-// so they appear once on first render. SessionStart fires later, from the
-// mcpConnectMsg handler, so the boot SessionStart waits on MCP connect
-// resolution — same invariant the scanner-path enforces synchronously
-// (tea.Batch runs commands concurrently, so firing SessionStart here would
-// race with cmdMCPConnect).
+// thinking starts), textinput cursor blink, the boot sequence (cmdBoot does
+// MCP connect → SessionStart in one goroutine), and optional auto-exit
+// timer. The banner and status line are appended to history here so they
+// appear once on first render. Coupling MCP connect and SessionStart in one
+// cmd means SessionStart fires regardless of whether the model is still
+// alive to process the resulting message, and cannot race with user input.
 func (m model) Init() tea.Cmd {
+	startSource := "startup"
+	if m.opts.resumed {
+		startSource = "resume"
+	}
 	cmds := []tea.Cmd{
 		textinput.Blink,
 		m.spin.Tick,
-		cmdMCPConnect(m.opts.mcp),
+		cmdBoot(m.opts.mcp, m.opts.hooks, startSource),
 	}
 	if m.opts.autoExit > 0 {
 		cmds = append(cmds, cmdAutoExit(m.opts.autoExit))
@@ -287,14 +296,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if msg.tools > 0 {
 			m.appendHistoryCapped(tuiStyleDim.Render(fmt.Sprintf("[mcp connected: %d tools]", msg.tools)))
 		}
-		// Boot SessionStart fires now that MCP connect has resolved (success
-		// or failure) — orchestrators see a complete boot state before the
-		// hook lands, matching the scanner-path ordering in main.go.
-		startSource := "startup"
-		if m.opts.resumed {
-			startSource = "resume"
+		if msg.startErr != nil {
+			m.appendHistoryCapped(tuiStyleDim.Render(fmt.Sprintf("[hook OnSessionStart error: %v]", msg.startErr)))
 		}
-		cmds = append(cmds, cmdHookSessionStart(m.opts.hooks, startSource))
 
 	case autoExitMsg:
 		m.appendHistoryCapped(tuiStyleDim.Render(fmt.Sprintf("[auto-exit after %s]", m.opts.autoExit)))
@@ -420,10 +424,23 @@ func cmdHookStop(hooks *HookSender, last string, stopHookActive bool) tea.Cmd {
 	}
 }
 
-// cmdHookSessionStart fires SessionStart on a goroutine.
-func cmdHookSessionStart(hooks *HookSender, source string) tea.Cmd {
+// cmdBoot runs the boot sequence — MCP connect, then SessionStart — in one
+// goroutine, so SessionStart fires synchronously after the connect attempt
+// regardless of whether the bubbletea program is still around to process
+// the resulting mcpConnectMsg. This mirrors the scanner path's synchronous
+// mcp.Connect → OnSessionStart ordering and prevents races between boot
+// SessionStart and user-driven hooks (e.g. /restart) submitted before the
+// boot goroutine resolves.
+func cmdBoot(mcp *MCPClient, hooks *HookSender, source string) tea.Cmd {
 	return func() tea.Msg {
-		return hookErrMsg{stage: "OnSessionStart", err: hooks.OnSessionStart(context.Background(), source)}
+		ctx := context.Background()
+		connectErr := mcp.Connect(ctx)
+		tools := 0
+		if connectErr == nil {
+			tools = len(mcp.Tools())
+		}
+		startErr := hooks.OnSessionStart(ctx, source)
+		return mcpConnectMsg{err: connectErr, tools: tools, startErr: startErr}
 	}
 }
 
@@ -442,19 +459,6 @@ func cmdSlashRestart(slash *SlashHandler, hooks *HookSender, reason string) tea.
 			return hookErrMsg{stage: "OnRestart", err: err}
 		}
 		return nil
-	}
-}
-
-// cmdMCPConnect connects to MCP servers in the background and reports the
-// outcome via mcpConnectMsg. Matches the existing best-effort semantics.
-func cmdMCPConnect(mcp *MCPClient) tea.Cmd {
-	return func() tea.Msg {
-		err := mcp.Connect(context.Background())
-		tools := 0
-		if err == nil {
-			tools = len(mcp.Tools())
-		}
-		return mcpConnectMsg{err: err, tools: tools}
 	}
 }
 
