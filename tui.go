@@ -63,9 +63,13 @@ type model struct {
 }
 
 // thinkingDoneMsg fires when the simulated thinking delay elapses for tag tag.
+// name and body let the handler render a styled echo in scrollback while the
+// Stop-hook payload (last_assistant_message) keeps the plain "[name] body"
+// shape — ANSI codes must not leak into the wire payload.
 type thinkingDoneMsg struct {
-	tag      int
-	response string
+	tag  int
+	name string
+	body string
 }
 
 // slashDoneMsg fires when an asynchronously-dispatched slash command finishes.
@@ -102,27 +106,21 @@ type autoExitMsg struct{}
 // cancelMsg fires when the user presses Esc during a thinking turn.
 type cancelMsg struct{}
 
-// styles
-var (
-	tuiStylePrompt  = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	tuiStyleEcho    = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
-	tuiStyleDim     = lipgloss.NewStyle().Faint(true)
-	tuiStyleSpin    = lipgloss.NewStyle().Faint(true)
-	tuiStyleThought = lipgloss.NewStyle().Faint(true).Italic(true)
-)
+// Styling tokens (accentOk, accentEcho, mute, thoughtMarker, styleBanner,
+// accentSession, bannerMeta) live in style.go.
 
 // newModel builds the initial model. The textinput and spinner are
 // bubbles components; both honor m.width on each Update.
 func newModel(opts tuiOptions) model {
 	ti := textinput.New()
 	ti.Placeholder = ""
-	ti.Prompt = tuiStylePrompt.Render("> ")
+	ti.Prompt = renderPrompt()
 	ti.Focus()
 	ti.CharLimit = 0
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
-	sp.Style = tuiStyleSpin
+	sp.Style = thinking
 
 	return model{
 		opts:  opts,
@@ -139,15 +137,11 @@ func banner(opts tuiOptions) string {
 		sessionLabel = "resumed"
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left,
-		lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11")).Render(opts.name),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Faint(true).Render(sessionLabel+" "+opts.sessionID),
-		lipgloss.NewStyle().Faint(true).Render("Type anything; /help for commands"),
+		accentSession.Render(opts.name),
+		bannerMeta.Faint(true).Render(sessionLabel+" "+opts.sessionID),
+		mute.Render("Type anything; /help for commands"),
 	)
-	return lipgloss.NewStyle().
-		Border(lipgloss.DoubleBorder()).
-		BorderForeground(lipgloss.Color("14")).
-		Padding(0, 2).
-		Render(content)
+	return styleBanner.Render(content)
 }
 
 // Init seeds the initial command batch: spinner ticks (so it animates when
@@ -182,7 +176,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !m.bannerDone {
 		m.history = append(m.history, banner(m.opts))
 		if m.opts.statusLine != "" {
-			m.history = append(m.history, tuiStyleDim.Render("["+m.opts.statusLine+"]"))
+			m.history = append(m.history, mute.Render("["+m.opts.statusLine+"]"))
 		}
 		m.bannerDone = true
 	}
@@ -217,7 +211,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.thinking {
 				// Queue everything (regular + slash) while thinking.
 				m.pending = append(m.pending, line)
-				m.appendHistoryCapped(tuiStyleDim.Render("[queued] " + line))
+				m.appendHistoryCapped(mute.Render("[queued] " + line))
 				return m, nil
 			}
 			cmd := m.startTurn(line)
@@ -233,7 +227,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.thinkTag++ // invalidate any pending thinkingDoneMsg
 			m.thinking = false
 			elapsed := time.Since(m.thinkStart).Truncate(time.Second)
-			m.appendHistoryCapped(tuiStyleThought.Render(fmt.Sprintf("Interrupted (after %s)", elapsed)))
+			m.appendHistoryCapped(thoughtMarker.Render(fmt.Sprintf("Interrupted (after %s)", elapsed)))
 			// Fire OnStop with empty last-assistant-message and stop_hook_active=true.
 			cmds = append(cmds, cmdHookStop(m.opts.hooks, "", true))
 		}
@@ -245,12 +239,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.thinking = false
 		elapsed := time.Since(m.thinkStart).Truncate(time.Second)
-		m.appendHistoryCapped(tuiStyleThought.Render(fmt.Sprintf("Thought for %s", elapsed)))
-		m.appendHistoryCapped(msg.response)
-		cmds = append(cmds, cmdHookStop(m.opts.hooks, msg.response, false))
+		m.appendHistoryCapped(thoughtMarker.Render(fmt.Sprintf("Thought for %s", elapsed)))
+		m.appendHistoryCapped(renderEcho(msg.name, msg.body))
+		cmds = append(cmds, cmdHookStop(m.opts.hooks, fmt.Sprintf("[%s] %s", msg.name, msg.body), false))
 		m.count++
 		if m.opts.exitAfter > 0 && m.count >= m.opts.exitAfter {
-			m.appendHistoryCapped(tuiStyleDim.Render(fmt.Sprintf("[exit-after %d reached]", m.opts.exitAfter)))
+			m.appendHistoryCapped(mute.Render(fmt.Sprintf("[exit-after %d reached]", m.opts.exitAfter)))
 			m.quitReason = "other"
 			return m, tea.Quit
 		}
@@ -292,21 +286,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case hookErrMsg:
 		if msg.err != nil {
-			m.appendHistoryCapped(tuiStyleDim.Render(fmt.Sprintf("[hook %s error: %v]", msg.stage, msg.err)))
+			// Hook errors get the LifecycleWarn token (yellow) so they don't
+			// vanish into the mute lifecycle-note stream.
+			m.appendHistoryCapped(renderLifecycleWarn(fmt.Sprintf("hook %s error: %v", msg.stage, msg.err)))
 		}
 
 	case mcpConnectMsg:
 		if msg.err != nil {
-			m.appendHistoryCapped(tuiStyleDim.Render(fmt.Sprintf("[mcp connect failed: %v]", msg.err)))
+			m.appendHistoryCapped(mute.Render(fmt.Sprintf("[mcp connect failed: %v]", msg.err)))
 		} else if msg.tools > 0 {
-			m.appendHistoryCapped(tuiStyleDim.Render(fmt.Sprintf("[mcp connected: %d tools]", msg.tools)))
+			m.appendHistoryCapped(mute.Render(fmt.Sprintf("[mcp connected: %d tools]", msg.tools)))
 		}
 		if msg.startErr != nil {
-			m.appendHistoryCapped(tuiStyleDim.Render(fmt.Sprintf("[hook OnSessionStart error: %v]", msg.startErr)))
+			m.appendHistoryCapped(renderLifecycleWarn(fmt.Sprintf("hook OnSessionStart error: %v", msg.startErr)))
 		}
 
 	case autoExitMsg:
-		m.appendHistoryCapped(tuiStyleDim.Render(fmt.Sprintf("[auto-exit after %s]", m.opts.autoExit)))
+		m.appendHistoryCapped(mute.Render(fmt.Sprintf("[auto-exit after %s]", m.opts.autoExit)))
 		m.quitReason = "other"
 		return m, tea.Quit
 
@@ -328,7 +324,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // the command(s) to run for this turn.
 func (m *model) startTurn(line string) tea.Cmd {
 	// Echo the user prompt into history (matching the scanner path's "> line").
-	m.appendHistoryCapped(tuiStylePrompt.Render("> ") + line)
+	m.appendHistoryCapped(renderPrompt() + line)
 
 	if strings.HasPrefix(line, "/") {
 		// Slash dispatch. We render synchronously (most slash commands are
@@ -357,10 +353,9 @@ func (m *model) startPromptTurn(line string, override time.Duration, hasOverride
 	m.thinkTag++
 	tag := m.thinkTag
 
-	response := fmt.Sprintf("[%s] %s", m.opts.name, line)
 	return tea.Batch(
 		cmdHookPrompt(m.opts.hooks, line, m.opts.name),
-		cmdThink(delay, tag, response),
+		cmdThink(delay, tag, m.opts.name, line),
 		m.spin.Tick,
 	)
 }
@@ -376,7 +371,11 @@ func (m model) View() string {
 	}
 	if m.thinking {
 		elapsed := time.Since(m.thinkStart).Truncate(time.Second)
-		b.WriteString(tuiStyleSpin.Render(fmt.Sprintf("%s thinking… (%s · esc to interrupt)", m.spin.View(), elapsed)))
+		// Spinner glyph (already styled by m.spin.Style = thinking) +
+		// "thinking…" in the same warm token, then the mute parenthetical.
+		b.WriteString(m.spin.View())
+		b.WriteString(renderThinking(" thinking…"))
+		b.WriteString(mute.Render(fmt.Sprintf(" (%s · esc to interrupt)", elapsed)))
 		b.WriteString("\n")
 	}
 	b.WriteString(m.input.View())
@@ -400,9 +399,9 @@ func (m *model) appendHistoryCapped(line string) {
 
 // cmdThink returns a tea.Cmd that fires thinkingDoneMsg after delay. The tag
 // lets the model ignore the response if the turn was cancelled in the meantime.
-func cmdThink(delay time.Duration, tag int, response string) tea.Cmd {
+func cmdThink(delay time.Duration, tag int, name, body string) tea.Cmd {
 	return tea.Tick(delay, func(time.Time) tea.Msg {
-		return thinkingDoneMsg{tag: tag, response: response}
+		return thinkingDoneMsg{tag: tag, name: name, body: body}
 	})
 }
 

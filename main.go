@@ -20,6 +20,7 @@ import (
 	"unsafe"
 
 	"github.com/charmbracelet/lipgloss"
+
 	"github.com/mattn/go-isatty"
 )
 
@@ -249,31 +250,27 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 	signal.Notify(winchCh, syscall.SIGWINCH)
 
 	// Banner via lipgloss: rounded border auto-sizes to widest line and
-	// handles wide / multi-byte characters correctly.
+	// handles wide / multi-byte characters correctly. Tokens come from style.go.
 	sessionLabel := "session"
 	if opts.resumed {
 		sessionLabel = "resumed"
 	}
 	bannerContent := lipgloss.JoinVertical(lipgloss.Left,
-		lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11")).Render(opts.name),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Faint(true).Render(sessionLabel+" "+opts.sessionID),
-		lipgloss.NewStyle().Faint(true).Render("Type anything; /help for commands"),
+		accentSession.Render(opts.name),
+		bannerMeta.Faint(true).Render(sessionLabel+" "+opts.sessionID),
+		mute.Render("Type anything; /help for commands"),
 	)
-	fmt.Println(lipgloss.NewStyle().
-		Border(lipgloss.DoubleBorder()).
-		BorderForeground(lipgloss.Color("14")).
-		Padding(0, 2).
-		Render(bannerContent))
+	fmt.Println(styleBanner.Render(bannerContent))
 
 	if opts.statusLine != "" {
-		fmt.Printf("\033[2m[%s]\033[0m\n", opts.statusLine)
+		fmt.Println(renderLifecycle(opts.statusLine))
 	}
 
 	// Connect to MCP servers (best-effort; logged on failure, session continues).
 	if err := opts.mcp.Connect(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "testagent: mcp Connect: %v\n", err)
 	} else if tools := opts.mcp.Tools(); len(tools) > 0 {
-		fmt.Printf("\033[2m[mcp connected: %d tools]\033[0m\n", len(tools))
+		fmt.Println(renderLifecycle(fmt.Sprintf("mcp connected: %d tools", len(tools))))
 	}
 
 	// SessionStart fires after MCP is up so orchestrators see a complete boot
@@ -287,13 +284,13 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 		fmt.Fprintf(os.Stderr, "testagent: hook OnSessionStart: %v\n", err)
 	}
 
-	fmt.Printf("\033[32m>\033[0m ")
+	fmt.Print(renderPrompt())
 
 	// Auto-exit after a duration (for headless tests where no input is sent).
 	if opts.autoExit > 0 {
 		go func() {
 			time.Sleep(opts.autoExit)
-			fmt.Printf("\n\033[2m[auto-exit after %s]\033[0m\n", opts.autoExit)
+			fmt.Printf("\n%s\n", renderLifecycle(fmt.Sprintf("auto-exit after %s", opts.autoExit)))
 			shutdown("other")
 			os.Exit(0)
 		}()
@@ -303,7 +300,7 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 	go func() {
 		for range winchCh {
 			rows, cols := getTermSize()
-			fmt.Printf("\n\033[2m[resized: %dx%d]\033[0m\n\033[32m>\033[0m ", cols, rows)
+			fmt.Printf("\n%s\n%s", renderLifecycle(fmt.Sprintf("resized: %dx%d", cols, rows)), renderPrompt())
 		}
 	}()
 
@@ -316,7 +313,7 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 	for {
 		select {
 		case <-sigCh:
-			fmt.Printf("\n\033[1;31mGoodbye!\033[0m\n")
+			fmt.Printf("\n%s\n", accentErr.Render("Goodbye!"))
 			shutdown("other")
 			os.Exit(0)
 		default:
@@ -328,12 +325,12 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 
 		input := strings.TrimSpace(scanner.Text())
 		if input == "" {
-			fmt.Printf("\033[32m>\033[0m ")
+			fmt.Print(renderPrompt())
 			continue
 		}
 
 		if input == "exit" || input == "quit" {
-			fmt.Printf("\033[1;31mGoodbye!\033[0m\n")
+			fmt.Println(accentErr.Render("Goodbye!"))
 			shutdown("logout")
 			return
 		}
@@ -369,7 +366,7 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 			}
 			if outcome.Prompt == "" && !outcome.HasThinkDuration {
 				// Pure slash side-effect (panel, fake-tool, mcp-call, etc.).
-				fmt.Printf("\033[32m>\033[0m ")
+				fmt.Print(renderPrompt())
 				continue
 			}
 			// /think — route the message through the regular prompt path.
@@ -390,8 +387,8 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 		showThinking(os.Stdout, thinkDur)
 
 		// Echo response with color.
-		fmt.Printf("\033[1;35m[%s]\033[0m %s\n", opts.name, promptLine)
-		fmt.Printf("\033[32m>\033[0m ")
+		fmt.Println(renderEcho(opts.name, promptLine))
+		fmt.Print(renderPrompt())
 		lastAssistant = fmt.Sprintf("[%s] %s", opts.name, promptLine)
 
 		if err := opts.hooks.OnStop(ctx, lastAssistant, false); err != nil {
@@ -399,7 +396,7 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 		}
 
 		if opts.exitAfter > 0 && count >= opts.exitAfter {
-			fmt.Printf("\n\033[2m[exit-after %d reached]\033[0m\n", opts.exitAfter)
+			fmt.Printf("\n%s\n", renderLifecycle(fmt.Sprintf("exit-after %d reached", opts.exitAfter)))
 			shutdown("other")
 			return
 		}
@@ -510,10 +507,14 @@ func showThinking(out io.Writer, total time.Duration) {
 
 		for i := 0; ; i++ {
 			elapsed := time.Since(start).Truncate(time.Second)
-			// Move cursor up to the spinner row, clear it, write the new content,
-			// and newline so the cursor returns to the row below.
-			fmt.Fprintf(out, "\033[1A\033[2K\033[2m%s Thinking… (%s · esc to interrupt)\033[0m\n",
-				frames[i%len(frames)], elapsed)
+			// \033[1A moves cursor up to the spinner row; \033[2K clears it.
+			// Style content via the mute token, then newline so the cursor
+			// returns to the row below.
+			// "Thinking…" wears the warm thinking token; the parenthetical
+			// timer + interrupt hint stays mute so it doesn't compete.
+			fmt.Fprintf(out, "\033[1A\033[2K%s%s\n",
+				renderThinking(fmt.Sprintf("%s Thinking…", frames[i%len(frames)])),
+				mute.Render(fmt.Sprintf(" (%s · esc to interrupt)", elapsed)))
 			remaining := time.Until(deadline)
 			if remaining <= 0 {
 				break
@@ -527,7 +528,7 @@ func showThinking(out io.Writer, total time.Duration) {
 		// Replace the spinner row with the static "Thought for Ns" marker.
 		// Cursor ends on the row below, ready for the caller's echo.
 		elapsed := time.Since(start).Truncate(time.Second)
-		fmt.Fprintf(out, "\033[1A\033[2K\033[2;3mThought for %s\033[0m\n", elapsed)
+		fmt.Fprintf(out, "\033[1A\033[2K%s\n", renderThoughtMarker(fmt.Sprintf("Thought for %s", elapsed)))
 		return
 	}
 
@@ -535,7 +536,7 @@ func showThinking(out io.Writer, total time.Duration) {
 	// see a consistent shape regardless of how short the thinking phase was.
 	time.Sleep(total)
 	elapsed := time.Since(start).Truncate(time.Second)
-	fmt.Fprintf(out, "\033[2;3mThought for %s\033[0m\n", elapsed)
+	fmt.Fprintln(out, renderThoughtMarker(fmt.Sprintf("Thought for %s", elapsed)))
 }
 
 func getTermSize() (rows, cols int) {
