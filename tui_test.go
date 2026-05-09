@@ -15,6 +15,7 @@ import (
 
 	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/mcp"
+	slash2 "github.com/paultyng/testagent/internal/slash"
 )
 
 // newTestModel builds a model wired up against in-memory hook/MCP/slash
@@ -47,14 +48,7 @@ func newTestModel(opt *tuiOptions) model {
 			o.mcp = opt.mcp
 		}
 	}
-	o.slash = &SlashHandler{
-		name:        o.name,
-		streamDelay: 0,
-		sessionID:   o.sessionID,
-		cwd:         o.cwd,
-		hooks:       o.hooks,
-		mcp:         o.mcp,
-	}
+	o.slash = slash2.New(0, o.hooks, o.mcp, io.Discard)
 	return newModel(o)
 }
 
@@ -325,20 +319,13 @@ func TestCmdSlashRestart_FiresHooksInOrder(t *testing.T) {
 		hooks.SessionStart: {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/start", Timeout: 1}}}},
 		hooks.SessionEnd:   {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/end", Timeout: 1}}}},
 	}, "sid-test", "/tmp", "", "default", nil)
-	slash := &SlashHandler{
-		name:      "Test",
-		sessionID: "sid-test",
-		cwd:       "/tmp",
-		hooks:     hookSender,
-		mcp:       mcp.NewClient(nil),
-		out:       io.Discard,
-	}
+	handler := slash2.New(0, hookSender, mcp.NewClient(nil), io.Discard)
 
 	// Stage a pending /fake-tool so we can prove its PostToolUse drains
 	// before SessionEnd.
-	slash.Dispatch(context.Background(), `/fake-tool read_file {"path":"foo.go"}`)
+	handler.Dispatch(context.Background(), `/fake-tool read_file {"path":"foo.go"}`)
 
-	cmd := cmdSlashRestart(slash, hookSender, "compact")
+	cmd := cmdSlashRestart(handler, hookSender, "compact")
 	if cmd == nil {
 		t.Fatal("cmdSlashRestart returned nil cmd")
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/mcp"
 	"github.com/paultyng/testagent/internal/render"
+	"github.com/paultyng/testagent/internal/slash"
 )
 
 // tuiOptions bundles inputs runTUI needs from main().
@@ -40,7 +41,7 @@ type tuiOptions struct {
 	mcpConfig      *MCPConfig
 	hooks          *hooks.Sender
 	mcp            *mcp.Client
-	slash          *SlashHandler
+	slash          *slash.Handler
 }
 
 // model is the bubbletea Model driving the interactive session.
@@ -79,7 +80,7 @@ type thinkingDoneMsg struct {
 // slashDoneMsg fires when an asynchronously-dispatched slash command finishes.
 type slashDoneMsg struct {
 	rendered string
-	outcome  SlashOutcome
+	outcome  slash.Outcome
 }
 
 // hookErrMsg surfaces a hook error from a goroutine. When err is nil, no-op.
@@ -408,24 +409,24 @@ func cmdThink(delay time.Duration, tag int, name, body string) tea.Cmd {
 
 // cmdSlashDispatch runs a slash command on a goroutine and returns its
 // rendered output + outcome.
-func cmdSlashDispatch(slash *SlashHandler, line string) tea.Cmd {
+func cmdSlashDispatch(handler *slash.Handler, line string) tea.Cmd {
 	return func() tea.Msg {
-		rendered, outcome := slash.DispatchString(context.Background(), line)
+		rendered, outcome := handler.DispatchString(context.Background(), line)
 		return slashDoneMsg{rendered: rendered, outcome: outcome}
 	}
 }
 
 // cmdHookPrompt fires UserPromptSubmit on a goroutine.
-func cmdHookPrompt(hooks *hooks.Sender, prompt, name string) tea.Cmd {
+func cmdHookPrompt(sender *hooks.Sender, prompt, name string) tea.Cmd {
 	return func() tea.Msg {
-		return hookErrMsg{stage: "OnPrompt", err: hooks.OnPrompt(context.Background(), prompt, name)}
+		return hookErrMsg{stage: "OnPrompt", err: sender.OnPrompt(context.Background(), prompt, name)}
 	}
 }
 
 // cmdHookStop fires Stop on a goroutine.
-func cmdHookStop(hooks *hooks.Sender, last string, stopHookActive bool) tea.Cmd {
+func cmdHookStop(sender *hooks.Sender, last string, stopHookActive bool) tea.Cmd {
 	return func() tea.Msg {
-		return hookErrMsg{stage: "OnStop", err: hooks.OnStop(context.Background(), last, stopHookActive)}
+		return hookErrMsg{stage: "OnStop", err: sender.OnStop(context.Background(), last, stopHookActive)}
 	}
 }
 
@@ -453,13 +454,13 @@ func cmdBoot(client *mcp.Client, sender *hooks.Sender, source string) tea.Cmd {
 // PostToolUse (for any pending /fake-tool), SessionEnd, and SessionStart land
 // on the wire in that fixed order. tea.Batch would dispatch separate cmds
 // concurrently, which would race the SessionEnd/SessionStart POSTs and
-// violate the back-to-back contract documented on SlashOutcome.Restart.
-func cmdSlashRestart(slash *SlashHandler, hooks *hooks.Sender, reason string) tea.Cmd {
+// violate the back-to-back contract documented on slash.Outcome.Restart.
+func cmdSlashRestart(handler *slash.Handler, sender *hooks.Sender, reason string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		slash.FlushPendingTool(ctx)
-		endErr := hooks.OnSessionEnd(ctx, reason)
-		startErr := hooks.OnSessionStart(ctx, reason)
+		handler.FlushPendingTool(ctx)
+		endErr := sender.OnSessionEnd(ctx, reason)
+		startErr := sender.OnSessionStart(ctx, reason)
 		if err := errors.Join(endErr, startErr); err != nil {
 			return hookErrMsg{stage: "OnRestart", err: err}
 		}

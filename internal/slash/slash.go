@@ -1,14 +1,16 @@
-// Slash-command grammar for driving UI primitives interactively.
+// Package slash implements the slash-command grammar for driving UI
+// primitives interactively.
 //
 // During an interactive session, lines starting with "/" are interpreted as
 // directives that synthesize specific UI elements (streamed text, tool-use
 // blocks, panels, MCP calls) instead of going through the default echo path.
-
-package main
+package slash
 
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,23 +25,29 @@ import (
 	"github.com/paultyng/testagent/internal/render"
 )
 
-// SlashHandler dispatches slash commands and renders their output.
-type SlashHandler struct {
-	name           string
-	streamDelay    time.Duration
-	sessionID      string
-	cwd            string
-	transcriptPath string
-	permissionMode string
-	hooks          *hooks.Sender
-	mcp            *mcp.Client
-	out            io.Writer
+// Handler dispatches slash commands and renders their output.
+type Handler struct {
+	streamDelay time.Duration
+	hooks       *hooks.Sender
+	mcp         *mcp.Client
+	out         io.Writer
 
 	// pendingToolMu guards pendingTool. Slash dispatches can run concurrently
 	// in TUI mode (cmdSlashDispatch is a tea.Cmd goroutine), so the
 	// /fake-tool→/fake-tool-result pairing state needs synchronization.
 	pendingToolMu sync.Mutex
 	pendingTool   *pendingToolCall
+}
+
+// New returns a Handler wired with the supplied dependencies. streamDelay
+// paces /stream output; pass 0 to disable per-token delay.
+func New(streamDelay time.Duration, sender *hooks.Sender, client *mcp.Client, out io.Writer) *Handler {
+	return &Handler{
+		streamDelay: streamDelay,
+		hooks:       sender,
+		mcp:         client,
+		out:         out,
+	}
 }
 
 // pendingToolCall tracks a /fake-tool that has not been completed by /fake-tool-result yet.
@@ -53,8 +61,8 @@ type pendingToolCall struct {
 	startedAt time.Time
 }
 
-// SlashOutcome reports control-flow signals from a slash command.
-type SlashOutcome struct {
+// Outcome reports control-flow signals from a slash command.
+type Outcome struct {
 	Handled  bool // input started with "/" and was dispatched
 	Exit     bool // session should end (only set by /exit)
 	ExitCode int  // exit status when Exit is true
@@ -87,7 +95,7 @@ type SlashOutcome struct {
 // output as a string (so the model can append it to history) and returns it
 // alongside the control-flow outcome. Concurrent-safe: each call writes to
 // its own buffer, so multiple in-flight goroutines never interfere.
-func (h *SlashHandler) DispatchString(ctx context.Context, line string) (string, SlashOutcome) {
+func (h *Handler) DispatchString(ctx context.Context, line string) (string, Outcome) {
 	var buf bytes.Buffer
 	outcome := h.dispatchTo(ctx, line, &buf)
 	return buf.String(), outcome
@@ -95,17 +103,17 @@ func (h *SlashHandler) DispatchString(ctx context.Context, line string) (string,
 
 // Dispatch parses and runs a single line, writing rendered output to h.out.
 // If line doesn't start with "/", returns Handled=false. Errors go to stderr.
-func (h *SlashHandler) Dispatch(ctx context.Context, line string) SlashOutcome {
+func (h *Handler) Dispatch(ctx context.Context, line string) Outcome {
 	return h.dispatchTo(ctx, line, h.out)
 }
 
 // dispatchTo is the shared dispatch core. All cmd* methods write to the
 // passed-in writer rather than h.out so callers can safely run concurrent
 // dispatches without sharing per-handler state.
-func (h *SlashHandler) dispatchTo(ctx context.Context, line string, out io.Writer) SlashOutcome {
+func (h *Handler) dispatchTo(ctx context.Context, line string, out io.Writer) Outcome {
 	line = strings.TrimSpace(line)
 	if !strings.HasPrefix(line, "/") {
-		return SlashOutcome{}
+		return Outcome{}
 	}
 	cmd, rest := splitFirstWord(line[1:])
 	rest = strings.TrimSpace(rest)
@@ -134,15 +142,15 @@ func (h *SlashHandler) dispatchTo(ctx context.Context, line string, out io.Write
 				code = n
 			}
 		}
-		return SlashOutcome{Handled: true, Exit: true, ExitCode: code, Reason: "logout"}
+		return Outcome{Handled: true, Exit: true, ExitCode: code, Reason: "logout"}
 	default:
 		fmt.Fprintf(os.Stderr, "testagent: unknown slash command %q (try /help)\n", "/"+cmd)
 	}
-	return SlashOutcome{Handled: true}
+	return Outcome{Handled: true}
 }
 
 // /help — list slash commands with their argument signatures.
-func (h *SlashHandler) cmdHelp(out io.Writer) {
+func (h *Handler) cmdHelp(out io.Writer) {
 	header := render.ToolStyle.Render("slash commands")
 	fmt.Fprintln(out, header)
 	for _, line := range []struct {
@@ -166,7 +174,7 @@ func (h *SlashHandler) cmdHelp(out io.Writer) {
 }
 
 // /stream <text> — token-paced streaming text.
-func (h *SlashHandler) cmdStream(out io.Writer, text string) {
+func (h *Handler) cmdStream(out io.Writer, text string) {
 	if text == "" {
 		fmt.Fprintln(out)
 		return
@@ -186,13 +194,13 @@ func (h *SlashHandler) cmdStream(out io.Writer, text string) {
 
 // /think [<duration>] <text> — functionally identical to typing <text> as
 // raw input, with the addition of an optional leading time.Duration that
-// overrides the default thinking time for that turn. Returns a SlashOutcome
+// overrides the default thinking time for that turn. Returns a Outcome
 // with Prompt and (optionally) ThinkDuration set; the dispatcher routes
 // the message back through the prompt-handling path so hooks fire and the
 // thinking animation runs.
-func (h *SlashHandler) cmdThink(rest string) SlashOutcome {
+func (h *Handler) cmdThink(rest string) Outcome {
 	req := parseThinkArgs(rest)
-	return SlashOutcome{
+	return Outcome{
 		Handled:          true,
 		Prompt:           req.Message,
 		ThinkDuration:    req.Duration,
@@ -238,7 +246,7 @@ func parseThinkArgs(rest string) ThinkRequest {
 }
 
 // /panel <text> — rounded-border panel via lipgloss.
-func (h *SlashHandler) cmdPanel(out io.Writer, text string) {
+func (h *Handler) cmdPanel(out io.Writer, text string) {
 	fmt.Fprintln(out, render.PanelStyle.Render(text))
 }
 
@@ -246,7 +254,7 @@ func (h *SlashHandler) cmdPanel(out io.Writer, text string) {
 // as pending. The matching /fake-tool-result completes it and fires PostToolUse with
 // the full payload (input + response + duration). Submitting another /fake-tool
 // while one is pending flushes the prior with empty response.
-func (h *SlashHandler) cmdFakeTool(ctx context.Context, out io.Writer, rest string) {
+func (h *Handler) cmdFakeTool(ctx context.Context, out io.Writer, rest string) {
 	name, jsonArgs := splitFirstWord(rest)
 	if name == "" {
 		fmt.Fprintln(os.Stderr, "testagent: /fake-tool requires a tool name")
@@ -276,7 +284,7 @@ func (h *SlashHandler) cmdFakeTool(ctx context.Context, out io.Writer, rest stri
 // measured duration. JSON results are stored structured; non-JSON as the
 // raw string. With no pending /fake-tool, only renders (no synthetic hook —
 // inventing a tool_use_id and tool_name would produce dishonest fixtures).
-func (h *SlashHandler) cmdFakeToolResult(ctx context.Context, out io.Writer, rest string) {
+func (h *Handler) cmdFakeToolResult(ctx context.Context, out io.Writer, rest string) {
 	mark := render.ResultOk()
 	var response any
 	switch {
@@ -302,20 +310,20 @@ func (h *SlashHandler) cmdFakeToolResult(ctx context.Context, out io.Writer, res
 // FlushPendingTool fires PostToolUse for any in-flight /fake-tool with a nil
 // response. Called from shutdown paths (/exit, signal, EOF, auto-exit) so
 // dangling /fake-tool calls don't silently lose their hook event.
-func (h *SlashHandler) FlushPendingTool(ctx context.Context) {
+func (h *Handler) FlushPendingTool(ctx context.Context) {
 	if pending := h.takePending(); pending != nil {
 		fmt.Fprintf(os.Stderr, "testagent: /fake-tool %q flushed on shutdown without /fake-tool-result\n", pending.name)
 		h.firePendingHook(ctx, pending, nil)
 	}
 }
 
-func (h *SlashHandler) setPending(p *pendingToolCall) {
+func (h *Handler) setPending(p *pendingToolCall) {
 	h.pendingToolMu.Lock()
 	defer h.pendingToolMu.Unlock()
 	h.pendingTool = p
 }
 
-func (h *SlashHandler) takePending() *pendingToolCall {
+func (h *Handler) takePending() *pendingToolCall {
 	h.pendingToolMu.Lock()
 	defer h.pendingToolMu.Unlock()
 	p := h.pendingTool
@@ -326,7 +334,7 @@ func (h *SlashHandler) takePending() *pendingToolCall {
 // firePendingHook posts PostToolUse for a captured /fake-tool. response is the
 // /fake-tool-result body (parsed JSON or raw string) or nil when flushing a
 // dangling /fake-tool. Errors are logged to stderr and do not abort the session.
-func (h *SlashHandler) firePendingHook(ctx context.Context, p *pendingToolCall, response any) {
+func (h *Handler) firePendingHook(ctx context.Context, p *pendingToolCall, response any) {
 	dur := time.Since(p.startedAt).Milliseconds()
 	if err := h.hooks.OnToolUse(ctx, p.toolUseID, p.name, p.input, response, dur); err != nil {
 		fmt.Fprintf(os.Stderr, "testagent: hook OnToolUse: %v\n", err)
@@ -337,7 +345,7 @@ func (h *SlashHandler) firePendingHook(ctx context.Context, p *pendingToolCall, 
 // qualified-tool is "<server>.<tool>". Named to avoid collision with real
 // Claude Code's /mcp, which opens a server-management UI rather than calling
 // a tool — orchestrators can pipe both verbatim and get distinct behavior.
-func (h *SlashHandler) cmdMCP(ctx context.Context, out io.Writer, rest string) {
+func (h *Handler) cmdMCP(ctx context.Context, out io.Writer, rest string) {
 	qualified, jsonArgs := splitFirstWord(rest)
 	if qualified == "" || !strings.Contains(qualified, ".") {
 		fmt.Fprintln(os.Stderr, "testagent: /mcp-call requires <server>.<tool> as first arg")
@@ -368,15 +376,15 @@ func (h *SlashHandler) cmdMCP(ctx context.Context, out io.Writer, rest string) {
 // the process. The shared matcher value (default "clear") is passed as
 // SessionEnd.reason and SessionStart.source so an orchestrator can simulate
 // either Claude reset flavor — `/clear`-style ("clear") or `/compact`-style
-// ("compact"). The runtime owns the actual hook firing via the SlashOutcome
+// ("compact"). The runtime owns the actual hook firing via the Outcome
 // (parallel to /exit's outcome-driven shutdown).
-func (h *SlashHandler) cmdRestart(out io.Writer, rest string) SlashOutcome {
+func (h *Handler) cmdRestart(out io.Writer, rest string) Outcome {
 	reason := strings.TrimSpace(rest)
 	if reason == "" {
 		reason = "clear"
 	}
 	fmt.Fprintln(out, render.Lifecycle("restart: "+reason))
-	return SlashOutcome{Handled: true, Restart: true, RestartReason: reason}
+	return Outcome{Handled: true, Restart: true, RestartReason: reason}
 }
 
 // splitFirstWord splits on the first whitespace, returning (head, tail).
@@ -402,4 +410,11 @@ func parseJSONOr(s string, fallback any) any {
 		return fallback
 	}
 	return v
+}
+
+// randomHex returns 2*n hex characters for synthesizing tool-use IDs.
+func randomHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }

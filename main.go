@@ -25,6 +25,7 @@ import (
 	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/mcp"
 	"github.com/paultyng/testagent/internal/render"
+	"github.com/paultyng/testagent/internal/slash"
 )
 
 // Settings mirrors Claude Code's settings.json shape (hooks + permissions).
@@ -62,7 +63,7 @@ type scannerOptions struct {
 	statusLine     string
 	hooks          *hooks.Sender
 	mcp            *mcp.Client
-	slash          *SlashHandler
+	slash          *slash.Handler
 }
 
 func main() {
@@ -128,21 +129,11 @@ func main() {
 		mcpServers = mcpConfig.MCPServers
 	}
 	mcpClient := mcp.NewClient(mcpServers)
-	slash := &SlashHandler{
-		name:           name,
-		streamDelay:    30 * time.Millisecond,
-		sessionID:      sid,
-		cwd:            cwd,
-		transcriptPath: transcriptPath,
-		permissionMode: permissionMode,
-		hooks:          hookSender,
-		mcp:            mcpClient,
-		out:            os.Stdout,
-	}
+	slashHandler := slash.New(30*time.Millisecond, hookSender, mcpClient, os.Stdout)
 	shutdown := func(reason string) {
 		// Flush any in-flight /fake-tool that never got a /fake-tool-result so its
 		// PostToolUse fires (with empty response) before SessionEnd.
-		slash.FlushPendingTool(context.Background())
+		slashHandler.FlushPendingTool(context.Background())
 		if err := hookSender.OnSessionEnd(context.Background(), reason); err != nil {
 			fmt.Fprintf(os.Stderr, "testagent: hook OnSessionEnd: %v\n", err)
 		}
@@ -200,7 +191,7 @@ func main() {
 			mcpConfig:      mcpConfig,
 			hooks:          hookSender,
 			mcp:            mcpClient,
-			slash:          slash,
+			slash:          slashHandler,
 		}, quitCh)
 		if reason == "" {
 			reason = "other"
@@ -223,7 +214,7 @@ func main() {
 		autoExit:       *autoExit,
 		statusLine:     statusLine,
 		hooks:          hookSender,
-		slash:          slash,
+		slash:          slashHandler,
 		mcp:            mcpClient,
 	}, shutdown)
 }
@@ -297,7 +288,7 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 		}
 	}()
 
-	slash := opts.slash
+	slashHandler := opts.slash
 
 	scanner := bufio.NewScanner(os.Stdin)
 	count := 0
@@ -334,7 +325,7 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 		// should run through the same prompt path as raw input.
 		promptLine := input
 		thinkDur := opts.delay
-		if outcome := slash.Dispatch(ctx, input); outcome.Handled {
+		if outcome := slashHandler.Dispatch(ctx, input); outcome.Handled {
 			if outcome.Exit {
 				shutdown(outcome.Reason)
 				os.Exit(outcome.ExitCode)
@@ -347,7 +338,7 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 				// same matcher value. The process keeps running — no
 				// scrollback wipe (that's a future UI feature; this PR is
 				// hook-shape only).
-				slash.FlushPendingTool(ctx)
+				slashHandler.FlushPendingTool(ctx)
 				if err := opts.hooks.OnSessionEnd(ctx, outcome.RestartReason); err != nil {
 					fmt.Fprintf(os.Stderr, "testagent: hook OnSessionEnd: %v\n", err)
 				}

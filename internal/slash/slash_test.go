@@ -1,4 +1,4 @@
-package main
+package slash
 
 import (
 	"bytes"
@@ -16,23 +16,15 @@ import (
 	"github.com/paultyng/testagent/internal/mcp"
 )
 
-func newTestSlashHandler(out *bytes.Buffer) *SlashHandler {
-	return &SlashHandler{
-		name:        "Test",
-		streamDelay: 0,
-		sessionID:   "sid-test",
-		cwd:         "/tmp",
-		hooks:       hooks.NewSender(nil, "sid-test", "/tmp", "", "default", nil),
-		mcp:         mcp.NewClient(nil),
-		out:         out,
-	}
+func newTestHandler(out *bytes.Buffer) *Handler {
+	return New(0, hooks.NewSender(nil, "sid-test", "/tmp", "", "default", nil), mcp.NewClient(nil), out)
 }
 
 func TestSlash_NotASlash(t *testing.T) {
 	t.Parallel()
 
 	out := &bytes.Buffer{}
-	h := newTestSlashHandler(out)
+	h := newTestHandler(out)
 	got := h.Dispatch(context.Background(), "regular prompt")
 	if got.Handled {
 		t.Errorf("non-slash input should not be handled")
@@ -46,7 +38,7 @@ func TestSlash_Stream(t *testing.T) {
 	t.Parallel()
 
 	out := &bytes.Buffer{}
-	h := newTestSlashHandler(out)
+	h := newTestHandler(out)
 	h.Dispatch(context.Background(), "/stream hello world")
 	got := strings.TrimRight(out.String(), "\n")
 	if got != "hello world" {
@@ -54,7 +46,7 @@ func TestSlash_Stream(t *testing.T) {
 	}
 }
 
-// TestSlash_Think asserts cmdThink populates SlashOutcome.Prompt and
+// TestSlash_Think asserts cmdThink populates Outcome.Prompt and
 // ThinkDuration correctly. The actual hook firing + animation is the
 // caller's responsibility (main.go scanner loop, tui.go Update) and is
 // covered by TestE2E_*.
@@ -78,7 +70,7 @@ func TestSlash_Think(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			out := &bytes.Buffer{}
-			h := newTestSlashHandler(out)
+			h := newTestHandler(out)
 			outcome := h.Dispatch(context.Background(), tc.line)
 
 			if !outcome.Handled {
@@ -138,7 +130,7 @@ func TestSlash_Help_Format(t *testing.T) {
 	t.Parallel()
 
 	out := &bytes.Buffer{}
-	h := newTestSlashHandler(out)
+	h := newTestHandler(out)
 	h.Dispatch(context.Background(), "/help")
 	body := out.String()
 
@@ -166,7 +158,7 @@ func TestSlash_Panel(t *testing.T) {
 	t.Parallel()
 
 	out := &bytes.Buffer{}
-	h := newTestSlashHandler(out)
+	h := newTestHandler(out)
 	h.Dispatch(context.Background(), "/panel a panel message")
 	s := out.String()
 	// lipgloss uses rounded corners (╭ ╰); in no-color test env still draws box chars.
@@ -190,7 +182,7 @@ func TestSlash_FakeToolAlone_NoHookYet(t *testing.T) {
 	defer srv.Close()
 
 	out := &bytes.Buffer{}
-	h := newTestSlashHandler(out)
+	h := newTestHandler(out)
 	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
 		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
 	}, "sid-test", "/tmp", "", "default", nil)
@@ -223,7 +215,7 @@ func TestSlash_FakeToolResultPair(t *testing.T) {
 	defer srv.Close()
 
 	out := &bytes.Buffer{}
-	h := newTestSlashHandler(out)
+	h := newTestHandler(out)
 	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
 		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
 	}, "sid-test", "/tmp", "", "default", nil)
@@ -266,7 +258,7 @@ func TestSlash_OrphanFakeToolResult(t *testing.T) {
 	defer srv.Close()
 
 	out := &bytes.Buffer{}
-	h := newTestSlashHandler(out)
+	h := newTestHandler(out)
 	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
 		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
 	}, "sid-test", "/tmp", "", "default", nil)
@@ -299,7 +291,7 @@ func TestSlash_FlushPendingTool(t *testing.T) {
 	defer srv.Close()
 
 	out := &bytes.Buffer{}
-	h := newTestSlashHandler(out)
+	h := newTestHandler(out)
 	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
 		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
 	}, "sid-test", "/tmp", "", "default", nil)
@@ -338,7 +330,7 @@ func TestSlash_SecondToolReplacesPending(t *testing.T) {
 	defer srv.Close()
 
 	out := &bytes.Buffer{}
-	h := newTestSlashHandler(out)
+	h := newTestHandler(out)
 	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
 		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
 	}, "sid-test", "/tmp", "", "default", nil)
@@ -370,7 +362,7 @@ func TestSlash_Result(t *testing.T) {
 	t.Parallel()
 
 	out := &bytes.Buffer{}
-	h := newTestSlashHandler(out)
+	h := newTestHandler(out)
 	h.Dispatch(context.Background(), `/fake-tool-result {"ok":true}`)
 	s := out.String()
 	if !strings.Contains(s, "ok") {
@@ -385,7 +377,7 @@ func TestSlash_Exit(t *testing.T) {
 	t.Parallel()
 
 	out := &bytes.Buffer{}
-	h := newTestSlashHandler(out)
+	h := newTestHandler(out)
 
 	noCode := h.Dispatch(context.Background(), "/exit")
 	if !noCode.Exit || noCode.ExitCode != 0 {
@@ -414,7 +406,7 @@ func TestSlash_Restart(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			out := &bytes.Buffer{}
-			h := newTestSlashHandler(out)
+			h := newTestHandler(out)
 			oc := h.Dispatch(context.Background(), tc.line)
 			if !oc.Handled || !oc.Restart {
 				t.Fatalf("got Handled=%v Restart=%v, want both true", oc.Handled, oc.Restart)
@@ -433,7 +425,7 @@ func TestSlash_UnknownCommand(t *testing.T) {
 	t.Parallel()
 
 	out := &bytes.Buffer{}
-	h := newTestSlashHandler(out)
+	h := newTestHandler(out)
 	got := h.Dispatch(context.Background(), "/notacommand foo")
 	if !got.Handled {
 		t.Errorf("unknown slash should still be Handled (consumed); got %+v", got)
@@ -477,7 +469,7 @@ func TestSlash_DispatchString(t *testing.T) {
 			t.Parallel()
 
 			// Run via DispatchString (string-returning).
-			h1 := newTestSlashHandler(&bytes.Buffer{})
+			h1 := newTestHandler(&bytes.Buffer{})
 			body, outcome := h1.DispatchString(context.Background(), tc.line)
 
 			if outcome.Handled != tc.wantHand {
@@ -495,7 +487,7 @@ func TestSlash_DispatchString(t *testing.T) {
 
 			// Run via buffered Dispatch (the legacy path) and compare bodies.
 			out := &bytes.Buffer{}
-			h2 := newTestSlashHandler(out)
+			h2 := newTestHandler(out)
 			outcome2 := h2.Dispatch(context.Background(), tc.line)
 			if outcome2.Exit != outcome.Exit || outcome2.ExitCode != outcome.ExitCode || outcome2.Handled != outcome.Handled {
 				t.Errorf("Dispatch outcome mismatch:\n  DispatchString=%+v\n  Dispatch=%+v", outcome, outcome2)
