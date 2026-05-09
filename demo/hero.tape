@@ -4,7 +4,7 @@ Output demo/hero.gif
 
 Set FontSize 16
 Set Width 1100
-Set Height 540
+Set Height 600
 Set Theme "Catppuccin Mocha"
 Set Padding 24
 Set TypingSpeed 60ms
@@ -17,26 +17,30 @@ Env TERM "xterm-256color"
 
 Type "testagent -n 'Demo' --session-id 3ebe43d4-9ab2-4842-b3cd-237fce2ba36f --delay 5s"
 Enter
-Sleep 800ms
+Sleep 1s
 
-# A regular prompt → triggers the thinking spinner with elapsed counter.
+# Submit a prompt → triggers the thinking spinner.
 Type "what's testagent?"
 Enter
-Sleep 5500ms
+Sleep 1500ms
 
-# Tool-use cycle
+# Type a slash command WHILE thinking is in flight — it queues.
+Type "/panel queued mid-think"
+Enter
+Sleep 4500ms
+
+# Tool-use cycle (runs after the queue drains).
 Type@40ms `/tool read_file {"path":"hello.go"}`
 Enter
 Sleep 400ms
 
 Type@40ms `/result {"ok":true,"size":42}`
 Enter
-Sleep 700ms
+Sleep 800ms
 
-# Bordered panel
-Type "/panel fake CLI agent for orchestrator tests — no LLM, no network"
+Type "/panel fake CLI agent for orchestrator tests — no LLM, no network, no $$$"
 Enter
-Sleep 1200ms
+Sleep 1500ms
 
 Type "/exit"
 Enter
