@@ -26,12 +26,12 @@ import (
 // hidden completion-protocol commands (__complete, __completeNoDesc) so that
 // shell-completion dispatch isn't silently routed into the claude subcommand.
 var knownSubcommands = map[string]bool{
-	"claude":            true,
-	"codex":             true,
-	"help":              true,
-	"completion":        true,
-	"__complete":        true,
-	"__completeNoDesc":  true,
+	"claude":           true,
+	"codex":            true,
+	"help":             true,
+	"completion":       true,
+	"__complete":       true,
+	"__completeNoDesc": true,
 }
 
 func main() {
