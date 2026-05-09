@@ -60,10 +60,13 @@ type model struct {
 }
 
 // thinkingDoneMsg fires when the simulated thinking delay elapses for tag.
-// name and body let the handler render a styled echo in scrollback while the
-// Stop-hook payload (last_assistant_message) keeps the plain "[name] body"
-// shape — ANSI codes must not leak into the wire payload. streamDelay is
-// the per-token interval the streaming phase will use for this turn.
+// The handler closes out the spinner phase ("Thought for Ns" marker), seeds
+// the streaming phase by appending an EchoHeader placeholder line and
+// tokenizing body, then schedules the first streamChunkMsg. The plain
+// "[name] body" payload is captured here as streamFinal so the eventual
+// streamDoneMsg / cancel can fire the Stop hook with ANSI-free text.
+// streamDelay is the per-token interval the streaming phase will use for
+// this turn.
 type thinkingDoneMsg struct {
 	tag         int
 	name        string
@@ -258,12 +261,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.streaming {
 			m.turnTag++ // invalidate any pending streamChunkMsg
 			m.streaming = false
-			// Pin whatever was emitted so far as the partial body for the
-			// hook payload. The growing line stays in history as-is.
-			partial := ""
-			if m.streamLineIdx >= 0 && m.streamLineIdx < len(m.history) {
-				partial = m.history[m.streamLineIdx]
-			}
+			// Reconstruct the plain-text partial body from the tokens that
+			// were emitted before cancel — reading the styled history line
+			// would leak ANSI codes into the hook payload.
+			partial := fmt.Sprintf("[%s] %s", m.g.Name, strings.Join(m.streamTokens[:m.streamIdx], " "))
 			m.appendHistoryCapped(render.ThoughtMarkerStyle.Render("Interrupted"))
 			cmds = append(cmds, cmdHookStop(m.d.Hooks, partial, true))
 			m.streamTokens = nil
@@ -481,7 +482,10 @@ func (m model) View() string {
 
 // appendHistoryCapped appends a line (with any trailing newlines stripped so
 // View can add its own separator deterministically) and evicts oldest entries
-// when the cap is exceeded. cap=0 disables eviction.
+// when the cap is exceeded. cap=0 disables eviction. When eviction shifts
+// the slice down, m.streamLineIdx is rebased so an in-flight stream's
+// growing line still points at the same row (or goes negative, in which case
+// the chunk handler's bounds check creates a new line).
 func (m *model) appendHistoryCapped(line string) {
 	m.history = append(m.history, strings.TrimRight(line, "\n"))
 	limit := m.g.HistoryCap
@@ -491,14 +495,24 @@ func (m *model) appendHistoryCapped(line string) {
 	if len(m.history) > limit {
 		drop := len(m.history) - limit
 		m.history = m.history[drop:]
+		if m.streaming {
+			m.streamLineIdx -= drop
+		}
 	}
 }
 
 // cmdThink returns a tea.Cmd that fires thinkingDoneMsg after delay. The tag
 // lets the model ignore the response if the turn was cancelled in the
 // meantime. streamDelay rides along so the streaming phase honors the
-// per-turn override without a second flag plumbing dance.
+// per-turn override without a second flag plumbing dance. delay<=0 fires
+// immediately on the bubbletea event loop (tea.Tick's behavior with a
+// zero duration is implementation-defined).
 func cmdThink(delay, streamDelay time.Duration, tag int, name, body string) tea.Cmd {
+	if delay <= 0 {
+		return func() tea.Msg {
+			return thinkingDoneMsg{tag: tag, name: name, body: body, streamDelay: streamDelay}
+		}
+	}
 	return tea.Tick(delay, func(time.Time) tea.Msg {
 		return thinkingDoneMsg{tag: tag, name: name, body: body, streamDelay: streamDelay}
 	})

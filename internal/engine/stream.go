@@ -14,10 +14,12 @@ import (
 )
 
 // streamEcho writes a styled `[name] message` echo to out, pacing each
-// whitespace-delimited token with perToken delay between writes. The
-// assembled bytes match a single Println(render.Echo(...)) (so consumers
-// that string-match the full line keep working). Trailing newline always
-// fires.
+// whitespace-delimited token with perToken delay between writes. Tokens
+// come from strings.Fields so multi-space runs in the message are
+// collapsed to single spaces — the assembled bytes match
+// Println(render.Echo(...)) for any normally-spaced input, which is
+// what existing e2e substring assertions exercise. Trailing newline
+// always fires.
 func streamEcho(out io.Writer, name, message string, perToken time.Duration) {
 	// Header "[name] " is rendered + emitted as one chunk so token timing
 	// only paces the message body — name is per-turn fixed, no point

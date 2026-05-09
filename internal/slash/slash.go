@@ -183,7 +183,11 @@ func (h *Handler) cmdHelp(out io.Writer) {
 func (h *Handler) cmdThink(out io.Writer, rest string) Outcome {
 	dur, msg, ok := parseDurationPrefix(rest)
 	if !ok || msg == "" {
-		fmt.Fprintln(out, render.MuteSoftStyle.Render("usage: /think <duration> <message>"))
+		// Plain text — no styling — so piped consumers don't see ANSI on
+		// stdout (per AGENTS.md "Debug output goes to stderr ... never
+		// ANSI-styled"; usage lines aren't debug, but the same hygiene
+		// applies to stdout fragments).
+		fmt.Fprintln(out, "usage: /think <duration> <message>")
 		return Outcome{Handled: true}
 	}
 	return Outcome{
@@ -200,7 +204,7 @@ func (h *Handler) cmdThink(out io.Writer, rest string) Outcome {
 func (h *Handler) cmdStream(out io.Writer, rest string) Outcome {
 	dur, msg, ok := parseDurationPrefix(rest)
 	if !ok || msg == "" {
-		fmt.Fprintln(out, render.MuteSoftStyle.Render("usage: /stream <duration> <message>"))
+		fmt.Fprintln(out, "usage: /stream <duration> <message>")
 		return Outcome{Handled: true}
 	}
 	return Outcome{
