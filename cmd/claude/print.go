@@ -10,7 +10,7 @@
 // sender, so stdout stays clean for stream-json consumers reading JSONL
 // frames.
 
-package main
+package claude
 
 import (
 	"context"
