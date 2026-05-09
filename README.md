@@ -35,8 +35,9 @@ In interactive mode, lines starting with `/` are slash commands that synthesize 
 - `/exit [code]`
 - `/fake-tool <name> <json-args>`
 - `/fake-tool-result <json-or-text>`
-- `/mcp <server.tool> <json-args>`
+- `/mcp-call <server.tool> <json-args>` — named to avoid colliding with real Claude Code's `/mcp` (server-management UI)
 - `/panel <text>`
+- `/restart [clear|compact]` — fires `SessionEnd` then `SessionStart` without leaving the process; pass `clear` (default) or `compact` to choose the matcher value Claude would emit on `/clear` vs `/compact`
 - `/stream <text>`
 - `/think [<duration>] <text>`
 
@@ -55,11 +56,11 @@ When stdin is **not** a TTY (piped input, `--print`), testagent falls back to a 
 
 ## Hooks
 
-When `--settings` declares hook URLs, testagent POSTs Claude-Code-shaped event bodies on the appropriate lifecycle moments: `UserPromptSubmit` per user input (raw input AND `/think`), `Stop` after each assistant response, `PostToolUse` when a `/fake-tool` block is closed by `/fake-tool-result` (with the captured `tool_input`, the supplied `tool_response`, and measured `duration_ms`), `SessionEnd` on shutdown.
+When `--settings` declares hook URLs, testagent POSTs Claude-Code-shaped event bodies on the appropriate lifecycle moments: `SessionStart` at boot (`source=startup`, or `source=resume` when `--resume` is set), `UserPromptSubmit` per user input (raw input AND `/think`), `Stop` after each assistant response, `PostToolUse` when a `/fake-tool` block is closed by `/fake-tool-result` (with the captured `tool_input`, the supplied `tool_response`, and measured `duration_ms`), and `SessionEnd` on shutdown. `/restart [reason]` fires `SessionEnd` then `SessionStart` back-to-back with the same matcher value (`clear` or `compact`), simulating a Claude `/clear` or `/compact` reset on the wire.
 
 ## MCP
 
-When `--mcp-config` lists servers, testagent (via `mark3labs/mcp-go`) performs the standard handshake (`initialize` → `notifications/initialized` → `tools/list`) at startup, exposes the tool list to the slash-command grammar, and dispatches `tools/call` when `/mcp <server>.<tool>` is invoked.
+When `--mcp-config` lists servers, testagent (via `mark3labs/mcp-go`) performs the standard handshake (`initialize` → `notifications/initialized` → `tools/list`) at startup, exposes the tool list to the slash-command grammar, and dispatches `tools/call` when `/mcp-call <server>.<tool>` is invoked.
 
 ## Non-interactive (`--print`)
 

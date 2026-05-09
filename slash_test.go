@@ -59,10 +59,10 @@ func TestSlash_Think(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name, line   string
-		wantPrompt   string
-		wantDur      time.Duration
-		wantHasDur   bool
+		name, line string
+		wantPrompt string
+		wantDur    time.Duration
+		wantHasDur bool
 	}{
 		{name: "text only", line: "/think pondering deeply", wantPrompt: "pondering deeply"},
 		{name: "duration + text", line: "/think 5s working", wantPrompt: "working", wantDur: 5 * time.Second, wantHasDur: true},
@@ -102,10 +102,10 @@ func TestParseThinkArgs(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		in           string
-		wantDur      time.Duration
-		wantHasExpl  bool
-		wantMsg      string
+		in          string
+		wantDur     time.Duration
+		wantHasExpl bool
+		wantMsg     string
 	}{
 		{in: "5s working on it", wantDur: 5 * time.Second, wantHasExpl: true, wantMsg: "working on it"},
 		{in: "200ms quick", wantDur: 200 * time.Millisecond, wantHasExpl: true, wantMsg: "quick"},
@@ -140,12 +140,14 @@ func TestSlash_Help_Format(t *testing.T) {
 	body := out.String()
 
 	wantPhrases := []string{
-		"/think [<duration>]",     // duration-aware /think advertised
-		"/fake-tool ",             // renamed from /tool
-		"/fake-tool-result ",      // renamed from /result
-		"connected MCP tool",      // /mcp's distinguishing phrasing
-		"exits testagent",         // verb-led /exit description
-		"prints this list",        // verb-led /help description
+		"/think [<duration>]",      // duration-aware /think advertised
+		"/fake-tool ",              // renamed from /tool
+		"/fake-tool-result ",       // renamed from /result
+		"/mcp-call ",               // renamed from /mcp to avoid collision with real Claude's /mcp
+		"/restart [clear|compact]", // /restart command shape
+		"connected MCP tool",       // /mcp-call's distinguishing phrasing
+		"exits testagent",          // verb-led /exit description
+		"prints this list",         // verb-led /help description
 	}
 	for _, p := range wantPhrases {
 		if !strings.Contains(body, p) {
@@ -400,6 +402,37 @@ func TestSlash_Exit(t *testing.T) {
 	withCode := h.Dispatch(context.Background(), "/exit 7")
 	if !withCode.Exit || withCode.ExitCode != 7 {
 		t.Errorf("/exit 7 got Exit=%v Code=%d, want true/7", withCode.Exit, withCode.ExitCode)
+	}
+}
+
+func TestSlash_Restart(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		line       string
+		wantReason string
+	}{
+		{name: "default reason", line: "/restart", wantReason: "clear"},
+		{name: "explicit clear", line: "/restart clear", wantReason: "clear"},
+		{name: "explicit compact", line: "/restart compact", wantReason: "compact"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := &bytes.Buffer{}
+			h := newTestSlashHandler(out)
+			oc := h.Dispatch(context.Background(), tc.line)
+			if !oc.Handled || !oc.Restart {
+				t.Fatalf("got Handled=%v Restart=%v, want both true", oc.Handled, oc.Restart)
+			}
+			if oc.RestartReason != tc.wantReason {
+				t.Errorf("RestartReason = %q, want %q", oc.RestartReason, tc.wantReason)
+			}
+			if oc.Exit {
+				t.Errorf("Exit = true, want false (/restart should not exit)")
+			}
+		})
 	}
 }
 

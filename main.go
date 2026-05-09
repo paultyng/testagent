@@ -276,6 +276,17 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 		fmt.Printf("\033[2m[mcp connected: %d tools]\033[0m\n", len(tools))
 	}
 
+	// SessionStart fires after MCP is up so orchestrators see a complete boot
+	// state. source mirrors Claude Code's vocabulary: "resume" iff the caller
+	// passed --resume, "startup" otherwise.
+	startSource := "startup"
+	if opts.resumed {
+		startSource = "resume"
+	}
+	if err := opts.hooks.OnSessionStart(ctx, startSource); err != nil {
+		fmt.Fprintf(os.Stderr, "testagent: hook OnSessionStart: %v\n", err)
+	}
+
 	fmt.Printf("\033[32m>\033[0m ")
 
 	// Auto-exit after a duration (for headless tests where no input is sent).
@@ -338,8 +349,22 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 				shutdown(outcome.Reason)
 				os.Exit(outcome.ExitCode)
 			}
+			if outcome.Restart {
+				// Simulate a Claude /clear or /compact reset on the wire:
+				// SessionEnd then SessionStart with the same matcher value.
+				// The process keeps running — no scrollback wipe (that's a
+				// future UI feature; this PR is hook-shape only).
+				if err := opts.hooks.OnSessionEnd(ctx, outcome.RestartReason); err != nil {
+					fmt.Fprintf(os.Stderr, "testagent: hook OnSessionEnd: %v\n", err)
+				}
+				if err := opts.hooks.OnSessionStart(ctx, outcome.RestartReason); err != nil {
+					fmt.Fprintf(os.Stderr, "testagent: hook OnSessionStart: %v\n", err)
+				}
+				fmt.Printf("\033[32m>\033[0m ")
+				continue
+			}
 			if outcome.Prompt == "" && !outcome.HasThinkDuration {
-				// Pure slash side-effect (panel, fake-tool, mcp, etc.).
+				// Pure slash side-effect (panel, fake-tool, mcp-call, etc.).
 				fmt.Printf("\033[32m>\033[0m ")
 				continue
 			}

@@ -295,4 +295,3 @@ func TestModel_CtrlCQuits(t *testing.T) {
 		t.Errorf("quitReason = %q, want %q", m.quitReason, "other")
 	}
 }
-

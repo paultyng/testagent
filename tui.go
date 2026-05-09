@@ -93,8 +93,8 @@ type cancelMsg struct{}
 
 // styles
 var (
-	tuiStylePrompt = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	tuiStyleEcho   = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
+	tuiStylePrompt  = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	tuiStyleEcho    = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
 	tuiStyleDim     = lipgloss.NewStyle().Faint(true)
 	tuiStyleSpin    = lipgloss.NewStyle().Faint(true)
 	tuiStyleThought = lipgloss.NewStyle().Faint(true).Italic(true)
@@ -140,14 +140,20 @@ func banner(opts tuiOptions) string {
 }
 
 // Init seeds the initial command batch: spinner ticks (so it animates when
-// thinking starts), textinput cursor blink, MCP connect, and optional
-// auto-exit timer. The banner and status line are appended to history here
-// so they appear once on first render.
+// thinking starts), textinput cursor blink, MCP connect, SessionStart hook
+// (paired with the existing SessionEnd at shutdown), and optional auto-exit
+// timer. The banner and status line are appended to history here so they
+// appear once on first render.
 func (m model) Init() tea.Cmd {
+	startSource := "startup"
+	if m.opts.resumed {
+		startSource = "resume"
+	}
 	cmds := []tea.Cmd{
 		textinput.Blink,
 		m.spin.Tick,
 		cmdMCPConnect(m.opts.mcp),
+		cmdHookSessionStart(m.opts.hooks, startSource),
 	}
 	if m.opts.autoExit > 0 {
 		cmds = append(cmds, cmdAutoExit(m.opts.autoExit))
@@ -253,6 +259,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitReason = msg.outcome.Reason
 			m.quitCode = msg.outcome.ExitCode
 			return m, tea.Quit
+		}
+		if msg.outcome.Restart {
+			// Simulate /clear- or /compact-style reset on the wire only:
+			// SessionEnd then SessionStart with the same matcher value.
+			// History/scrollback is not cleared in this PR — that's a
+			// future UI primitive.
+			cmds = append(cmds,
+				cmdHookSessionEnd(m.opts.hooks, msg.outcome.RestartReason),
+				cmdHookSessionStart(m.opts.hooks, msg.outcome.RestartReason),
+			)
+			break
 		}
 		// /think — run the message through the regular prompt path so hooks
 		// fire and the thinking animation runs. Outcome carries the optional
@@ -394,6 +411,22 @@ func cmdHookPrompt(hooks *HookSender, prompt, name string) tea.Cmd {
 func cmdHookStop(hooks *HookSender, last string, stopHookActive bool) tea.Cmd {
 	return func() tea.Msg {
 		return hookErrMsg{stage: "OnStop", err: hooks.OnStop(context.Background(), last, stopHookActive)}
+	}
+}
+
+// cmdHookSessionStart fires SessionStart on a goroutine.
+func cmdHookSessionStart(hooks *HookSender, source string) tea.Cmd {
+	return func() tea.Msg {
+		return hookErrMsg{stage: "OnSessionStart", err: hooks.OnSessionStart(context.Background(), source)}
+	}
+}
+
+// cmdHookSessionEnd fires SessionEnd on a goroutine. Used by /restart, which
+// re-fires SessionStart immediately after; the shutdown path in main.go calls
+// OnSessionEnd directly because the program is exiting.
+func cmdHookSessionEnd(hooks *HookSender, reason string) tea.Cmd {
+	return func() tea.Msg {
+		return hookErrMsg{stage: "OnSessionEnd", err: hooks.OnSessionEnd(context.Background(), reason)}
 	}
 }
 

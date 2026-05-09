@@ -144,6 +144,7 @@ func TestE2E_SlashFlow(t *testing.T) {
 			"UserPromptSubmit": []map[string]any{{"hooks": []map[string]any{{"type": "http", "url": hookSrv.URL + "/hooks/prompt", "timeout": 5}}}},
 			"PostToolUse":      []map[string]any{{"hooks": []map[string]any{{"type": "http", "url": hookSrv.URL + "/hooks/tool-use", "timeout": 5}}}},
 			"Stop":             []map[string]any{{"hooks": []map[string]any{{"type": "http", "url": hookSrv.URL + "/hooks/stop", "timeout": 5}}}},
+			"SessionStart":     []map[string]any{{"hooks": []map[string]any{{"type": "http", "url": hookSrv.URL + "/hooks/start", "timeout": 5}}}},
 			"SessionEnd":       []map[string]any{{"hooks": []map[string]any{{"type": "http", "url": hookSrv.URL + "/hooks/end", "timeout": 5}}}},
 		},
 	})
@@ -154,12 +155,13 @@ func TestE2E_SlashFlow(t *testing.T) {
 	})
 
 	stdinScript := strings.Join([]string{
-		`hi there`, // regular echo input → fires UserPromptSubmit + Stop
+		`hi there`,                 // regular echo input → fires UserPromptSubmit + Stop
 		`/think 1ms quick thought`, // /think 1ms hello — fires UserPromptSubmit + Stop via prompt-passthrough
 		`/panel notable thing`,
 		`/fake-tool read_file {"path":"foo.go"}`,
 		`/fake-tool-result {"contents":"package foo"}`,
-		`/mcp fake.ping {}`,
+		`/mcp-call fake.ping {}`,
+		`/restart compact`, // fires SessionEnd{compact} + SessionStart{compact}
 		`/exit`,
 	}, "\n") + "\n"
 
@@ -234,10 +236,30 @@ func TestE2E_SlashFlow(t *testing.T) {
 	if got := hr.get("/hooks/stop"); len(got) != 2 {
 		t.Errorf("Stop count = %d, want 2 (raw input + /think)", len(got))
 	}
-	if got := hr.get("/hooks/end"); len(got) != 1 {
-		t.Errorf("SessionEnd count = %d, want 1", len(got))
-	} else if got[0]["reason"] != "logout" {
-		t.Errorf("SessionEnd reason = %v, want logout", got[0]["reason"])
+
+	// SessionStart fires on boot (source=startup, since --resume was not set)
+	// and once more on /restart (source=compact).
+	if got := hr.get("/hooks/start"); len(got) != 2 {
+		t.Errorf("SessionStart count = %d, want 2 (boot + /restart)", len(got))
+	} else {
+		if got[0]["source"] != "startup" {
+			t.Errorf("first SessionStart source = %v, want startup", got[0]["source"])
+		}
+		if got[1]["source"] != "compact" {
+			t.Errorf("second SessionStart source = %v, want compact", got[1]["source"])
+		}
+	}
+
+	// SessionEnd fires on /restart (reason=compact) and on /exit (reason=logout).
+	if got := hr.get("/hooks/end"); len(got) != 2 {
+		t.Errorf("SessionEnd count = %d, want 2 (/restart + /exit)", len(got))
+	} else {
+		if got[0]["reason"] != "compact" {
+			t.Errorf("first SessionEnd reason = %v, want compact", got[0]["reason"])
+		}
+		if got[1]["reason"] != "logout" {
+			t.Errorf("second SessionEnd reason = %v, want logout", got[1]["reason"])
+		}
 	}
 }
 

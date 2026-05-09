@@ -233,6 +233,35 @@ func TestHookSender_OnStop_Payload(t *testing.T) {
 	}
 }
 
+func TestHookSender_OnSessionStart_Payload(t *testing.T) {
+	t.Parallel()
+	srv, recs, mu := captureServer(t)
+	settings := settingsWithHooks(hookEventSessionStart, nil, srv.URL+"/hooks/start")
+	sender := newTestSender(t, settings)
+
+	if err := sender.OnSessionStart(context.Background(), "startup"); err != nil {
+		t.Fatalf("OnSessionStart: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(*recs) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(*recs))
+	}
+	rec := (*recs)[0]
+	wantFields := map[string]any{
+		"cwd":             "/tmp/cwd",
+		"hook_event_name": "SessionStart",
+		"source":          "startup",
+		"session_id":      "session-xyz",
+		"transcript_path": "/tmp/transcript.jsonl",
+	}
+	for k, want := range wantFields {
+		if got := rec.body[k]; got != want {
+			t.Errorf("body[%s] = %v, want %v", k, got, want)
+		}
+	}
+}
+
 func TestHookSender_OnSessionEnd_Payload(t *testing.T) {
 	t.Parallel()
 	srv, recs, mu := captureServer(t)
