@@ -84,8 +84,12 @@ type hookErrMsg struct {
 // and the boot SessionStart. Both run in the same goroutine (cmdBoot) so
 // SessionStart fires synchronously after mcp.Connect returns — that way
 // SessionStart lands on the wire even if the user quits before this message
-// is delivered to Update, and cannot race with user input that produces its
-// own hooks.
+// is delivered to Update. Note: this serializes Connect→SessionStart within
+// the boot goroutine but does NOT serialize against user-driven hook cmds
+// (e.g. /restart) running on their own goroutines; in practice mcp.Connect
+// is fast enough that no realistic user input beats it, but a paranoid
+// orchestrator should not depend on strict ordering between boot
+// SessionStart and the very first user-submitted hook.
 type mcpConnectMsg struct {
 	err      error
 	tools    int
@@ -152,7 +156,8 @@ func banner(opts tuiOptions) string {
 // timer. The banner and status line are appended to history here so they
 // appear once on first render. Coupling MCP connect and SessionStart in one
 // cmd means SessionStart fires regardless of whether the model is still
-// alive to process the resulting message, and cannot race with user input.
+// alive to process the resulting message — see the note on mcpConnectMsg
+// for the serialization caveat against concurrent user-driven hook cmds.
 func (m model) Init() tea.Cmd {
 	startSource := "startup"
 	if m.opts.resumed {

@@ -37,10 +37,16 @@ type printOptions struct {
 
 // runPrint executes one non-interactive turn and returns the exit code.
 //
-// Lifecycle: read prompt → fire UserPromptSubmit hook → produce echo → emit
-// per --output-format → fire Stop + SessionEnd → close MCP. Hook errors are
-// logged to stderr and do not affect the exit code.
+// Lifecycle: SessionStart → read prompt → fire UserPromptSubmit hook →
+// produce echo → emit per --output-format → fire Stop + SessionEnd →
+// close MCP. Hook errors are logged to stderr and do not affect the exit
+// code. SessionStart is paired with SessionEnd so orchestrators see a
+// complete lifecycle even on one-shot invocations.
 func runPrint(ctx context.Context, opt printOptions, stdin io.Reader, stdout io.Writer) int {
+	if err := opt.hooks.OnSessionStart(ctx, "startup"); err != nil {
+		fmt.Fprintf(os.Stderr, "testagent: hook OnSessionStart: %v\n", err)
+	}
+
 	prompt := strings.TrimSpace(strings.Join(opt.positional, " "))
 	if prompt == "" {
 		b, err := io.ReadAll(stdin)
