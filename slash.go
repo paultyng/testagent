@@ -254,7 +254,7 @@ func (h *SlashHandler) cmdFakeTool(ctx context.Context, out io.Writer, rest stri
 	args := parseJSONOr(jsonArgs, map[string]any{})
 	prettyArgs, _ := json.Marshal(args)
 	fmt.Fprintf(out, "%s %s\n",
-		accentTool.Render("▶ "+name),
+		renderToolHeader("▶ ", name),
 		mute.Render(string(prettyArgs)))
 
 	// Flush any prior pending /fake-tool that never got a /fake-tool-result.
@@ -276,7 +276,7 @@ func (h *SlashHandler) cmdFakeTool(ctx context.Context, out io.Writer, rest stri
 // raw string. With no pending /fake-tool, only renders (no synthetic hook —
 // inventing a tool_use_id and tool_name would produce dishonest fixtures).
 func (h *SlashHandler) cmdFakeToolResult(ctx context.Context, out io.Writer, rest string) {
-	mark := accentOk.Render("✓")
+	mark := renderResultOk()
 	var response any
 	switch {
 	case rest == "":
@@ -345,15 +345,15 @@ func (h *SlashHandler) cmdMCP(ctx context.Context, out io.Writer, rest string) {
 	args := parseJSONOr(jsonArgs, map[string]any{})
 
 	fmt.Fprintf(out, "%s %s\n",
-		accentTool.Render("▶ mcp:"+qualified),
+		renderToolHeader("▶ mcp:", qualified),
 		mute.Render(jsonArgs))
 
 	res, err := h.mcp.Call(ctx, qualified, args)
 	if err != nil {
-		fmt.Fprintf(out, "%s %v\n", accentErr.Render("✗ mcp error:"), err)
+		fmt.Fprintf(out, "%s %s %v\n", renderResultErr(), accentErr.Render("mcp error:"), err)
 		return
 	}
-	mark := accentOk.Render("✓")
+	mark := renderResultOk()
 	for _, c := range res.Content {
 		if c.Type == "text" {
 			fmt.Fprintf(out, "%s %s\n", mark, c.Text)

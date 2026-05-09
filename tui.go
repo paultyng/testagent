@@ -286,7 +286,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case hookErrMsg:
 		if msg.err != nil {
-			m.appendHistoryCapped(mute.Render(fmt.Sprintf("[hook %s error: %v]", msg.stage, msg.err)))
+			// Hook errors get the LifecycleWarn token (yellow) so they don't
+			// vanish into the mute lifecycle-note stream.
+			m.appendHistoryCapped(renderLifecycleWarn(fmt.Sprintf("hook %s error: %v", msg.stage, msg.err)))
 		}
 
 	case mcpConnectMsg:
