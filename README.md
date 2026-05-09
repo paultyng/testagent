@@ -4,7 +4,7 @@
 
 A fake CLI agent for testing orchestration tooling that wraps real coding agents (Claude Code, Codex, Gemini, GitHub Copilot CLI, etc.). It runs as an interactive PTY process and emits the same kinds of terminal artifacts and protocol traffic as a real agent — without calling any LLM.
 
-The point isn't "no LLM" as a virtue — wiring a local LLM into your test harness is a perfectly valid choice for some workflows. testagent is explicitly *not* that. Its value is **deterministic, scripted output**: the same `/tool`, `/result`, hook fires, and MCP traffic on every run, so test assertions stay stable.
+The point isn't "no LLM" as a virtue — wiring a local LLM into your test harness is a perfectly valid choice for some workflows. testagent is explicitly *not* that. Its value is **deterministic, scripted output**: the same `/fake-tool`, `/fake-tool-result`, hook fires, and MCP traffic on every run, so test assertions stay stable.
 
 Use it when you're building something that *drives* a coding agent (a TUI wrapper, a session manager, a multi-agent orchestrator) and you need a deterministic, network-free fake to exercise the integration.
 
@@ -33,12 +33,12 @@ Argv-compatible with Claude Code's flag surface:
 In interactive mode, lines starting with `/` are slash commands that synthesize specific UI primitives. Type `/help` for the list:
 
 - `/exit [code]`
+- `/fake-tool <name> <json-args>`
+- `/fake-tool-result <json-or-text>`
 - `/mcp <server.tool> <json-args>`
 - `/panel <text>`
-- `/result <json-or-text>`
 - `/stream <text>`
 - `/think [<duration>] <text>`
-- `/tool <name> <json-args>`
 
 Anything else is echoed back, just like the original PTY-echo behavior.
 
@@ -55,7 +55,7 @@ When stdin is **not** a TTY (piped input, `--print`), testagent falls back to a 
 
 ## Hooks
 
-When `--settings` declares hook URLs, testagent POSTs Claude-Code-shaped event bodies on the appropriate lifecycle moments: `UserPromptSubmit` per user input, `Stop` after each assistant response, `PostToolUse` when a `/tool` block is closed by `/result` (with the captured `tool_input`, the supplied `tool_response`, and measured `duration_ms`), `SessionEnd` on shutdown.
+When `--settings` declares hook URLs, testagent POSTs Claude-Code-shaped event bodies on the appropriate lifecycle moments: `UserPromptSubmit` per user input (raw input AND `/think`), `Stop` after each assistant response, `PostToolUse` when a `/fake-tool` block is closed by `/fake-tool-result` (with the captured `tool_input`, the supplied `tool_response`, and measured `duration_ms`), `SessionEnd` on shutdown.
 
 ## MCP
 

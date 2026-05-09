@@ -51,37 +51,48 @@ func TestSlash_Stream(t *testing.T) {
 	}
 }
 
+// TestSlash_Think asserts cmdThink populates SlashOutcome.Prompt and
+// ThinkDuration correctly. The actual hook firing + animation is the
+// caller's responsibility (main.go scanner loop, tui.go Update) and is
+// covered by TestE2E_*.
 func TestSlash_Think(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name, line, wantInOut string
-		wantNoOutput          bool
-		// We don't assert on sleep timing here — that's covered by
-		// TestParseThinkArgs against the parser. cmdThink only sleeps
-		// for short, parsed durations in tests, and the dispatcher is
-		// synchronous so a well-behaved test won't see flakes.
+		name, line   string
+		wantPrompt   string
+		wantDur      time.Duration
+		wantHasDur   bool
 	}{
-		{name: "text only", line: "/think pondering deeply", wantInOut: "pondering deeply"},
-		{name: "duration + text", line: "/think 1ms working", wantInOut: "working"},
-		{name: "non-duration first token", line: "/think 5seconds working", wantInOut: "5seconds working"},
-		{name: "duration only (sleeps; no message)", line: "/think 1ms", wantNoOutput: true},
-		{name: "empty", line: "/think", wantNoOutput: true},
+		{name: "text only", line: "/think pondering deeply", wantPrompt: "pondering deeply"},
+		{name: "duration + text", line: "/think 5s working", wantPrompt: "working", wantDur: 5 * time.Second, wantHasDur: true},
+		{name: "non-duration first token", line: "/think 5seconds working", wantPrompt: "5seconds working"},
+		{name: "duration only (no message)", line: "/think 1h", wantDur: time.Hour, wantHasDur: true},
+		{name: "explicit zero — instant echo", line: "/think 0 done", wantPrompt: "done", wantDur: 0, wantHasDur: true},
+		{name: "bare /think — bare prompt with default duration", line: "/think"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			out := &bytes.Buffer{}
 			h := newTestSlashHandler(out)
-			h.Dispatch(context.Background(), tc.line)
-			if tc.wantNoOutput {
-				if out.Len() != 0 {
-					t.Errorf("expected empty output, got %q", out.String())
-				}
-				return
+			outcome := h.Dispatch(context.Background(), tc.line)
+
+			if !outcome.Handled {
+				t.Errorf("Handled = false, want true")
 			}
-			if !strings.Contains(out.String(), tc.wantInOut) {
-				t.Errorf("output %q missing %q", out.String(), tc.wantInOut)
+			if outcome.Prompt != tc.wantPrompt {
+				t.Errorf("Prompt = %q, want %q", outcome.Prompt, tc.wantPrompt)
+			}
+			if outcome.ThinkDuration != tc.wantDur {
+				t.Errorf("ThinkDuration = %v, want %v", outcome.ThinkDuration, tc.wantDur)
+			}
+			if outcome.HasThinkDuration != tc.wantHasDur {
+				t.Errorf("HasThinkDuration = %v, want %v", outcome.HasThinkDuration, tc.wantHasDur)
+			}
+			// cmdThink doesn't render directly — the caller does.
+			if out.Len() != 0 {
+				t.Errorf("cmdThink wrote to out (should be caller's responsibility): %q", out.String())
 			}
 		})
 	}
@@ -91,27 +102,30 @@ func TestParseThinkArgs(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		in       string
-		wantDur  time.Duration
-		wantMsg  string
+		in           string
+		wantDur      time.Duration
+		wantHasExpl  bool
+		wantMsg      string
 	}{
-		{in: "5s working on it", wantDur: 5 * time.Second, wantMsg: "working on it"},
-		{in: "200ms quick", wantDur: 200 * time.Millisecond, wantMsg: "quick"},
-		{in: "working on it", wantDur: 0, wantMsg: "working on it"},
-		{in: "5seconds working", wantDur: 0, wantMsg: "5seconds working"},
-		{in: "5s", wantDur: 5 * time.Second, wantMsg: ""},
-		{in: "", wantDur: 0, wantMsg: ""},
-		{in: "1h", wantDur: time.Hour, wantMsg: ""},
-		{in: "-5s clamped", wantDur: 0, wantMsg: "clamped"}, // negative clamped to 0, still consumes token
-		{in: "  10ms  padded", wantDur: 10 * time.Millisecond, wantMsg: "padded"},
+		{in: "5s working on it", wantDur: 5 * time.Second, wantHasExpl: true, wantMsg: "working on it"},
+		{in: "200ms quick", wantDur: 200 * time.Millisecond, wantHasExpl: true, wantMsg: "quick"},
+		{in: "working on it", wantDur: 0, wantHasExpl: false, wantMsg: "working on it"},
+		{in: "5seconds working", wantDur: 0, wantHasExpl: false, wantMsg: "5seconds working"},
+		{in: "5s", wantDur: 5 * time.Second, wantHasExpl: true, wantMsg: ""},
+		{in: "", wantDur: 0, wantHasExpl: false, wantMsg: ""},
+		{in: "1h", wantDur: time.Hour, wantHasExpl: true, wantMsg: ""},
+		{in: "0 done", wantDur: 0, wantHasExpl: true, wantMsg: "done"}, // explicit zero — caller treats as "instant"
+		{in: "-5s clamped", wantDur: 0, wantHasExpl: true, wantMsg: "clamped"},
+		{in: "  10ms  padded", wantDur: 10 * time.Millisecond, wantHasExpl: true, wantMsg: "padded"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
 			t.Parallel()
-			d, m := parseThinkArgs(tc.in)
-			if d != tc.wantDur || m != tc.wantMsg {
-				t.Errorf("parseThinkArgs(%q) = (%v, %q), want (%v, %q)",
-					tc.in, d, m, tc.wantDur, tc.wantMsg)
+			req := parseThinkArgs(tc.in)
+			if req.Duration != tc.wantDur || req.HasExplicit != tc.wantHasExpl || req.Message != tc.wantMsg {
+				t.Errorf("parseThinkArgs(%q) = {%v, %v, %q}, want {%v, %v, %q}",
+					tc.in, req.Duration, req.HasExplicit, req.Message,
+					tc.wantDur, tc.wantHasExpl, tc.wantMsg)
 			}
 		})
 	}
@@ -126,11 +140,12 @@ func TestSlash_Help_Format(t *testing.T) {
 	body := out.String()
 
 	wantPhrases := []string{
-		"/think [<duration>]",          // duration-aware /think advertised
-		"synthetic tool-use block",      // /tool's distinguishing phrasing
-		"connected MCP tool",            // /mcp's distinguishing phrasing
-		"exits testagent",               // verb-led /exit description
-		"prints this list",              // verb-led /help description
+		"/think [<duration>]",     // duration-aware /think advertised
+		"/fake-tool ",             // renamed from /tool
+		"/fake-tool-result ",      // renamed from /result
+		"connected MCP tool",      // /mcp's distinguishing phrasing
+		"exits testagent",         // verb-led /exit description
+		"prints this list",        // verb-led /help description
 	}
 	for _, p := range wantPhrases {
 		if !strings.Contains(body, p) {
@@ -159,7 +174,7 @@ func TestSlash_Panel(t *testing.T) {
 	}
 }
 
-func TestSlash_ToolAlone_NoHookYet(t *testing.T) {
+func TestSlash_FakeToolAlone_NoHookYet(t *testing.T) {
 	t.Parallel()
 
 	var hits int32
@@ -177,17 +192,17 @@ func TestSlash_ToolAlone_NoHookYet(t *testing.T) {
 		},
 	}, "sid-test", "/tmp", "", "default", nil)
 
-	h.Dispatch(context.Background(), `/tool read_file {"path":"foo.go"}`)
+	h.Dispatch(context.Background(), `/fake-tool read_file {"path":"foo.go"}`)
 
 	if !strings.Contains(out.String(), "read_file") {
 		t.Errorf("output missing tool name: %q", out.String())
 	}
 	if got := atomic.LoadInt32(&hits); got != 0 {
-		t.Errorf("/tool alone fired %d hook(s); want 0 (paired with /result)", got)
+		t.Errorf("/fake-tool alone fired %d hook(s); want 0 (paired with /fake-tool-result)", got)
 	}
 }
 
-func TestSlash_ToolResultPair(t *testing.T) {
+func TestSlash_FakeToolResultPair(t *testing.T) {
 	t.Parallel()
 
 	var (
@@ -212,9 +227,9 @@ func TestSlash_ToolResultPair(t *testing.T) {
 		},
 	}, "sid-test", "/tmp", "", "default", nil)
 
-	h.Dispatch(context.Background(), `/tool read_file {"path":"foo.go"}`)
+	h.Dispatch(context.Background(), `/fake-tool read_file {"path":"foo.go"}`)
 	time.Sleep(2 * time.Millisecond) // ensure non-zero duration_ms
-	h.Dispatch(context.Background(), `/result {"contents":"package foo"}`)
+	h.Dispatch(context.Background(), `/fake-tool-result {"contents":"package foo"}`)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -239,7 +254,7 @@ func TestSlash_ToolResultPair(t *testing.T) {
 	}
 }
 
-func TestSlash_OrphanResult(t *testing.T) {
+func TestSlash_OrphanFakeToolResult(t *testing.T) {
 	t.Parallel()
 
 	var hits int32
@@ -257,13 +272,13 @@ func TestSlash_OrphanResult(t *testing.T) {
 		},
 	}, "sid-test", "/tmp", "", "default", nil)
 
-	h.Dispatch(context.Background(), `/result {"orphan":true}`)
+	h.Dispatch(context.Background(), `/fake-tool-result {"orphan":true}`)
 
 	if !strings.Contains(out.String(), "orphan") {
 		t.Errorf("output missing result body: %q", out.String())
 	}
 	if got := atomic.LoadInt32(&hits); got != 0 {
-		t.Errorf("orphan /result fired %d hook(s); want 0", got)
+		t.Errorf("orphan /fake-tool-result fired %d hook(s); want 0", got)
 	}
 }
 
@@ -292,7 +307,7 @@ func TestSlash_FlushPendingTool(t *testing.T) {
 		},
 	}, "sid-test", "/tmp", "", "default", nil)
 
-	h.Dispatch(context.Background(), `/tool dangling {}`)
+	h.Dispatch(context.Background(), `/fake-tool dangling {}`)
 	h.FlushPendingTool(context.Background())
 
 	mu.Lock()
@@ -333,9 +348,9 @@ func TestSlash_SecondToolReplacesPending(t *testing.T) {
 		},
 	}, "sid-test", "/tmp", "", "default", nil)
 
-	h.Dispatch(context.Background(), `/tool first {}`)
-	h.Dispatch(context.Background(), `/tool second {}`)
-	h.Dispatch(context.Background(), `/result {"ok":true}`)
+	h.Dispatch(context.Background(), `/fake-tool first {}`)
+	h.Dispatch(context.Background(), `/fake-tool second {}`)
+	h.Dispatch(context.Background(), `/fake-tool-result {"ok":true}`)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -361,7 +376,7 @@ func TestSlash_Result(t *testing.T) {
 
 	out := &bytes.Buffer{}
 	h := newTestSlashHandler(out)
-	h.Dispatch(context.Background(), `/result {"ok":true}`)
+	h.Dispatch(context.Background(), `/fake-tool-result {"ok":true}`)
 	s := out.String()
 	if !strings.Contains(s, "ok") {
 		t.Errorf("result missing field: %q", s)

@@ -64,14 +64,14 @@ type SlashHandler struct {
 
 	// pendingToolMu guards pendingTool. Slash dispatches can run concurrently
 	// in TUI mode (cmdSlashDispatch is a tea.Cmd goroutine), so the
-	// /tool→/result pairing state needs synchronization.
+	// /fake-tool→/fake-tool-result pairing state needs synchronization.
 	pendingToolMu sync.Mutex
 	pendingTool   *pendingToolCall
 }
 
-// pendingToolCall tracks a /tool that hasn't been completed by /result yet.
-// /result fires the PostToolUse hook with the captured tool_input plus the
-// supplied tool_response and the measured duration. /tool followed by /tool
+// pendingToolCall tracks a /fake-tool that has not been completed by /fake-tool-result yet.
+// /fake-tool-result fires the PostToolUse hook with the captured tool_input plus the
+// supplied tool_response and the measured duration. /fake-tool followed by /fake-tool
 // flushes the prior with empty response; shutdown flushes whatever's left.
 type pendingToolCall struct {
 	toolUseID string
@@ -86,6 +86,20 @@ type SlashOutcome struct {
 	Exit     bool // session should end (only set by /exit)
 	ExitCode int  // exit status when Exit is true
 	Reason   string
+
+	// Prompt, when non-empty, signals the caller to run this slash command
+	// through the regular prompt-handling path (UserPromptSubmit hook →
+	// thinking animation → echo → Stop hook). Set by /think after parsing
+	// the optional leading duration. Without this signal, /think and raw
+	// input would diverge — they're meant to be functionally identical.
+	Prompt string
+
+	// ThinkDuration overrides the caller's default --delay for this turn.
+	// Zero means "use the caller's default." HasThinkDuration distinguishes
+	// "no duration parsed, use default" from "explicit /think 0 done"
+	// (immediate echo, zero-thinking).
+	ThinkDuration    time.Duration
+	HasThinkDuration bool
 }
 
 // DispatchString is the TUI-friendly entry point. It captures all rendered
@@ -121,13 +135,13 @@ func (h *SlashHandler) dispatchTo(ctx context.Context, line string, out io.Write
 	case "stream":
 		h.cmdStream(out, rest)
 	case "think":
-		h.cmdThink(out, rest)
+		return h.cmdThink(rest)
 	case "panel":
 		h.cmdPanel(out, rest)
-	case "tool":
-		h.cmdTool(ctx, out, rest)
-	case "result":
-		h.cmdResult(ctx, out, rest)
+	case "fake-tool":
+		h.cmdFakeTool(ctx, out, rest)
+	case "fake-tool-result":
+		h.cmdFakeToolResult(ctx, out, rest)
 	case "mcp":
 		h.cmdMCP(ctx, out, rest)
 	case "exit":
@@ -152,13 +166,13 @@ func (h *SlashHandler) cmdHelp(out io.Writer) {
 		usage, doc string
 	}{
 		{"/exit [code]", "exits testagent (default code 0)"},
+		{`/fake-tool <name> <json-args>`, "prints a fake tool-use block; pair with /fake-tool-result to fire PostToolUse"},
+		{`/fake-tool-result <json-or-text>`, "completes the pending /fake-tool and fires PostToolUse with the response"},
 		{"/help", "prints this list"},
 		{`/mcp <server.tool> <json-args>`, "calls a connected MCP tool and prints its result"},
 		{"/panel <text>", "prints text in a rounded-border box"},
-		{`/result <json-or-text>`, "completes the pending /tool and fires PostToolUse with the response"},
 		{"/stream <text>", "prints text token-by-token at the configured pacing"},
-		{`/think [<duration>] <text>`, "prints a dim italic thought; if duration parses, sleeps that long after"},
-		{`/tool <name> <json-args>`, "prints a synthetic tool-use block; pair with /result to fire PostToolUse"},
+		{`/think [<duration>] <text>`, "prompts as if typed raw; the optional duration overrides the default thinking time (3s)"},
 	} {
 		fmt.Fprintf(out, "  %-40s %s\n",
 			styleToolArgs.Render(line.usage),
@@ -186,41 +200,57 @@ func (h *SlashHandler) cmdStream(out io.Writer, text string) {
 	fmt.Fprintln(out)
 }
 
-// /think [<duration>] <text> — dim italic "thinking" trace. If the first
-// whitespace-delimited token parses via time.ParseDuration, it's consumed
-// as a sleep override (the message is rendered first, then the sleep runs)
-// so demos can pin a thought to the screen for a known duration. Negative
-// durations clamp to zero.
-func (h *SlashHandler) cmdThink(out io.Writer, rest string) {
-	d, msg := parseThinkArgs(rest)
-	if msg == "" && d == 0 {
-		return
-	}
-	if msg != "" {
-		fmt.Fprintln(out, styleThink.Render(msg))
-	}
-	if d > 0 {
-		time.Sleep(d)
+// /think [<duration>] <text> — functionally identical to typing <text> as
+// raw input, with the addition of an optional leading time.Duration that
+// overrides the default thinking time for that turn. Returns a SlashOutcome
+// with Prompt and (optionally) ThinkDuration set; the dispatcher routes
+// the message back through the prompt-handling path so hooks fire and the
+// thinking animation runs.
+func (h *SlashHandler) cmdThink(rest string) SlashOutcome {
+	req := parseThinkArgs(rest)
+	return SlashOutcome{
+		Handled:          true,
+		Prompt:           req.Message,
+		ThinkDuration:    req.Duration,
+		HasThinkDuration: req.HasExplicit,
 	}
 }
 
-// parseThinkArgs splits rest into (duration, message). If the first token
-// parses via time.ParseDuration, it's the duration and the remainder is the
-// message. Otherwise duration is zero and rest is the full message.
-// Negative durations are clamped to zero.
-func parseThinkArgs(rest string) (time.Duration, string) {
+// ThinkRequest is the parsed form of /think arguments.
+type ThinkRequest struct {
+	Duration    time.Duration // explicit duration when HasExplicit is true; otherwise 0
+	HasExplicit bool          // true iff the first token parsed via time.ParseDuration
+	Message     string        // the message to prompt with (may be empty)
+}
+
+// parseThinkArgs splits rest into a ThinkRequest. If the first whitespace-
+// delimited token parses via time.ParseDuration, it's the duration (negative
+// values clamp to zero) and the remainder is the message. Otherwise the full
+// rest is the message and HasExplicit is false; callers substitute their
+// default thinking duration.
+//
+// Examples:
+//
+//	"5s working on it" → {5s, true, "working on it"}
+//	"working on it"    → {0, false, "working on it"}      // caller uses default
+//	"5seconds working" → {0, false, "5seconds working"}   // first token rejected
+//	"5s"               → {5s, true, ""}                   // duration only
+//	""                 → {0, false, ""}                   // bare /think
+//	"0 done"           → {0, true, "done"}                // explicit zero (instant)
+//	"-5s clamp"        → {0, true, "clamp"}               // negative clamps
+func parseThinkArgs(rest string) ThinkRequest {
 	rest = strings.TrimSpace(rest)
 	if rest == "" {
-		return 0, ""
+		return ThinkRequest{}
 	}
 	first, tail := splitFirstWord(rest)
 	if d, err := time.ParseDuration(first); err == nil {
 		if d < 0 {
 			d = 0
 		}
-		return d, strings.TrimSpace(tail)
+		return ThinkRequest{Duration: d, HasExplicit: true, Message: strings.TrimSpace(tail)}
 	}
-	return 0, rest
+	return ThinkRequest{Message: rest}
 }
 
 // /panel <text> — rounded-border panel via lipgloss.
@@ -228,14 +258,14 @@ func (h *SlashHandler) cmdPanel(out io.Writer, text string) {
 	fmt.Fprintln(out, stylePanel.Render(text))
 }
 
-// /tool <name> <json-args> — render the tool-use block and record the call
-// as pending. The matching /result completes it and fires PostToolUse with
-// the full payload (input + response + duration). Submitting another /tool
+// /fake-tool <name> <json-args> — render the tool-use block and record the call
+// as pending. The matching /fake-tool-result completes it and fires PostToolUse with
+// the full payload (input + response + duration). Submitting another /fake-tool
 // while one is pending flushes the prior with empty response.
-func (h *SlashHandler) cmdTool(ctx context.Context, out io.Writer, rest string) {
+func (h *SlashHandler) cmdFakeTool(ctx context.Context, out io.Writer, rest string) {
 	name, jsonArgs := splitFirstWord(rest)
 	if name == "" {
-		fmt.Fprintln(os.Stderr, "testagent: /tool requires a tool name")
+		fmt.Fprintln(os.Stderr, "testagent: /fake-tool requires a tool name")
 		return
 	}
 	args := parseJSONOr(jsonArgs, map[string]any{})
@@ -244,9 +274,9 @@ func (h *SlashHandler) cmdTool(ctx context.Context, out io.Writer, rest string) 
 		styleToolHeader.Render("▶ "+name),
 		styleToolArgs.Render(string(prettyArgs)))
 
-	// Flush any prior pending /tool that never got a /result.
+	// Flush any prior pending /fake-tool that never got a /fake-tool-result.
 	if prior := h.takePending(); prior != nil {
-		fmt.Fprintf(os.Stderr, "testagent: /tool replaced pending %q without /result\n", prior.name)
+		fmt.Fprintf(os.Stderr, "testagent: /fake-tool replaced pending %q without /fake-tool-result\n", prior.name)
 		h.firePendingHook(ctx, prior, nil)
 	}
 	h.setPending(&pendingToolCall{
@@ -257,12 +287,12 @@ func (h *SlashHandler) cmdTool(ctx context.Context, out io.Writer, rest string) 
 	})
 }
 
-// /result <json-or-text> — render the matching tool result with a checkmark
-// and fire PostToolUse with the captured /tool input + this response +
+// /fake-tool-result <json-or-text> — render the matching fake-tool result with a checkmark
+// and fire PostToolUse with the captured /fake-tool input + this response +
 // measured duration. JSON results are stored structured; non-JSON as the
-// raw string. With no pending /tool, only renders (no synthetic hook —
+// raw string. With no pending /fake-tool, only renders (no synthetic hook —
 // inventing a tool_use_id and tool_name would produce dishonest fixtures).
-func (h *SlashHandler) cmdResult(ctx context.Context, out io.Writer, rest string) {
+func (h *SlashHandler) cmdFakeToolResult(ctx context.Context, out io.Writer, rest string) {
 	mark := styleResultMark.Render("✓")
 	var response any
 	switch {
@@ -285,12 +315,12 @@ func (h *SlashHandler) cmdResult(ctx context.Context, out io.Writer, rest string
 	}
 }
 
-// FlushPendingTool fires PostToolUse for any in-flight /tool with a nil
+// FlushPendingTool fires PostToolUse for any in-flight /fake-tool with a nil
 // response. Called from shutdown paths (/exit, signal, EOF, auto-exit) so
-// dangling /tool calls don't silently lose their hook event.
+// dangling /fake-tool calls don't silently lose their hook event.
 func (h *SlashHandler) FlushPendingTool(ctx context.Context) {
 	if pending := h.takePending(); pending != nil {
-		fmt.Fprintf(os.Stderr, "testagent: /tool %q flushed on shutdown without /result\n", pending.name)
+		fmt.Fprintf(os.Stderr, "testagent: /fake-tool %q flushed on shutdown without /fake-tool-result\n", pending.name)
 		h.firePendingHook(ctx, pending, nil)
 	}
 }
@@ -309,8 +339,8 @@ func (h *SlashHandler) takePending() *pendingToolCall {
 	return p
 }
 
-// firePendingHook posts PostToolUse for a captured /tool. response is the
-// /result body (parsed JSON or raw string) or nil when flushing a dangling
+// firePendingHook posts PostToolUse for a captured /fake-tool. response is the
+// /fake-tool-result body (parsed JSON or raw string) or nil when flushing a dangling
 // /tool. Errors are logged to stderr and do not abort the session.
 func (h *SlashHandler) firePendingHook(ctx context.Context, p *pendingToolCall, response any) {
 	dur := time.Since(p.startedAt).Milliseconds()

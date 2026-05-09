@@ -155,9 +155,10 @@ func TestE2E_SlashFlow(t *testing.T) {
 
 	stdinScript := strings.Join([]string{
 		`hi there`, // regular echo input → fires UserPromptSubmit + Stop
+		`/think 1ms quick thought`, // /think 1ms hello — fires UserPromptSubmit + Stop via prompt-passthrough
 		`/panel notable thing`,
-		`/tool read_file {"path":"foo.go"}`,
-		`/result {"contents":"package foo"}`,
+		`/fake-tool read_file {"path":"foo.go"}`,
+		`/fake-tool-result {"contents":"package foo"}`,
 		`/mcp fake.ping {}`,
 		`/exit`,
 	}, "\n") + "\n"
@@ -199,13 +200,21 @@ func TestE2E_SlashFlow(t *testing.T) {
 		}
 	}
 
-	// Hook assertions: regular echo fires Prompt + Stop; /tool fires
-	// PostToolUse; /exit fires SessionEnd.
-	if got := hr.get("/hooks/prompt"); len(got) != 1 {
-		t.Errorf("UserPromptSubmit count = %d, want 1", len(got))
+	// Hook assertions:
+	// - "hi there" raw input fires UserPromptSubmit + Stop
+	// - "/think 1ms quick thought" routes through the prompt path → another
+	//   UserPromptSubmit + Stop pair (proves the prompt-passthrough wiring)
+	// - /fake-tool + /fake-tool-result fires PostToolUse
+	// - /exit fires SessionEnd
+	prompts := hr.get("/hooks/prompt")
+	if len(prompts) != 2 {
+		t.Errorf("UserPromptSubmit count = %d, want 2", len(prompts))
 	} else {
-		if got[0]["prompt"] != "hi there" {
-			t.Errorf("prompt body = %v, want \"hi there\"", got[0]["prompt"])
+		if prompts[0]["prompt"] != "hi there" {
+			t.Errorf("first prompt = %v, want \"hi there\"", prompts[0]["prompt"])
+		}
+		if prompts[1]["prompt"] != "quick thought" {
+			t.Errorf("second prompt (from /think) = %v, want \"quick thought\"", prompts[1]["prompt"])
 		}
 	}
 	if got := hr.get("/hooks/tool-use"); len(got) != 1 {
@@ -221,8 +230,8 @@ func TestE2E_SlashFlow(t *testing.T) {
 			t.Errorf("duration_ms = %v, want >= 0", got[0]["duration_ms"])
 		}
 	}
-	if got := hr.get("/hooks/stop"); len(got) != 1 {
-		t.Errorf("Stop count = %d, want 1", len(got))
+	if got := hr.get("/hooks/stop"); len(got) != 2 {
+		t.Errorf("Stop count = %d, want 2 (raw input + /think)", len(got))
 	}
 	if got := hr.get("/hooks/end"); len(got) != 1 {
 		t.Errorf("SessionEnd count = %d, want 1", len(got))
