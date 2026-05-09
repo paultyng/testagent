@@ -50,4 +50,15 @@ tasks:
           echo "ERROR: GH_TOKEN not set. Run: export GH_TOKEN=\$(gh auth token)" >&2
           exit 1
         fi
+        # Validate the current tag is semver-2.0 before goreleaser runs.
+        # Same regex as .github/workflows/release.yml.
+        tag=$(git describe --exact-match --tags HEAD 2>/dev/null || true)
+        if [ -z "$tag" ]; then
+          echo "ERROR: HEAD is not tagged. Run: git tag vX.Y.Z && git push origin vX.Y.Z" >&2
+          exit 1
+        fi
+        if ! printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+          echo "ERROR: tag '$tag' is not a valid semver-2.0 release tag (expected vX.Y.Z[-prerelease][+build])" >&2
+          exit 1
+        fi
         goreleaser release --clean
