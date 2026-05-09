@@ -17,38 +17,10 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/charmbracelet/lipgloss"
 )
 
-var (
-	stylePanel = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("241")).
-			Padding(0, 1)
-
-	styleToolHeader = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("12")).
-			Bold(true)
-
-	styleToolArgs = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241"))
-
-	styleResultMark = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("10")).
-			Bold(true)
-
-	styleResultBody = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("245"))
-
-	styleThink = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241")).
-			Italic(true)
-
-	styleErr = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("9")).
-			Bold(true)
-)
+// Styling tokens (stylePanel, accentTool, mute, accentOk, muteSoft,
+// styleThought, accentErr) live in style.go.
 
 // SlashHandler dispatches slash commands and renders their output.
 type SlashHandler struct {
@@ -170,7 +142,7 @@ func (h *SlashHandler) dispatchTo(ctx context.Context, line string, out io.Write
 
 // /help — list slash commands with their argument signatures.
 func (h *SlashHandler) cmdHelp(out io.Writer) {
-	header := styleToolHeader.Render("slash commands")
+	header := accentTool.Render("slash commands")
 	fmt.Fprintln(out, header)
 	for _, line := range []struct {
 		usage, doc string
@@ -186,10 +158,10 @@ func (h *SlashHandler) cmdHelp(out io.Writer) {
 		{`/think [<duration>] <text>`, "prompts as if typed raw; the optional duration overrides the default thinking time (3s)"},
 	} {
 		fmt.Fprintf(out, "  %-40s %s\n",
-			styleToolArgs.Render(line.usage),
-			styleResultBody.Render(line.doc))
+			mute.Render(line.usage),
+			muteSoft.Render(line.doc))
 	}
-	fmt.Fprintln(out, styleResultBody.Render("input not starting with / is echoed back."))
+	fmt.Fprintln(out, muteSoft.Render("input not starting with / is echoed back."))
 }
 
 // /stream <text> — token-paced streaming text.
@@ -282,8 +254,8 @@ func (h *SlashHandler) cmdFakeTool(ctx context.Context, out io.Writer, rest stri
 	args := parseJSONOr(jsonArgs, map[string]any{})
 	prettyArgs, _ := json.Marshal(args)
 	fmt.Fprintf(out, "%s %s\n",
-		styleToolHeader.Render("▶ "+name),
-		styleToolArgs.Render(string(prettyArgs)))
+		accentTool.Render("▶ "+name),
+		mute.Render(string(prettyArgs)))
 
 	// Flush any prior pending /fake-tool that never got a /fake-tool-result.
 	if prior := h.takePending(); prior != nil {
@@ -304,16 +276,16 @@ func (h *SlashHandler) cmdFakeTool(ctx context.Context, out io.Writer, rest stri
 // raw string. With no pending /fake-tool, only renders (no synthetic hook —
 // inventing a tool_use_id and tool_name would produce dishonest fixtures).
 func (h *SlashHandler) cmdFakeToolResult(ctx context.Context, out io.Writer, rest string) {
-	mark := styleResultMark.Render("✓")
+	mark := accentOk.Render("✓")
 	var response any
 	switch {
 	case rest == "":
-		fmt.Fprintf(out, "%s %s\n", mark, styleResultBody.Render("(empty result)"))
+		fmt.Fprintf(out, "%s %s\n", mark, muteSoft.Render("(empty result)"))
 	default:
 		var parsed any
 		if err := json.Unmarshal([]byte(rest), &parsed); err == nil {
 			pretty, _ := json.MarshalIndent(parsed, "  ", "  ")
-			fmt.Fprintf(out, "%s\n  %s\n", mark, styleResultBody.Render(string(pretty)))
+			fmt.Fprintf(out, "%s\n  %s\n", mark, muteSoft.Render(string(pretty)))
 			response = parsed
 		} else {
 			fmt.Fprintf(out, "%s %s\n", mark, rest)
@@ -373,20 +345,20 @@ func (h *SlashHandler) cmdMCP(ctx context.Context, out io.Writer, rest string) {
 	args := parseJSONOr(jsonArgs, map[string]any{})
 
 	fmt.Fprintf(out, "%s %s\n",
-		styleToolHeader.Render("▶ mcp:"+qualified),
-		styleToolArgs.Render(jsonArgs))
+		accentTool.Render("▶ mcp:"+qualified),
+		mute.Render(jsonArgs))
 
 	res, err := h.mcp.Call(ctx, qualified, args)
 	if err != nil {
-		fmt.Fprintf(out, "%s %v\n", styleErr.Render("✗ mcp error:"), err)
+		fmt.Fprintf(out, "%s %v\n", accentErr.Render("✗ mcp error:"), err)
 		return
 	}
-	mark := styleResultMark.Render("✓")
+	mark := accentOk.Render("✓")
 	for _, c := range res.Content {
 		if c.Type == "text" {
 			fmt.Fprintf(out, "%s %s\n", mark, c.Text)
 		} else {
-			fmt.Fprintf(out, "%s %s\n", mark, styleResultBody.Render("("+c.Type+" content)"))
+			fmt.Fprintf(out, "%s %s\n", mark, muteSoft.Render("("+c.Type+" content)"))
 		}
 	}
 }
@@ -402,7 +374,7 @@ func (h *SlashHandler) cmdRestart(out io.Writer, rest string) SlashOutcome {
 	if reason == "" {
 		reason = "clear"
 	}
-	fmt.Fprintln(out, styleResultBody.Render("[restart: "+reason+"]"))
+	fmt.Fprintln(out, renderLifecycle("restart: "+reason))
 	return SlashOutcome{Handled: true, Restart: true, RestartReason: reason}
 }
 

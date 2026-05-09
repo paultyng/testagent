@@ -88,7 +88,7 @@ func TestModel_EnterSubmitsAndEchoes(t *testing.T) {
 	// Drain commands until we see thinkingDoneMsg, then feed it back.
 	// tea.Tick is asynchronous in the runtime; here we synthesize the
 	// thinkingDoneMsg directly to advance past the delay.
-	doneMsg := thinkingDoneMsg{tag: m.thinkTag, response: "[Test] hi"}
+	doneMsg := thinkingDoneMsg{tag: m.thinkTag, name: "Test", body: "hi"}
 	newM, _ := m.Update(doneMsg)
 	m = newM.(model)
 
@@ -132,7 +132,7 @@ func TestModel_TypingDuringThinkingIsQueued(t *testing.T) {
 	}
 
 	// Complete the first turn — the next prompt should re-enter thinking.
-	doneMsg := thinkingDoneMsg{tag: m.thinkTag, response: "[Test] a"}
+	doneMsg := thinkingDoneMsg{tag: m.thinkTag, name: "Test", body: "a"}
 	newM, _ := m.Update(doneMsg)
 	m = newM.(model)
 	if !m.thinking {
@@ -259,7 +259,7 @@ func TestModel_EscCancelsThinking(t *testing.T) {
 	}
 
 	// A stale thinkingDoneMsg with the old tag must be ignored.
-	stale := thinkingDoneMsg{tag: originalTag, response: "[Test] hello"}
+	stale := thinkingDoneMsg{tag: originalTag, name: "Test", body: "hello"}
 	newM, _ = m.Update(stale)
 	m = newM.(model)
 	for _, line := range m.history {
