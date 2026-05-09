@@ -309,8 +309,8 @@ func TestMCPClient_HeadersPropagated(t *testing.T) {
 				Type: "http",
 				URL:  ts.URL,
 				Headers: map[string]string{
-					"Authorization":       "Bearer test-token",
-					"X-Session-Id": "ses-from-config",
+					"Authorization": "Bearer test-token",
+					"X-Session-Id":  "ses-from-config",
 				},
 			},
 		},

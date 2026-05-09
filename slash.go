@@ -87,6 +87,14 @@ type SlashOutcome struct {
 	ExitCode int  // exit status when Exit is true
 	Reason   string
 
+	// Restart, when true, signals the caller to fire SessionEnd then
+	// SessionStart back-to-back without leaving the process. Set by /restart.
+	// RestartReason is the matcher value passed through to both events
+	// (SessionEnd reason / SessionStart source) — typically "clear" or
+	// "compact" so an orchestrator can simulate either reset flavor.
+	Restart       bool
+	RestartReason string
+
 	// Prompt, when non-empty, signals the caller to run this slash command
 	// through the regular prompt-handling path (UserPromptSubmit hook →
 	// thinking animation → echo → Stop hook). Set by /think after parsing
@@ -142,8 +150,10 @@ func (h *SlashHandler) dispatchTo(ctx context.Context, line string, out io.Write
 		h.cmdFakeTool(ctx, out, rest)
 	case "fake-tool-result":
 		h.cmdFakeToolResult(ctx, out, rest)
-	case "mcp":
+	case "mcp-call":
 		h.cmdMCP(ctx, out, rest)
+	case "restart":
+		return h.cmdRestart(out, rest)
 	case "exit":
 		code := 0
 		if rest != "" {
@@ -169,8 +179,9 @@ func (h *SlashHandler) cmdHelp(out io.Writer) {
 		{`/fake-tool <name> <json-args>`, "prints a fake tool-use block; pair with /fake-tool-result to fire PostToolUse"},
 		{`/fake-tool-result <json-or-text>`, "completes the pending /fake-tool and fires PostToolUse with the response"},
 		{"/help", "prints this list"},
-		{`/mcp <server.tool> <json-args>`, "calls a connected MCP tool and prints its result"},
+		{`/mcp-call <server.tool> <json-args>`, "calls a connected MCP tool and prints its result"},
 		{"/panel <text>", "prints text in a rounded-border box"},
+		{"/restart [clear|compact]", "fires SessionEnd then SessionStart without leaving the process (default reason: clear)"},
 		{"/stream <text>", "prints text token-by-token at the configured pacing"},
 		{`/think [<duration>] <text>`, "prompts as if typed raw; the optional duration overrides the default thinking time (3s)"},
 	} {
@@ -349,12 +360,14 @@ func (h *SlashHandler) firePendingHook(ctx context.Context, p *pendingToolCall, 
 	}
 }
 
-// /mcp <qualified-tool> <json-args> — invoke a real connected MCP tool.
-// qualified-tool is "<server>.<tool>".
+// /mcp-call <qualified-tool> <json-args> — invoke a real connected MCP tool.
+// qualified-tool is "<server>.<tool>". Named to avoid collision with real
+// Claude Code's /mcp, which opens a server-management UI rather than calling
+// a tool — orchestrators can pipe both verbatim and get distinct behavior.
 func (h *SlashHandler) cmdMCP(ctx context.Context, out io.Writer, rest string) {
 	qualified, jsonArgs := splitFirstWord(rest)
 	if qualified == "" || !strings.Contains(qualified, ".") {
-		fmt.Fprintln(os.Stderr, "testagent: /mcp requires <server>.<tool> as first arg")
+		fmt.Fprintln(os.Stderr, "testagent: /mcp-call requires <server>.<tool> as first arg")
 		return
 	}
 	args := parseJSONOr(jsonArgs, map[string]any{})
@@ -376,6 +389,21 @@ func (h *SlashHandler) cmdMCP(ctx context.Context, out io.Writer, rest string) {
 			fmt.Fprintf(out, "%s %s\n", mark, styleResultBody.Render("("+c.Type+" content)"))
 		}
 	}
+}
+
+// /restart [clear|compact] — emit SessionEnd + SessionStart without leaving
+// the process. The shared matcher value (default "clear") is passed as
+// SessionEnd.reason and SessionStart.source so an orchestrator can simulate
+// either Claude reset flavor — `/clear`-style ("clear") or `/compact`-style
+// ("compact"). The runtime owns the actual hook firing via the SlashOutcome
+// (parallel to /exit's outcome-driven shutdown).
+func (h *SlashHandler) cmdRestart(out io.Writer, rest string) SlashOutcome {
+	reason := strings.TrimSpace(rest)
+	if reason == "" {
+		reason = "clear"
+	}
+	fmt.Fprintln(out, styleResultBody.Render("[restart: "+reason+"]"))
+	return SlashOutcome{Handled: true, Restart: true, RestartReason: reason}
 }
 
 // splitFirstWord splits on the first whitespace, returning (head, tail).

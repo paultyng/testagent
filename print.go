@@ -25,22 +25,28 @@ import (
 
 // printOptions bundles the inputs runPrint needs from main().
 type printOptions struct {
-	name           string
-	sessionID      string
-	cwd            string
-	model          string
-	outputFormat   string // "text" | "json" | "stream-json"
-	positional     []string
-	hooks          *HookSender
-	mcp            *MCPClient
+	name         string
+	sessionID    string
+	cwd          string
+	model        string
+	outputFormat string // "text" | "json" | "stream-json"
+	positional   []string
+	hooks        *HookSender
+	mcp          *MCPClient
 }
 
 // runPrint executes one non-interactive turn and returns the exit code.
 //
-// Lifecycle: read prompt → fire UserPromptSubmit hook → produce echo → emit
-// per --output-format → fire Stop + SessionEnd → close MCP. Hook errors are
-// logged to stderr and do not affect the exit code.
+// Lifecycle: SessionStart → read prompt → fire UserPromptSubmit hook →
+// produce echo → emit per --output-format → fire Stop + SessionEnd →
+// close MCP. Hook errors are logged to stderr and do not affect the exit
+// code. SessionStart is paired with SessionEnd so orchestrators see a
+// complete lifecycle even on one-shot invocations.
 func runPrint(ctx context.Context, opt printOptions, stdin io.Reader, stdout io.Writer) int {
+	if err := opt.hooks.OnSessionStart(ctx, "startup"); err != nil {
+		fmt.Fprintf(os.Stderr, "testagent: hook OnSessionStart: %v\n", err)
+	}
+
 	prompt := strings.TrimSpace(strings.Join(opt.positional, " "))
 	if prompt == "" {
 		b, err := io.ReadAll(stdin)
@@ -133,11 +139,11 @@ func emitStreamJSON(w io.Writer, opt printOptions, result string, durationMs int
 
 	// 2. assistant message
 	usage := map[string]any{
-		"input_tokens":               approxTokens(result),
-		"output_tokens":              approxTokens(result),
-		"cache_read_input_tokens":    0,
+		"input_tokens":                approxTokens(result),
+		"output_tokens":               approxTokens(result),
+		"cache_read_input_tokens":     0,
 		"cache_creation_input_tokens": 0,
-		"service_tier":               "default",
+		"service_tier":                "default",
 	}
 	_ = enc.Encode(map[string]any{
 		"type": "assistant",

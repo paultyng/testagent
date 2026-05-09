@@ -16,6 +16,7 @@ const (
 	hookEventUserPromptSubmit = "UserPromptSubmit"
 	hookEventPostToolUse      = "PostToolUse"
 	hookEventStop             = "Stop"
+	hookEventSessionStart     = "SessionStart"
 	hookEventSessionEnd       = "SessionEnd"
 )
 
@@ -89,6 +90,17 @@ type stopBody struct {
 	TranscriptPath       string `json:"transcript_path"`
 }
 
+// sessionStartBody is the JSON body for SessionStart. source is one of
+// "startup", "resume", "clear", "compact" — matches Claude Code's matcher
+// vocabulary so orchestrators can distinguish a fresh boot from a /restart.
+type sessionStartBody struct {
+	CWD            string `json:"cwd"`
+	HookEventName  string `json:"hook_event_name"`
+	SessionID      string `json:"session_id"`
+	Source         string `json:"source"`
+	TranscriptPath string `json:"transcript_path"`
+}
+
 // sessionEndBody is the JSON body for SessionEnd.
 type sessionEndBody struct {
 	CWD            string `json:"cwd"`
@@ -141,6 +153,19 @@ func (h *HookSender) OnStop(ctx context.Context, lastAssistantMessage string, st
 		TranscriptPath:       h.transcriptPath,
 	}
 	return h.fire(ctx, hookEventStop, body)
+}
+
+// OnSessionStart fires SessionStart. source is one of "startup", "resume",
+// "clear", "compact" — same vocabulary Claude Code uses on the matcher field.
+func (h *HookSender) OnSessionStart(ctx context.Context, source string) error {
+	body := sessionStartBody{
+		CWD:            h.cwd,
+		HookEventName:  hookEventSessionStart,
+		SessionID:      h.sessionID,
+		Source:         source,
+		TranscriptPath: h.transcriptPath,
+	}
+	return h.fire(ctx, hookEventSessionStart, body)
 }
 
 // OnSessionEnd fires SessionEnd. reason is one of "clear", "logout", "other", etc.
