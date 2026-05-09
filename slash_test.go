@@ -149,6 +149,73 @@ func TestSlash_UnknownCommand(t *testing.T) {
 	}
 }
 
+func TestSlash_DispatchString(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		line      string
+		wantBody  string
+		wantExit  bool
+		wantHand  bool
+		wantInOut string // substring assertion when wantBody is empty
+	}{
+		{
+			name:      "stream returns rendered text",
+			line:      "/stream hello world",
+			wantInOut: "hello world",
+			wantHand:  true,
+		},
+		{
+			name:     "exit returns outcome but empty body",
+			line:     "/exit 3",
+			wantBody: "",
+			wantExit: true,
+			wantHand: true,
+		},
+		{
+			name:      "panel rendered body matches Dispatch",
+			line:      "/panel boxed",
+			wantInOut: "boxed",
+			wantHand:  true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Run via DispatchString (string-returning).
+			h1 := newTestSlashHandler(&bytes.Buffer{})
+			body, outcome := h1.DispatchString(context.Background(), tc.line)
+
+			if outcome.Handled != tc.wantHand {
+				t.Errorf("DispatchString outcome.Handled = %v, want %v", outcome.Handled, tc.wantHand)
+			}
+			if outcome.Exit != tc.wantExit {
+				t.Errorf("DispatchString outcome.Exit = %v, want %v", outcome.Exit, tc.wantExit)
+			}
+			if tc.wantInOut != "" && !strings.Contains(body, tc.wantInOut) {
+				t.Errorf("DispatchString body missing %q:\n%s", tc.wantInOut, body)
+			}
+			if tc.wantBody != "" && body != tc.wantBody {
+				t.Errorf("DispatchString body = %q, want %q", body, tc.wantBody)
+			}
+
+			// Run via buffered Dispatch (the legacy path) and compare bodies.
+			out := &bytes.Buffer{}
+			h2 := newTestSlashHandler(out)
+			outcome2 := h2.Dispatch(context.Background(), tc.line)
+			if outcome2.Exit != outcome.Exit || outcome2.ExitCode != outcome.ExitCode || outcome2.Handled != outcome.Handled {
+				t.Errorf("Dispatch outcome mismatch:\n  DispatchString=%+v\n  Dispatch=%+v", outcome, outcome2)
+			}
+			if out.String() != body {
+				t.Errorf("rendered string differs between Dispatch and DispatchString:\n  Dispatch=%q\n  DispatchString=%q", out.String(), body)
+			}
+		})
+	}
+}
+
 func TestSplitFirstWord(t *testing.T) {
 	t.Parallel()
 
