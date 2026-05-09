@@ -1,3 +1,4 @@
 /testagent
 .claude/
 testdata/captures/
+.DS_Store
