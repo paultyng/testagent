@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/paultyng/testagent/internal/hooks"
+	"github.com/paultyng/testagent/internal/mcp"
 	"github.com/paultyng/testagent/internal/render"
 )
 
@@ -31,7 +32,7 @@ type SlashHandler struct {
 	transcriptPath string
 	permissionMode string
 	hooks          *hooks.Sender
-	mcp            *MCPClient
+	mcp            *mcp.Client
 	out            io.Writer
 
 	// pendingToolMu guards pendingTool. Slash dispatches can run concurrently

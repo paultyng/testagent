@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/paultyng/testagent/internal/hooks"
+	"github.com/paultyng/testagent/internal/mcp"
 	"github.com/paultyng/testagent/internal/render"
 )
 
@@ -38,7 +39,7 @@ type tuiOptions struct {
 	settings       *Settings
 	mcpConfig      *MCPConfig
 	hooks          *hooks.Sender
-	mcp            *MCPClient
+	mcp            *mcp.Client
 	slash          *SlashHandler
 }
 
@@ -435,15 +436,15 @@ func cmdHookStop(hooks *hooks.Sender, last string, stopHookActive bool) tea.Cmd 
 // mcp.Connect → OnSessionStart ordering and prevents races between boot
 // SessionStart and user-driven hooks (e.g. /restart) submitted before the
 // boot goroutine resolves.
-func cmdBoot(mcp *MCPClient, hooks *hooks.Sender, source string) tea.Cmd {
+func cmdBoot(client *mcp.Client, sender *hooks.Sender, source string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		connectErr := mcp.Connect(ctx)
+		connectErr := client.Connect(ctx)
 		tools := 0
 		if connectErr == nil {
-			tools = len(mcp.Tools())
+			tools = len(client.Tools())
 		}
-		startErr := hooks.OnSessionStart(ctx, source)
+		startErr := sender.OnSessionStart(ctx, source)
 		return mcpConnectMsg{err: connectErr, tools: tools, startErr: startErr}
 	}
 }

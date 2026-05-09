@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/paultyng/testagent/internal/hooks"
+	"github.com/paultyng/testagent/internal/mcp"
 )
 
 func TestLoadSettings(t *testing.T) {
@@ -169,7 +170,7 @@ func TestLoadedStatus(t *testing.T) {
 			settings: &Settings{Hooks: map[string][]hooks.Matcher{
 				"Stop": nil, "PostToolUse": nil, "SessionEnd": nil,
 			}},
-			mcpConfig:    &MCPConfig{MCPServers: map[string]MCPServer{"fileserver": {}}},
+			mcpConfig:    &MCPConfig{MCPServers: map[string]mcp.Server{"fileserver": {}}},
 			systemPrompt: "you are working on...",
 			addDirs:      []string{"/a", "/b"},
 			want:         "hooks: posttooluse, sessionend, stop | mcp: fileserver | system prompt: 21 chars | dirs: 2",

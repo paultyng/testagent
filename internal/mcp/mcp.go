@@ -1,9 +1,8 @@
-// MCP HTTP client. Connects to servers declared in --mcp-config, performs
-// the standard MCP handshake (initialize + notifications/initialized +
-// tools/list), and exposes a method to invoke tools.
-//
-// Built on github.com/mark3labs/mcp-go.
-package main
+// Package mcp provides an HTTP MCP client. Connects to servers declared
+// by the caller, performs the standard MCP handshake (initialize +
+// notifications/initialized + tools/list), and exposes a method to invoke
+// tools. Built on github.com/mark3labs/mcp-go.
+package mcp
 
 import (
 	"context"
@@ -15,7 +14,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
-	"github.com/mark3labs/mcp-go/mcp"
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
 
 // ErrNoServers is returned by Call when no MCP servers are configured.
@@ -25,57 +24,64 @@ var ErrNoServers = errors.New("no MCP servers configured")
 // resolve to a known server+tool.
 var ErrUnknownTool = errors.New("unknown tool")
 
-// MCPClient connects to MCP servers declared in MCPConfig and exposes the
-// union of their tools.
-type MCPClient struct {
-	config *MCPConfig
+// Server is the on-disk shape of one MCP server entry from Claude Code's
+// --mcp-config file.
+type Server struct {
+	Type    string            `json:"type"`
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// Client connects to MCP servers and exposes the union of their tools.
+type Client struct {
+	config map[string]Server
 
 	mu        sync.Mutex
-	servers   map[string]*mcpServer // keyed by server name
-	tools     []MCPTool             // qualified, sorted by Server.Name
+	servers   map[string]*serverConn // keyed by server name
+	tools     []Tool                 // qualified, sorted by Server.Name
 	connected bool
 	closed    bool
 }
 
-// mcpServer holds the per-server client + its tool list.
-type mcpServer struct {
+// serverConn holds the per-server client + its tool list.
+type serverConn struct {
 	name   string
 	client *client.Client
-	tools  []mcp.Tool
+	tools  []mcpgo.Tool
 }
 
-// MCPTool is the union-of-tools view returned by Tools().
-type MCPTool struct {
+// Tool is the union-of-tools view returned by Tools().
+type Tool struct {
 	Server      string
 	Name        string
 	Description string
 	InputSchema json.RawMessage
 }
 
-// MCPCallResult mirrors the tools/call response content array.
-type MCPCallResult struct {
-	Content []MCPContent
+// CallResult mirrors the tools/call response content array.
+type CallResult struct {
+	Content []Content
 	IsError bool
 }
 
-// MCPContent is one entry in MCPCallResult.Content.
+// Content is one entry in CallResult.Content.
 //
 // v1 only renders text content. Image/audio/embedded-resource content types
 // are flattened to Type+Text where Text is empty (or a marker). Future phases
 // can expand this without breaking the v1 surface.
-type MCPContent struct {
+type Content struct {
 	Type string
 	Text string
 }
 
-// NewMCPClient creates a client from the given config. Config may be nil
-// (no-op client). Headers from each MCPServer.Headers entry are sent on
-// every request to that server; testagent does not inject any headers
+// NewClient creates a client from the given server map. The map may be nil
+// or empty (no-op client). Headers from each Server.Headers entry are sent
+// on every request to that server; testagent does not inject any headers
 // of its own.
-func NewMCPClient(config *MCPConfig) *MCPClient {
-	return &MCPClient{
-		config:  config,
-		servers: make(map[string]*mcpServer),
+func NewClient(servers map[string]Server) *Client {
+	return &Client{
+		config:  servers,
+		servers: make(map[string]*serverConn),
 	}
 }
 
@@ -83,7 +89,7 @@ func NewMCPClient(config *MCPConfig) *MCPClient {
 // every configured server in parallel. Populates the internal tool list.
 //
 // If config is nil or has no servers, Connect is a no-op.
-func (c *MCPClient) Connect(ctx context.Context) error {
+func (c *Client) Connect(ctx context.Context) error {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -95,7 +101,7 @@ func (c *MCPClient) Connect(ctx context.Context) error {
 	}
 	c.mu.Unlock()
 
-	if c.config == nil || len(c.config.MCPServers) == 0 {
+	if len(c.config) == 0 {
 		c.mu.Lock()
 		c.connected = true
 		c.mu.Unlock()
@@ -104,15 +110,15 @@ func (c *MCPClient) Connect(ctx context.Context) error {
 
 	type result struct {
 		name   string
-		server *mcpServer
+		server *serverConn
 		err    error
 	}
 
-	resultCh := make(chan result, len(c.config.MCPServers))
+	resultCh := make(chan result, len(c.config))
 	var wg sync.WaitGroup
-	for name, cfg := range c.config.MCPServers {
+	for name, cfg := range c.config {
 		wg.Add(1)
-		go func(name string, cfg MCPServer) {
+		go func(name string, cfg Server) {
 			defer wg.Done()
 			s, err := c.connectServer(ctx, name, cfg)
 			resultCh <- result{name: name, server: s, err: err}
@@ -121,8 +127,8 @@ func (c *MCPClient) Connect(ctx context.Context) error {
 	wg.Wait()
 	close(resultCh)
 
-	servers := make(map[string]*mcpServer)
-	var tools []MCPTool
+	servers := make(map[string]*serverConn)
+	var tools []Tool
 	var errs []error
 	for r := range resultCh {
 		if r.err != nil {
@@ -131,7 +137,7 @@ func (c *MCPClient) Connect(ctx context.Context) error {
 		}
 		servers[r.name] = r.server
 		for _, t := range r.server.tools {
-			tools = append(tools, toMCPTool(r.name, t))
+			tools = append(tools, toTool(r.name, t))
 		}
 	}
 
@@ -152,7 +158,7 @@ func (c *MCPClient) Connect(ctx context.Context) error {
 }
 
 // connectServer dials one server and runs the handshake + tools/list.
-func (c *MCPClient) connectServer(ctx context.Context, name string, cfg MCPServer) (*mcpServer, error) {
+func (c *Client) connectServer(ctx context.Context, name string, cfg Server) (*serverConn, error) {
 	if cfg.Type != "" && cfg.Type != "http" {
 		return nil, fmt.Errorf("mcp %s: unsupported transport type %q (only \"http\" supported)", name, cfg.Type)
 	}
@@ -178,14 +184,14 @@ func (c *MCPClient) connectServer(ctx context.Context, name string, cfg MCPServe
 		return nil, fmt.Errorf("mcp %s: start: %w", name, err)
 	}
 
-	initReq := mcp.InitializeRequest{
-		Params: mcp.InitializeParams{
-			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
-			ClientInfo: mcp.Implementation{
+	initReq := mcpgo.InitializeRequest{
+		Params: mcpgo.InitializeParams{
+			ProtocolVersion: mcpgo.LATEST_PROTOCOL_VERSION,
+			ClientInfo: mcpgo.Implementation{
 				Name:    "testagent",
 				Version: "0.1.0",
 			},
-			Capabilities: mcp.ClientCapabilities{},
+			Capabilities: mcpgo.ClientCapabilities{},
 		},
 	}
 	if _, err := cl.Initialize(ctx, initReq); err != nil {
@@ -193,13 +199,13 @@ func (c *MCPClient) connectServer(ctx context.Context, name string, cfg MCPServe
 		return nil, fmt.Errorf("mcp %s: initialize: %w", name, err)
 	}
 
-	listRes, err := cl.ListTools(ctx, mcp.ListToolsRequest{})
+	listRes, err := cl.ListTools(ctx, mcpgo.ListToolsRequest{})
 	if err != nil {
 		_ = cl.Close()
 		return nil, fmt.Errorf("mcp %s: tools/list: %w", name, err)
 	}
 
-	return &mcpServer{
+	return &serverConn{
 		name:   name,
 		client: cl,
 		tools:  listRes.Tools,
@@ -209,13 +215,13 @@ func (c *MCPClient) connectServer(ctx context.Context, name string, cfg MCPServe
 // Tools returns all tools across all connected servers, qualified as
 // "<server>.<tool>". Returns nil if Connect has not been called or no
 // servers are configured.
-func (c *MCPClient) Tools() []MCPTool {
+func (c *Client) Tools() []Tool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.connected || len(c.tools) == 0 {
 		return nil
 	}
-	out := make([]MCPTool, len(c.tools))
+	out := make([]Tool, len(c.tools))
 	copy(out, c.tools)
 	return out
 }
@@ -223,26 +229,26 @@ func (c *MCPClient) Tools() []MCPTool {
 // Call invokes a tool by qualified name (e.g. "fileserver.read_file").
 // Returns ErrNoServers if no MCP servers are configured.
 // Returns ErrUnknownTool if the qualified name does not resolve.
-func (c *MCPClient) Call(ctx context.Context, qualifiedName string, args any) (MCPCallResult, error) {
+func (c *Client) Call(ctx context.Context, qualifiedName string, args any) (CallResult, error) {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return MCPCallResult{}, errors.New("mcp: client closed")
+		return CallResult{}, errors.New("mcp: client closed")
 	}
 	if !c.connected || len(c.servers) == 0 {
 		c.mu.Unlock()
-		return MCPCallResult{}, ErrNoServers
+		return CallResult{}, ErrNoServers
 	}
 
 	serverName, toolName, ok := strings.Cut(qualifiedName, ".")
 	if !ok || serverName == "" || toolName == "" {
 		c.mu.Unlock()
-		return MCPCallResult{}, fmt.Errorf("mcp: %w: %q (expected \"<server>.<tool>\")", ErrUnknownTool, qualifiedName)
+		return CallResult{}, fmt.Errorf("mcp: %w: %q (expected \"<server>.<tool>\")", ErrUnknownTool, qualifiedName)
 	}
 	srv, ok := c.servers[serverName]
 	if !ok {
 		c.mu.Unlock()
-		return MCPCallResult{}, fmt.Errorf("mcp: %w: server %q not connected", ErrUnknownTool, serverName)
+		return CallResult{}, fmt.Errorf("mcp: %w: server %q not connected", ErrUnknownTool, serverName)
 	}
 	// Verify the tool exists on this server (cheap pre-check; avoids a network
 	// round-trip for typos and gives a clear error).
@@ -256,29 +262,29 @@ func (c *MCPClient) Call(ctx context.Context, qualifiedName string, args any) (M
 	c.mu.Unlock()
 
 	if !found {
-		return MCPCallResult{}, fmt.Errorf("mcp %s: %w: tool %q", serverName, ErrUnknownTool, toolName)
+		return CallResult{}, fmt.Errorf("mcp %s: %w: tool %q", serverName, ErrUnknownTool, toolName)
 	}
 
-	req := mcp.CallToolRequest{
-		Params: mcp.CallToolParams{
+	req := mcpgo.CallToolRequest{
+		Params: mcpgo.CallToolParams{
 			Name:      toolName,
 			Arguments: args,
 		},
 	}
 	res, err := srv.client.CallTool(ctx, req)
 	if err != nil {
-		return MCPCallResult{}, fmt.Errorf("mcp %s: tools/call %s: %w", serverName, toolName, err)
+		return CallResult{}, fmt.Errorf("mcp %s: tools/call %s: %w", serverName, toolName, err)
 	}
 
-	out := MCPCallResult{IsError: res.IsError}
+	out := CallResult{IsError: res.IsError}
 	for _, raw := range res.Content {
-		out.Content = append(out.Content, fromMCPContent(raw))
+		out.Content = append(out.Content, fromContent(raw))
 	}
 	return out, nil
 }
 
 // Close cleanly disconnects from all servers. Safe to call multiple times.
-func (c *MCPClient) Close() error {
+func (c *Client) Close() error {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -302,10 +308,10 @@ func (c *MCPClient) Close() error {
 	return nil
 }
 
-// toMCPTool converts a library Tool to the local MCPTool view. The library's
+// toTool converts a library Tool to the local Tool view. The library's
 // Tool.MarshalJSON handles RawInputSchema vs structured InputSchema, so we
 // marshal/unmarshal the InputSchema field directly.
-func toMCPTool(server string, t mcp.Tool) MCPTool {
+func toTool(server string, t mcpgo.Tool) Tool {
 	var schema json.RawMessage
 	if len(t.RawInputSchema) > 0 {
 		schema = append(json.RawMessage(nil), t.RawInputSchema...)
@@ -315,7 +321,7 @@ func toMCPTool(server string, t mcp.Tool) MCPTool {
 			schema = b
 		}
 	}
-	return MCPTool{
+	return Tool{
 		Server:      server,
 		Name:        t.Name,
 		Description: t.Description,
@@ -323,23 +329,23 @@ func toMCPTool(server string, t mcp.Tool) MCPTool {
 	}
 }
 
-// fromMCPContent flattens a library Content interface into our v1 view.
+// fromContent flattens a library Content interface into our v1 view.
 // v1 only handles text; non-text types are reported with an empty Text body
 // so callers can at least know what was returned.
-func fromMCPContent(raw mcp.Content) MCPContent {
+func fromContent(raw mcpgo.Content) Content {
 	switch v := raw.(type) {
-	case mcp.TextContent:
-		return MCPContent{Type: v.Type, Text: v.Text}
-	case *mcp.TextContent:
-		return MCPContent{Type: v.Type, Text: v.Text}
-	case mcp.ImageContent:
-		return MCPContent{Type: v.Type}
-	case *mcp.ImageContent:
-		return MCPContent{Type: v.Type}
-	case mcp.AudioContent:
-		return MCPContent{Type: v.Type}
-	case *mcp.AudioContent:
-		return MCPContent{Type: v.Type}
+	case mcpgo.TextContent:
+		return Content{Type: v.Type, Text: v.Text}
+	case *mcpgo.TextContent:
+		return Content{Type: v.Type, Text: v.Text}
+	case mcpgo.ImageContent:
+		return Content{Type: v.Type}
+	case *mcpgo.ImageContent:
+		return Content{Type: v.Type}
+	case mcpgo.AudioContent:
+		return Content{Type: v.Type}
+	case *mcpgo.AudioContent:
+		return Content{Type: v.Type}
 	}
 	// Fallback: round-trip through JSON to read the discriminator.
 	if b, err := json.Marshal(raw); err == nil {
@@ -348,7 +354,7 @@ func fromMCPContent(raw mcp.Content) MCPContent {
 			Text string `json:"text"`
 		}
 		_ = json.Unmarshal(b, &probe)
-		return MCPContent{Type: probe.Type, Text: probe.Text}
+		return Content{Type: probe.Type, Text: probe.Text}
 	}
-	return MCPContent{}
+	return Content{}
 }

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/paultyng/testagent/internal/hooks"
+	"github.com/paultyng/testagent/internal/mcp"
 )
 
 // printOptions bundles the inputs runPrint needs from main().
@@ -35,7 +36,7 @@ type printOptions struct {
 	outputFormat string // "text" | "json" | "stream-json"
 	positional   []string
 	hooks        *hooks.Sender
-	mcp          *MCPClient
+	mcp          *mcp.Client
 }
 
 // runPrint executes one non-interactive turn and returns the exit code.
@@ -183,7 +184,7 @@ func emitStreamJSON(w io.Writer, opt printOptions, result string, durationMs int
 
 // mcpServersForInit returns the connected-server name list for the system/init
 // event. Nil-safe: returns an empty slice when MCP isn't configured.
-func mcpServersForInit(c *MCPClient) []map[string]any {
+func mcpServersForInit(c *mcp.Client) []map[string]any {
 	if c == nil {
 		return []map[string]any{}
 	}

@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/paultyng/testagent/internal/hooks"
+	"github.com/paultyng/testagent/internal/mcp"
 )
 
 // newTestModel builds a model wired up against in-memory hook/MCP/slash
@@ -26,7 +27,7 @@ func newTestModel(opt *tuiOptions) model {
 		delay:      10 * time.Millisecond,
 		historyCap: 1000,
 		hooks:      hooks.NewSender(nil, "sid-test", "/tmp", "", "default", nil),
-		mcp:        NewMCPClient(nil),
+		mcp:        mcp.NewClient(nil),
 	}
 	if opt != nil {
 		// Caller-provided overrides
@@ -329,7 +330,7 @@ func TestCmdSlashRestart_FiresHooksInOrder(t *testing.T) {
 		sessionID: "sid-test",
 		cwd:       "/tmp",
 		hooks:     hookSender,
-		mcp:       NewMCPClient(nil),
+		mcp:       mcp.NewClient(nil),
 		out:       io.Discard,
 	}
 

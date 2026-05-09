@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/paultyng/testagent/internal/hooks"
+	"github.com/paultyng/testagent/internal/mcp"
 )
 
 func newTestSlashHandler(out *bytes.Buffer) *SlashHandler {
@@ -22,7 +23,7 @@ func newTestSlashHandler(out *bytes.Buffer) *SlashHandler {
 		sessionID:   "sid-test",
 		cwd:         "/tmp",
 		hooks:       hooks.NewSender(nil, "sid-test", "/tmp", "", "default", nil),
-		mcp:         NewMCPClient(nil),
+		mcp:         mcp.NewClient(nil),
 		out:         out,
 	}
 }

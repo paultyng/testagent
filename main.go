@@ -23,6 +23,7 @@ import (
 	"github.com/mattn/go-isatty"
 
 	"github.com/paultyng/testagent/internal/hooks"
+	"github.com/paultyng/testagent/internal/mcp"
 	"github.com/paultyng/testagent/internal/render"
 )
 
@@ -38,13 +39,7 @@ type Permissions struct {
 
 // MCPConfig mirrors Claude Code's --mcp-config file shape.
 type MCPConfig struct {
-	MCPServers map[string]MCPServer `json:"mcpServers"`
-}
-
-type MCPServer struct {
-	Type    string            `json:"type"`
-	URL     string            `json:"url"`
-	Headers map[string]string `json:"headers,omitempty"`
+	MCPServers map[string]mcp.Server `json:"mcpServers"`
 }
 
 // stringSlice implements flag.Value for repeatable string flags (--add-dir).
@@ -66,7 +61,7 @@ type scannerOptions struct {
 	autoExit       time.Duration
 	statusLine     string
 	hooks          *hooks.Sender
-	mcp            *MCPClient
+	mcp            *mcp.Client
 	slash          *SlashHandler
 }
 
@@ -128,7 +123,11 @@ func main() {
 		matchers = settings.Hooks
 	}
 	hookSender := hooks.NewSender(matchers, sid, cwd, transcriptPath, permissionMode, debugW)
-	mcpClient := NewMCPClient(mcpConfig)
+	var mcpServers map[string]mcp.Server
+	if mcpConfig != nil {
+		mcpServers = mcpConfig.MCPServers
+	}
+	mcpClient := mcp.NewClient(mcpServers)
 	slash := &SlashHandler{
 		name:           name,
 		streamDelay:    30 * time.Millisecond,
