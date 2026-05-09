@@ -37,3 +37,17 @@ tasks:
     cmds:
       - mkdir -p compat
       - go run . --help > compat/root.cli.txt
+
+  release:local:
+    desc: Cut a release from the local machine against the current tag (requires GH_TOKEN, goreleaser).
+    cmds:
+      - |
+        if ! command -v goreleaser >/dev/null 2>&1; then
+          echo "ERROR: goreleaser not found. Install: brew install goreleaser" >&2
+          exit 1
+        fi
+        if [ -z "${GH_TOKEN:-}" ]; then
+          echo "ERROR: GH_TOKEN not set. Run: export GH_TOKEN=\$(gh auth token)" >&2
+          exit 1
+        fi
+        goreleaser release --clean

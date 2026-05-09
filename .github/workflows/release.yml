@@ -1,0 +1,34 @@
+# Tag-driven release workflow. Push a `vX.Y.Z` tag and goreleaser uploads
+# the cross-OS binaries to the GitHub release. The local fallback
+# (`task release:local`) shares .goreleaser.yaml and produces identical
+# artifacts. See RELEASING.md.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
