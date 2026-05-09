@@ -23,7 +23,8 @@ import (
 // loops. Values come from the caller's flag set; the engine treats them as
 // immutable for the lifetime of Run.
 type Globals struct {
-	Name       string
+	Emulator   string // "Claude", "Codex", etc. — vendor type prefix shown in the banner
+	Name       string // user-supplied session label (--name)
 	SessionID  string
 	Resumed    bool
 	Delay      time.Duration

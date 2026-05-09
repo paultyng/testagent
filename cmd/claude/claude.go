@@ -125,6 +125,7 @@ Bare invocation (testagent <flags>) defaults to this subcommand.`,
 			statusLine := loadedStatus(settings, mcpConfig, systemPrompt, addDirs)
 
 			g := engine.Globals{
+				Emulator:   "Claude",
 				Name:       name,
 				SessionID:  sid,
 				Resumed:    resume != "",

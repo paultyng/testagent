@@ -114,17 +114,30 @@ func newModel(g Globals, d Deps) model {
 
 // banner renders the rounded banner shown once at session start. Same shape
 // as the scanner-path banner so users see the same intro across both modes.
+// First line reads "<Emulator>: <Name>" — emulator type in the cool banner
+// hue, name in the warm session hue, so the type and the user-supplied label
+// are visually distinct.
 func banner(g Globals) string {
 	sessionLabel := "session"
 	if g.Resumed {
 		sessionLabel = "resumed"
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left,
-		render.SessionStyle.Render(g.Name),
+		bannerTitle(g.Emulator, g.Name),
 		render.BannerMetaStyle.Faint(true).Render(sessionLabel+" "+g.SessionID),
 		render.MuteStyle.Render("Type anything; /help for commands"),
 	)
 	return render.BannerStyle.Render(content)
+}
+
+// bannerTitle renders the "<Emulator>: <Name>" first line, dropping the
+// prefix if Emulator is empty (callers that don't set it get the prior
+// behavior).
+func bannerTitle(emulator, name string) string {
+	if emulator == "" {
+		return render.SessionStyle.Render(name)
+	}
+	return render.BannerMetaStyle.Render(emulator+": ") + render.SessionStyle.Render(name)
 }
 
 // Init seeds the initial command batch: spinner ticks (so it animates when

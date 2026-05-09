@@ -40,7 +40,7 @@ func runScanner(ctx context.Context, g Globals, d Deps, shutdown func(string)) {
 		sessionLabel = "resumed"
 	}
 	bannerContent := lipgloss.JoinVertical(lipgloss.Left,
-		render.SessionStyle.Render(g.Name),
+		bannerTitle(g.Emulator, g.Name),
 		render.BannerMetaStyle.Faint(true).Render(sessionLabel+" "+g.SessionID),
 		render.MuteStyle.Render("Type anything; /help for commands"),
 	)
