@@ -95,6 +95,7 @@ Bundled skills always land at `not relevant` — testagent has no model.
 |---------|---------|
 | `/fake-tool <name> <json-args>` | Renders a fake tool-use block; pair with `/fake-tool-result` to fire `PostToolUse` |
 | `/fake-tool-result <json-or-text>` | Completes a pending `/fake-tool`; fires `PostToolUse` hook |
+| `/link <url> [text]` | Renders an OSC 8 hyperlink (clickable in supporting terminals); text defaults to URL |
 | `/mcp-call <server.tool> <json-args>` | Calls a connected MCP tool; named to avoid `/mcp` collision |
 | `/panel <text>` | Renders text in a rounded-border box |
 | `/restart [clear\|compact]` | Fires `SessionEnd` then `SessionStart`; simulates `/clear` or `/compact` hook behavior |

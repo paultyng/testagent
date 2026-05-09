@@ -127,6 +127,8 @@ func (h *Handler) dispatchTo(ctx context.Context, line string, out io.Writer) Ou
 		return h.cmdThink(out, rest)
 	case "panel":
 		h.cmdPanel(out, rest)
+	case "link":
+		h.cmdLink(out, rest)
 	case "fake-tool":
 		h.cmdFakeTool(ctx, out, rest)
 	case "fake-tool-result":
@@ -160,6 +162,7 @@ func (h *Handler) cmdHelp(out io.Writer) {
 		{`/fake-tool <name> <json-args>`, "prints a fake tool-use block; pair with /fake-tool-result to fire PostToolUse"},
 		{`/fake-tool-result <json-or-text>`, "completes the pending /fake-tool and fires PostToolUse with the response"},
 		{"/help", "prints this list"},
+		{"/link <url> [text]", "prints an OSC 8 hyperlink (clickable in supporting terminals); text defaults to url"},
 		{`/mcp-call <server.tool> <json-args>`, "calls a connected MCP tool and prints its result"},
 		{"/panel <text>", "prints text in a rounded-border box"},
 		{"/restart [clear|compact]", "fires SessionEnd then SessionStart without leaving the process (default reason: clear)"},
@@ -247,6 +250,27 @@ func parseDurationPrefix(rest string) (time.Duration, string, bool) {
 // /panel <text> — rounded-border panel via lipgloss.
 func (h *Handler) cmdPanel(out io.Writer, text string) {
 	fmt.Fprintln(out, render.PanelStyle.Render(text))
+}
+
+// /link <url> [text] — OSC 8 hyperlink. The escape sequence is
+// `\x1b]8;;<URL>\x1b\\<TEXT>\x1b]8;;\x1b\\` (start, params-empty, URL,
+// ST, text, start, params-empty, ST). Most modern terminals (iTerm2,
+// Ghostty, WezTerm, Kitty, GNOME Terminal, modern xterm, VS Code's
+// integrated terminal) render the text as a clickable link. Terminals
+// that don't support OSC 8 just print the text. No hooks fire — this
+// is a pure UI primitive like /panel. Empty text falls back to the URL
+// itself, matching the convention used by `gh`, `git`, etc.
+func (h *Handler) cmdLink(out io.Writer, rest string) {
+	url, text := splitFirstWord(rest)
+	if url == "" {
+		fmt.Fprintln(out, "usage: /link <url> [text]")
+		return
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		text = url
+	}
+	fmt.Fprintf(out, "\x1b]8;;%s\x1b\\%s\x1b]8;;\x1b\\\n", url, text)
 }
 
 // /fake-tool <name> <json-args> — render the tool-use block and record the call

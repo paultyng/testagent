@@ -158,6 +158,7 @@ func TestE2E_SlashFlow(t *testing.T) {
 		`hi there`,                 // regular echo input → fires UserPromptSubmit + Stop
 		`/think 1ms quick thought`, // /think 1ms hello — fires UserPromptSubmit + Stop via prompt-passthrough
 		`/panel notable thing`,
+		`/link https://example.com clickable-link`,
 		`/fake-tool read_file {"path":"foo.go"}`,
 		`/fake-tool-result {"contents":"package foo"}`,
 		`/mcp-call fake.ping {}`,
@@ -187,14 +188,16 @@ func TestE2E_SlashFlow(t *testing.T) {
 
 	// Stdout assertions: each slash command produced its rendered output.
 	wantInStdout := []string{
-		"E2E",             // banner name
-		"hi there",        // echo path
-		"Thought for ",    // post-thinking marker stays in scrollback
-		"notable thing",   // /panel content
-		"read_file",       // /tool header
-		`"path":"foo.go"`, // /tool args
-		"package foo",     // /result body
-		"pong",            // /mcp result content from fake server
+		"E2E",                               // banner name
+		"hi there",                          // echo path
+		"Thought for ",                      // post-thinking marker stays in scrollback
+		"notable thing",                     // /panel content
+		"\x1b]8;;https://example.com\x1b\\", // /link OSC 8 start sequence
+		"clickable-link",                    // /link text
+		"read_file",                         // /tool header
+		`"path":"foo.go"`,                   // /tool args
+		"package foo",                       // /result body
+		"pong",                              // /mcp result content from fake server
 	}
 	out := string(stdout)
 	for _, want := range wantInStdout {
