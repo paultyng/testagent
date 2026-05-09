@@ -1,9 +1,8 @@
-// Bubbletea-driven interactive TUI. Replaces the bufio.Scanner blocking loop
-// when stdin is a TTY and --print is not set, so that input keystrokes are
-// accepted concurrently with the thinking spinner. Headless paths (--print
-// and piped stdin) keep using runScannerLoop in main.go.
+// Bubbletea-driven interactive TUI. Used when stdin is a TTY so input
+// keystrokes are accepted concurrently with the thinking spinner. Headless
+// paths (piped stdin) use runScanner instead.
 
-package main
+package engine
 
 import (
 	"context"
@@ -24,29 +23,10 @@ import (
 	"github.com/paultyng/testagent/internal/slash"
 )
 
-// tuiOptions bundles inputs runTUI needs from main().
-type tuiOptions struct {
-	name           string
-	sessionID      string
-	resumed        bool
-	cwd            string
-	transcriptPath string
-	permissionMode string
-	delay          time.Duration
-	exitAfter      int
-	autoExit       time.Duration
-	historyCap     int // 0 = unlimited
-	statusLine     string
-	settings       *Settings
-	mcpConfig      *MCPConfig
-	hooks          *hooks.Sender
-	mcp            *mcp.Client
-	slash          *slash.Handler
-}
-
 // model is the bubbletea Model driving the interactive session.
 type model struct {
-	opts tuiOptions
+	g Globals
+	d Deps
 
 	history []string // rendered scrollback
 	pending []string // queued prompts submitted while thinking
@@ -113,7 +93,7 @@ type cancelMsg struct{}
 
 // newModel builds the initial model. The textinput and spinner are
 // bubbles components; both honor m.width on each Update.
-func newModel(opts tuiOptions) model {
+func newModel(g Globals, d Deps) model {
 	ti := textinput.New()
 	ti.Placeholder = ""
 	ti.Prompt = render.Prompt()
@@ -125,7 +105,8 @@ func newModel(opts tuiOptions) model {
 	sp.Style = render.ThinkingStyle
 
 	return model{
-		opts:  opts,
+		g:     g,
+		d:     d,
 		input: ti,
 		spin:  sp,
 	}
@@ -133,14 +114,14 @@ func newModel(opts tuiOptions) model {
 
 // banner renders the rounded banner shown once at session start. Same shape
 // as the scanner-path banner so users see the same intro across both modes.
-func banner(opts tuiOptions) string {
+func banner(g Globals) string {
 	sessionLabel := "session"
-	if opts.resumed {
+	if g.Resumed {
 		sessionLabel = "resumed"
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left,
-		render.SessionStyle.Render(opts.name),
-		render.BannerMetaStyle.Faint(true).Render(sessionLabel+" "+opts.sessionID),
+		render.SessionStyle.Render(g.Name),
+		render.BannerMetaStyle.Faint(true).Render(sessionLabel+" "+g.SessionID),
 		render.MuteStyle.Render("Type anything; /help for commands"),
 	)
 	return render.BannerStyle.Render(content)
@@ -156,16 +137,16 @@ func banner(opts tuiOptions) string {
 // for the serialization caveat against concurrent user-driven hook cmds.
 func (m model) Init() tea.Cmd {
 	startSource := "startup"
-	if m.opts.resumed {
+	if m.g.Resumed {
 		startSource = "resume"
 	}
 	cmds := []tea.Cmd{
 		textinput.Blink,
 		m.spin.Tick,
-		cmdBoot(m.opts.mcp, m.opts.hooks, startSource),
+		cmdBoot(m.d.MCP, m.d.Hooks, startSource),
 	}
-	if m.opts.autoExit > 0 {
-		cmds = append(cmds, cmdAutoExit(m.opts.autoExit))
+	if m.g.AutoExit > 0 {
+		cmds = append(cmds, cmdAutoExit(m.g.AutoExit))
 	}
 	return tea.Batch(cmds...)
 }
@@ -176,9 +157,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Lazy banner injection — Init can't mutate state, so we do it once on
 	// the first Update tick.
 	if !m.bannerDone {
-		m.history = append(m.history, banner(m.opts))
-		if m.opts.statusLine != "" {
-			m.history = append(m.history, render.MuteStyle.Render("["+m.opts.statusLine+"]"))
+		m.history = append(m.history, banner(m.g))
+		if m.g.StatusLine != "" {
+			m.history = append(m.history, render.MuteStyle.Render("["+m.g.StatusLine+"]"))
 		}
 		m.bannerDone = true
 	}
@@ -231,7 +212,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			elapsed := time.Since(m.thinkStart).Truncate(time.Second)
 			m.appendHistoryCapped(render.ThoughtMarkerStyle.Render(fmt.Sprintf("Interrupted (after %s)", elapsed)))
 			// Fire OnStop with empty last-assistant-message and stop_hook_active=true.
-			cmds = append(cmds, cmdHookStop(m.opts.hooks, "", true))
+			cmds = append(cmds, cmdHookStop(m.d.Hooks, "", true))
 		}
 
 	case thinkingDoneMsg:
@@ -243,10 +224,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		elapsed := time.Since(m.thinkStart).Truncate(time.Second)
 		m.appendHistoryCapped(render.ThoughtMarkerStyle.Render(fmt.Sprintf("Thought for %s", elapsed)))
 		m.appendHistoryCapped(render.Echo(msg.name, msg.body))
-		cmds = append(cmds, cmdHookStop(m.opts.hooks, fmt.Sprintf("[%s] %s", msg.name, msg.body), false))
+		cmds = append(cmds, cmdHookStop(m.d.Hooks, fmt.Sprintf("[%s] %s", msg.name, msg.body), false))
 		m.count++
-		if m.opts.exitAfter > 0 && m.count >= m.opts.exitAfter {
-			m.appendHistoryCapped(render.MuteStyle.Render(fmt.Sprintf("[exit-after %d reached]", m.opts.exitAfter)))
+		if m.g.ExitAfter > 0 && m.count >= m.g.ExitAfter {
+			m.appendHistoryCapped(render.MuteStyle.Render(fmt.Sprintf("[exit-after %d reached]", m.g.ExitAfter)))
 			m.quitReason = "other"
 			return m, tea.Quit
 		}
@@ -276,7 +257,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// the ordering is sequential. tea.Batch would run them
 			// concurrently and lose the back-to-back contract on the wire.
 			// History/scrollback is not cleared — that's a future UI primitive.
-			cmds = append(cmds, cmdSlashRestart(m.opts.slash, m.opts.hooks, msg.outcome.RestartReason))
+			cmds = append(cmds, cmdSlashRestart(m.d.Slash, m.d.Hooks, msg.outcome.RestartReason))
 			break
 		}
 		// /think — run the message through the regular prompt path so hooks
@@ -304,7 +285,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case autoExitMsg:
-		m.appendHistoryCapped(render.MuteStyle.Render(fmt.Sprintf("[auto-exit after %s]", m.opts.autoExit)))
+		m.appendHistoryCapped(render.MuteStyle.Render(fmt.Sprintf("[auto-exit after %s]", m.g.AutoExit)))
 		m.quitReason = "other"
 		return m, tea.Quit
 
@@ -332,7 +313,7 @@ func (m *model) startTurn(line string) tea.Cmd {
 		// Slash dispatch. We render synchronously (most slash commands are
 		// near-instant; /stream sleeps a few hundred ms which is fine in the
 		// tea.Cmd goroutine).
-		return cmdSlashDispatch(m.opts.slash, line)
+		return cmdSlashDispatch(m.d.Slash, line)
 	}
 
 	return m.startPromptTurn(line, 0, false)
@@ -344,7 +325,7 @@ func (m *model) startTurn(line string) tea.Cmd {
 // distinguishes "no duration parsed → use default" from "explicit /think 0 …
 // → no thinking, immediate echo."
 func (m *model) startPromptTurn(line string, override time.Duration, hasOverride bool) tea.Cmd {
-	delay := m.opts.delay
+	delay := m.g.Delay
 	if hasOverride {
 		delay = override
 	}
@@ -356,8 +337,8 @@ func (m *model) startPromptTurn(line string, override time.Duration, hasOverride
 	tag := m.thinkTag
 
 	return tea.Batch(
-		cmdHookPrompt(m.opts.hooks, line, m.opts.name),
-		cmdThink(delay, tag, m.opts.name, line),
+		cmdHookPrompt(m.d.Hooks, line, m.g.Name),
+		cmdThink(delay, tag, m.g.Name, line),
 		m.spin.Tick,
 	)
 }
@@ -389,7 +370,7 @@ func (m model) View() string {
 // when the cap is exceeded. cap=0 disables eviction.
 func (m *model) appendHistoryCapped(line string) {
 	m.history = append(m.history, strings.TrimRight(line, "\n"))
-	limit := m.opts.historyCap
+	limit := m.g.HistoryCap
 	if limit <= 0 {
 		return
 	}
@@ -478,8 +459,8 @@ func cmdAutoExit(d time.Duration) tea.Cmd {
 // otherwise) so callers can pass it through to the SessionEnd hook. Caller
 // supplies quitCh — closing it forwards SIGINT/SIGTERM into p.Quit() once
 // without racing with the alt-screen teardown.
-func runTUI(ctx context.Context, opts tuiOptions, quitCh <-chan struct{}) (int, string) {
-	m := newModel(opts)
+func runTUI(ctx context.Context, g Globals, d Deps, quitCh <-chan struct{}) (int, string) {
+	m := newModel(g, d)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
 
 	if quitCh != nil {

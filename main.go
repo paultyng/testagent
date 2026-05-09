@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -12,19 +11,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
-	"unsafe"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/mattn/go-isatty"
-
+	"github.com/paultyng/testagent/internal/engine"
 	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/mcp"
-	"github.com/paultyng/testagent/internal/render"
 	"github.com/paultyng/testagent/internal/slash"
 )
 
@@ -48,23 +41,6 @@ type stringSlice []string
 
 func (s *stringSlice) String() string     { return strings.Join(*s, ",") }
 func (s *stringSlice) Set(v string) error { *s = append(*s, v); return nil }
-
-// scannerOptions bundles the inputs runScannerLoop needs from main().
-type scannerOptions struct {
-	name           string
-	sessionID      string
-	resumed        bool
-	cwd            string
-	transcriptPath string
-	permissionMode string
-	delay          time.Duration
-	exitAfter      int
-	autoExit       time.Duration
-	statusLine     string
-	hooks          *hooks.Sender
-	mcp            *mcp.Client
-	slash          *slash.Handler
-}
 
 func main() {
 	var (
@@ -130,17 +106,6 @@ func main() {
 	}
 	mcpClient := mcp.NewClient(mcpServers)
 	slashHandler := slash.New(30*time.Millisecond, hookSender, mcpClient, os.Stdout)
-	shutdown := func(reason string) {
-		// Flush any in-flight /fake-tool that never got a /fake-tool-result so its
-		// PostToolUse fires (with empty response) before SessionEnd.
-		slashHandler.FlushPendingTool(context.Background())
-		if err := hookSender.OnSessionEnd(context.Background(), reason); err != nil {
-			fmt.Fprintf(os.Stderr, "testagent: hook OnSessionEnd: %v\n", err)
-		}
-		if err := mcpClient.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "testagent: mcp Close: %v\n", err)
-		}
-	}
 
 	// Non-interactive mode (--print / -p): one-shot, exit when done.
 	if printMode {
@@ -161,232 +126,23 @@ func main() {
 	}
 
 	statusLine := loadedStatus(settings, mcpConfig, *systemPrompt, addDirs)
-	interactive := isatty.IsTerminal(os.Stdin.Fd())
 
-	if interactive {
-		// TUI path: bubbletea handles SIGWINCH (WindowSizeMsg) and rendering.
-		// Wire SIGINT/SIGTERM into a one-shot channel that runTUI forwards to
-		// the program's Quit().
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-		quitCh := make(chan struct{})
-		go func() {
-			<-sigCh
-			close(quitCh)
-		}()
-
-		code, reason := runTUI(context.Background(), tuiOptions{
-			name:           name,
-			sessionID:      sid,
-			resumed:        *resume != "",
-			cwd:            cwd,
-			transcriptPath: transcriptPath,
-			permissionMode: permissionMode,
-			delay:          *delay,
-			exitAfter:      *exitAfter,
-			autoExit:       *autoExit,
-			historyCap:     *historyCap,
-			statusLine:     statusLine,
-			settings:       settings,
-			mcpConfig:      mcpConfig,
-			hooks:          hookSender,
-			mcp:            mcpClient,
-			slash:          slashHandler,
-		}, quitCh)
-		if reason == "" {
-			reason = "other"
-		}
-		shutdown(reason)
-		os.Exit(code)
+	g := engine.Globals{
+		Name:       name,
+		SessionID:  sid,
+		Resumed:    *resume != "",
+		Delay:      *delay,
+		ExitAfter:  *exitAfter,
+		AutoExit:   *autoExit,
+		HistoryCap: *historyCap,
+		StatusLine: statusLine,
 	}
-
-	// Scanner path: piped stdin (e.g. e2e tests) — keeps the deterministic
-	// inline rendering that the e2e regex assertions rely on.
-	runScannerLoop(context.Background(), scannerOptions{
-		name:           name,
-		sessionID:      sid,
-		resumed:        *resume != "",
-		cwd:            cwd,
-		transcriptPath: transcriptPath,
-		permissionMode: permissionMode,
-		delay:          *delay,
-		exitAfter:      *exitAfter,
-		autoExit:       *autoExit,
-		statusLine:     statusLine,
-		hooks:          hookSender,
-		slash:          slashHandler,
-		mcp:            mcpClient,
-	}, shutdown)
-}
-
-// runScannerLoop is the original bufio.Scanner-driven interactive loop.
-// Used when stdin is not a TTY (piped input). The shutdown closure fires
-// SessionEnd + closes MCP and is invoked here on /exit, EOF, or signal.
-func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(string)) {
-	// Register signal handlers BEFORE any potentially-blocking I/O (banner
-	// render is fast, but MCP Connect can hang on an unreachable server).
-	// SIGINT/SIGTERM during connect must still trigger graceful shutdown.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-
-	// Handle SIGWINCH (terminal resize).
-	winchCh := make(chan os.Signal, 1)
-	signal.Notify(winchCh, syscall.SIGWINCH)
-
-	// Banner via lipgloss: rounded border auto-sizes to widest line and
-	// handles wide / multi-byte characters correctly. Tokens come from style.go.
-	sessionLabel := "session"
-	if opts.resumed {
-		sessionLabel = "resumed"
+	d := engine.Deps{
+		Hooks: hookSender,
+		MCP:   mcpClient,
+		Slash: slashHandler,
 	}
-	bannerContent := lipgloss.JoinVertical(lipgloss.Left,
-		render.SessionStyle.Render(opts.name),
-		render.BannerMetaStyle.Faint(true).Render(sessionLabel+" "+opts.sessionID),
-		render.MuteStyle.Render("Type anything; /help for commands"),
-	)
-	fmt.Println(render.BannerStyle.Render(bannerContent))
-
-	if opts.statusLine != "" {
-		fmt.Println(render.Lifecycle(opts.statusLine))
-	}
-
-	// Connect to MCP servers (best-effort; logged on failure, session continues).
-	if err := opts.mcp.Connect(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "testagent: mcp Connect: %v\n", err)
-	} else if tools := opts.mcp.Tools(); len(tools) > 0 {
-		fmt.Println(render.Lifecycle(fmt.Sprintf("mcp connected: %d tools", len(tools))))
-	}
-
-	// SessionStart fires after MCP is up so orchestrators see a complete boot
-	// state. source mirrors Claude Code's vocabulary: "resume" iff the caller
-	// passed --resume, "startup" otherwise.
-	startSource := "startup"
-	if opts.resumed {
-		startSource = "resume"
-	}
-	if err := opts.hooks.OnSessionStart(ctx, startSource); err != nil {
-		fmt.Fprintf(os.Stderr, "testagent: hook OnSessionStart: %v\n", err)
-	}
-
-	fmt.Print(render.Prompt())
-
-	// Auto-exit after a duration (for headless tests where no input is sent).
-	if opts.autoExit > 0 {
-		go func() {
-			time.Sleep(opts.autoExit)
-			fmt.Printf("\n%s\n", render.Lifecycle(fmt.Sprintf("auto-exit after %s", opts.autoExit)))
-			shutdown("other")
-			os.Exit(0)
-		}()
-	}
-
-	// Process resize events in background.
-	go func() {
-		for range winchCh {
-			rows, cols := getTermSize()
-			fmt.Printf("\n%s\n%s", render.Lifecycle(fmt.Sprintf("resized: %dx%d", cols, rows)), render.Prompt())
-		}
-	}()
-
-	slashHandler := opts.slash
-
-	scanner := bufio.NewScanner(os.Stdin)
-	count := 0
-	var lastAssistant string
-
-	for {
-		select {
-		case <-sigCh:
-			fmt.Printf("\n%s\n", render.ErrorStyle.Render("Goodbye!"))
-			shutdown("other")
-			os.Exit(0)
-		default:
-		}
-
-		if !scanner.Scan() {
-			break
-		}
-
-		input := strings.TrimSpace(scanner.Text())
-		if input == "" {
-			fmt.Print(render.Prompt())
-			continue
-		}
-
-		if input == "exit" || input == "quit" {
-			fmt.Println(render.ErrorStyle.Render("Goodbye!"))
-			shutdown("logout")
-			return
-		}
-
-		// Slash commands drive UI primitives (fake-tool blocks, panels, MCP
-		// calls, etc.) without going through the echo path. They don't fire
-		// OnPrompt — except /think, which signals via outcome.Prompt that it
-		// should run through the same prompt path as raw input.
-		promptLine := input
-		thinkDur := opts.delay
-		if outcome := slashHandler.Dispatch(ctx, input); outcome.Handled {
-			if outcome.Exit {
-				shutdown(outcome.Reason)
-				os.Exit(outcome.ExitCode)
-			}
-			if outcome.Restart {
-				// Simulate a Claude /clear or /compact reset on the wire:
-				// flush any pending /fake-tool so its PostToolUse fires
-				// before SessionEnd (same invariant the shutdown closure
-				// documents), then SessionEnd then SessionStart with the
-				// same matcher value. The process keeps running — no
-				// scrollback wipe (that's a future UI feature; this PR is
-				// hook-shape only).
-				slashHandler.FlushPendingTool(ctx)
-				if err := opts.hooks.OnSessionEnd(ctx, outcome.RestartReason); err != nil {
-					fmt.Fprintf(os.Stderr, "testagent: hook OnSessionEnd: %v\n", err)
-				}
-				if err := opts.hooks.OnSessionStart(ctx, outcome.RestartReason); err != nil {
-					fmt.Fprintf(os.Stderr, "testagent: hook OnSessionStart: %v\n", err)
-				}
-				fmt.Printf("\033[32m>\033[0m ")
-				continue
-			}
-			if outcome.Prompt == "" && !outcome.HasThinkDuration {
-				// Pure slash side-effect (panel, fake-tool, mcp-call, etc.).
-				fmt.Print(render.Prompt())
-				continue
-			}
-			// /think — route the message through the regular prompt path.
-			promptLine = outcome.Prompt
-			if outcome.HasThinkDuration {
-				thinkDur = outcome.ThinkDuration
-			}
-		}
-
-		if err := opts.hooks.OnPrompt(ctx, promptLine, opts.name); err != nil {
-			fmt.Fprintf(os.Stderr, "testagent: hook OnPrompt: %v\n", err)
-		}
-
-		count++
-
-		// Simulate thinking with a spinner + elapsed-seconds counter
-		// (matches the visual shape of real Claude's "thinking…" state).
-		showThinking(os.Stdout, thinkDur)
-
-		// Echo response with color.
-		fmt.Println(render.Echo(opts.name, promptLine))
-		fmt.Print(render.Prompt())
-		lastAssistant = fmt.Sprintf("[%s] %s", opts.name, promptLine)
-
-		if err := opts.hooks.OnStop(ctx, lastAssistant, false); err != nil {
-			fmt.Fprintf(os.Stderr, "testagent: hook OnStop: %v\n", err)
-		}
-
-		if opts.exitAfter > 0 && count >= opts.exitAfter {
-			fmt.Printf("\n%s\n", render.Lifecycle(fmt.Sprintf("exit-after %d reached", opts.exitAfter)))
-			shutdown("other")
-			return
-		}
-	}
-
-	shutdown("other")
+	os.Exit(engine.Run(context.Background(), g, d))
 }
 
 // newSessionID generates a UUID-v4-shaped session identifier.
@@ -462,73 +218,4 @@ func loadedStatus(s *Settings, m *MCPConfig, systemPrompt string, addDirs []stri
 		parts = append(parts, fmt.Sprintf("dirs: %d", len(addDirs)))
 	}
 	return strings.Join(parts, " | ")
-}
-
-// showThinking renders an inline spinner + elapsed-seconds counter for the
-// duration of total. The spinner sits on its own line; the cursor rests on
-// the line below it, so any output that follows starts cleanly underneath.
-// On return the spinner line is cleared and the cursor is at the start of
-// that (now-empty) line, ready for the next output. For very short delays
-// (< 200ms) it simply sleeps — the animation would be invisible.
-// showThinking runs the live "Thinking… (Ns)" spinner for total. On
-// completion the spinner row is replaced with a static "Thought for Ns"
-// marker (dim italic) that stays in scrollback above whatever the caller
-// prints next. total <= 0 returns immediately without animation or marker.
-func showThinking(out io.Writer, total time.Duration) {
-	if total <= 0 {
-		return
-	}
-	start := time.Now()
-
-	if total >= 200*time.Millisecond {
-		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-		deadline := start.Add(total)
-		const tick = 100 * time.Millisecond
-
-		// Print a blank line first so we have a row to repaint and a row below
-		// it where the cursor can rest.
-		fmt.Fprintln(out)
-
-		for i := 0; ; i++ {
-			elapsed := time.Since(start).Truncate(time.Second)
-			// \033[1A moves cursor up to the spinner row; \033[2K clears it.
-			// Style content via the mute token, then newline so the cursor
-			// returns to the row below.
-			// "Thinking…" wears the warm thinking token; the parenthetical
-			// timer + interrupt hint stays mute so it doesn't compete.
-			fmt.Fprintf(out, "\033[1A\033[2K%s%s\n",
-				render.Thinking(fmt.Sprintf("%s Thinking…", frames[i%len(frames)])),
-				render.MuteStyle.Render(fmt.Sprintf(" (%s · esc to interrupt)", elapsed)))
-			remaining := time.Until(deadline)
-			if remaining <= 0 {
-				break
-			}
-			if remaining < tick {
-				time.Sleep(remaining)
-				break
-			}
-			time.Sleep(tick)
-		}
-		// Replace the spinner row with the static "Thought for Ns" marker.
-		// Cursor ends on the row below, ready for the caller's echo.
-		elapsed := time.Since(start).Truncate(time.Second)
-		fmt.Fprintf(out, "\033[1A\033[2K%s\n", render.ThoughtMarker(fmt.Sprintf("Thought for %s", elapsed)))
-		return
-	}
-
-	// Sub-200ms: skip the animation but still emit the marker so consumers
-	// see a consistent shape regardless of how short the thinking phase was.
-	time.Sleep(total)
-	elapsed := time.Since(start).Truncate(time.Second)
-	fmt.Fprintln(out, render.ThoughtMarker(fmt.Sprintf("Thought for %s", elapsed)))
-}
-
-func getTermSize() (rows, cols int) {
-	type winsize struct {
-		Row, Col, Xpixel, Ypixel uint16
-	}
-	var ws winsize
-	_, _, _ = syscall.Syscall(syscall.SYS_IOCTL, uintptr(syscall.Stdout),
-		uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws)))
-	return int(ws.Row), int(ws.Col)
 }
