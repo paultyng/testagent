@@ -103,7 +103,7 @@ Bare invocation (testagent <flags>) defaults to this subcommand.`,
 
 			// Non-interactive mode (--print / -p): one-shot, exit when done.
 			if printMode {
-				ctx := context.Background()
+				ctx := ctxOrBackground(cmd)
 				if err := mcpClient.Connect(ctx); err != nil {
 					fmt.Fprintf(os.Stderr, "testagent: mcp Connect: %v\n", err)
 				}
@@ -116,7 +116,10 @@ Bare invocation (testagent <flags>) defaults to this subcommand.`,
 					hooks:        hookSender,
 					mcp:          mcpClient,
 				}, os.Stdin, os.Stdout)
-				os.Exit(code)
+				if code != 0 {
+					return &ExitError{Code: code}
+				}
+				return nil
 			}
 
 			statusLine := loadedStatus(settings, mcpConfig, systemPrompt, addDirs)
@@ -136,8 +139,10 @@ Bare invocation (testagent <flags>) defaults to this subcommand.`,
 				MCP:   mcpClient,
 				Slash: slashHandler,
 			}
-			os.Exit(engine.Run(ctxOrBackground(cmd), g, d))
-			return nil // unreachable
+			if code := engine.Run(ctxOrBackground(cmd), g, d); code != 0 {
+				return &ExitError{Code: code}
+			}
+			return nil
 		},
 	}
 
