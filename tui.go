@@ -315,29 +315,24 @@ func (m *model) startTurn(line string) tea.Cmd {
 // produces the full intended frame each tick.
 func (m model) View() string {
 	var b strings.Builder
-	for i, line := range m.history {
+	for _, line := range m.history {
 		b.WriteString(line)
-		if i < len(m.history)-1 || m.thinking {
-			b.WriteString("\n")
-		}
+		b.WriteString("\n")
 	}
 	if m.thinking {
 		elapsed := time.Since(m.thinkStart).Truncate(time.Second)
 		b.WriteString(tuiStyleSpin.Render(fmt.Sprintf("%s thinking… (%s · esc to interrupt)", m.spin.View(), elapsed)))
 		b.WriteString("\n")
 	}
-	if len(m.history) > 0 || m.thinking {
-		b.WriteString(m.input.View())
-	} else {
-		b.WriteString(m.input.View())
-	}
+	b.WriteString(m.input.View())
 	return b.String()
 }
 
-// appendHistoryCapped appends a line and evicts oldest entries if the cap is
-// exceeded. cap=0 disables eviction.
+// appendHistoryCapped appends a line (with any trailing newlines stripped so
+// View can add its own separator deterministically) and evicts oldest entries
+// when the cap is exceeded. cap=0 disables eviction.
 func (m *model) appendHistoryCapped(line string) {
-	m.history = append(m.history, line)
+	m.history = append(m.history, strings.TrimRight(line, "\n"))
 	limit := m.opts.historyCap
 	if limit <= 0 {
 		return
@@ -397,16 +392,15 @@ func cmdAutoExit(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return autoExitMsg{} })
 }
 
-// runTUI runs the bubbletea program and returns the exit code. Wires
-// SIGINT/SIGTERM into a goroutine that calls p.Quit() so signals reach the
-// model the same way as a Ctrl+C key event.
-func runTUI(ctx context.Context, opts tuiOptions, quitCh <-chan struct{}) int {
+// runTUI runs the bubbletea program and returns (exit code, shutdown reason).
+// The reason mirrors the model's quitReason ("logout" for /exit, "other"
+// otherwise) so callers can pass it through to the SessionEnd hook. Caller
+// supplies quitCh — closing it forwards SIGINT/SIGTERM into p.Quit() once
+// without racing with the alt-screen teardown.
+func runTUI(ctx context.Context, opts tuiOptions, quitCh <-chan struct{}) (int, string) {
 	m := newModel(opts)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
 
-	// Forward SIGINT/SIGTERM into the program. The signal handler in main
-	// closes quitCh; that lets us call p.Quit() once without racing with
-	// the alt-screen teardown.
 	if quitCh != nil {
 		go func() {
 			<-quitCh
@@ -417,12 +411,10 @@ func runTUI(ctx context.Context, opts tuiOptions, quitCh <-chan struct{}) int {
 	finalModel, err := p.Run()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "testagent: tui: %v\n", err)
-		return 1
+		return 1, "other"
 	}
 	if fm, ok := finalModel.(model); ok {
-		if fm.quitCode != 0 {
-			return fm.quitCode
-		}
+		return fm.quitCode, fm.quitReason
 	}
-	return 0
+	return 0, "other"
 }

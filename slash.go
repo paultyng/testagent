@@ -3,7 +3,7 @@
 // During an interactive session, lines starting with "/" are interpreted as
 // directives that synthesize specific UI elements (streamed text, tool-use
 // blocks, panels, markdown, MCP calls) instead of going through the default
-// echo path. Same engine drives non-slash input in phase 2f's renderer.
+// echo path.
 
 package main
 
@@ -74,22 +74,24 @@ type SlashOutcome struct {
 
 // DispatchString is the TUI-friendly entry point. It captures all rendered
 // output as a string (so the model can append it to history) and returns it
-// alongside the control-flow outcome. h.out is temporarily redirected to an
-// internal buffer for the duration of the call. Errors that Dispatch writes
-// to stderr today still go to stderr — the TUI can layer its own treatment
-// on top if needed.
+// alongside the control-flow outcome. Concurrent-safe: each call writes to
+// its own buffer, so multiple in-flight goroutines never interfere.
 func (h *SlashHandler) DispatchString(ctx context.Context, line string) (string, SlashOutcome) {
 	var buf bytes.Buffer
-	prev := h.out
-	h.out = &buf
-	defer func() { h.out = prev }()
-	outcome := h.Dispatch(ctx, line)
+	outcome := h.dispatchTo(ctx, line, &buf)
 	return buf.String(), outcome
 }
 
-// Dispatch parses and runs a single line. If line doesn't start with "/",
-// returns Handled=false. All rendering goes to h.out; errors go to stderr.
+// Dispatch parses and runs a single line, writing rendered output to h.out.
+// If line doesn't start with "/", returns Handled=false. Errors go to stderr.
 func (h *SlashHandler) Dispatch(ctx context.Context, line string) SlashOutcome {
+	return h.dispatchTo(ctx, line, h.out)
+}
+
+// dispatchTo is the shared dispatch core. All cmd* methods write to the
+// passed-in writer rather than h.out so callers can safely run concurrent
+// dispatches without sharing per-handler state.
+func (h *SlashHandler) dispatchTo(ctx context.Context, line string, out io.Writer) SlashOutcome {
 	line = strings.TrimSpace(line)
 	if !strings.HasPrefix(line, "/") {
 		return SlashOutcome{}
@@ -99,21 +101,21 @@ func (h *SlashHandler) Dispatch(ctx context.Context, line string) SlashOutcome {
 
 	switch cmd {
 	case "help", "?":
-		h.cmdHelp()
+		h.cmdHelp(out)
 	case "stream":
-		h.cmdStream(rest)
+		h.cmdStream(out, rest)
 	case "think":
-		h.cmdThink(rest)
+		h.cmdThink(out, rest)
 	case "md":
-		h.cmdMarkdown(rest)
+		h.cmdMarkdown(out, rest)
 	case "panel":
-		h.cmdPanel(rest)
+		h.cmdPanel(out, rest)
 	case "tool":
-		h.cmdTool(ctx, rest)
+		h.cmdTool(ctx, out, rest)
 	case "result":
-		h.cmdResult(rest)
+		h.cmdResult(out, rest)
 	case "mcp":
-		h.cmdMCP(ctx, rest)
+		h.cmdMCP(ctx, out, rest)
 	case "exit":
 		code := 0
 		if rest != "" {
@@ -129,9 +131,9 @@ func (h *SlashHandler) Dispatch(ctx context.Context, line string) SlashOutcome {
 }
 
 // /help — list slash commands with their argument signatures.
-func (h *SlashHandler) cmdHelp() {
+func (h *SlashHandler) cmdHelp(out io.Writer) {
 	header := styleToolHeader.Render("slash commands")
-	fmt.Fprintln(h.out, header)
+	fmt.Fprintln(out, header)
 	for _, line := range []struct {
 		usage, doc string
 	}{
@@ -145,59 +147,59 @@ func (h *SlashHandler) cmdHelp() {
 		{"/think <text>", "dim italic 'thinking' trace"},
 		{`/tool <name> <json-args>`, "tool-use block + fires PostToolUse hook"},
 	} {
-		fmt.Fprintf(h.out, "  %-40s %s\n",
+		fmt.Fprintf(out, "  %-40s %s\n",
 			styleToolArgs.Render(line.usage),
 			styleResultBody.Render(line.doc))
 	}
-	fmt.Fprintln(h.out, styleResultBody.Render("input not starting with / is echoed back."))
+	fmt.Fprintln(out, styleResultBody.Render("input not starting with / is echoed back."))
 }
 
 // /stream <text> — token-paced streaming text.
-func (h *SlashHandler) cmdStream(text string) {
+func (h *SlashHandler) cmdStream(out io.Writer, text string) {
 	if text == "" {
-		fmt.Fprintln(h.out)
+		fmt.Fprintln(out)
 		return
 	}
 	tokens := strings.Fields(text)
 	for i, t := range tokens {
 		if i > 0 {
-			fmt.Fprint(h.out, " ")
+			fmt.Fprint(out, " ")
 		}
-		fmt.Fprint(h.out, t)
+		fmt.Fprint(out, t)
 		if h.streamDelay > 0 {
 			time.Sleep(h.streamDelay)
 		}
 	}
-	fmt.Fprintln(h.out)
+	fmt.Fprintln(out)
 }
 
 // /think <text> — dim italic "thinking" trace, not part of the visible response.
-func (h *SlashHandler) cmdThink(text string) {
+func (h *SlashHandler) cmdThink(out io.Writer, text string) {
 	if text == "" {
 		return
 	}
-	fmt.Fprintln(h.out, styleThink.Render(text))
+	fmt.Fprintln(out, styleThink.Render(text))
 }
 
 // /md <markdown> — render via glamour (auto-detects terminal capabilities).
 // Falls back to plain text on render failure.
-func (h *SlashHandler) cmdMarkdown(md string) {
+func (h *SlashHandler) cmdMarkdown(out io.Writer, md string) {
 	rendered, err := glamour.Render(md, "auto")
 	if err != nil {
-		fmt.Fprintln(h.out, md)
+		fmt.Fprintln(out, md)
 		return
 	}
-	fmt.Fprint(h.out, rendered)
+	fmt.Fprint(out, rendered)
 }
 
 // /panel <text> — rounded-border panel via lipgloss.
-func (h *SlashHandler) cmdPanel(text string) {
-	fmt.Fprintln(h.out, stylePanel.Render(text))
+func (h *SlashHandler) cmdPanel(out io.Writer, text string) {
+	fmt.Fprintln(out, stylePanel.Render(text))
 }
 
 // /tool <name> <json-args> — tool-use block (header + indented args) and
 // fires the PostToolUse hook. The block prints; the matching /result completes it.
-func (h *SlashHandler) cmdTool(ctx context.Context, rest string) {
+func (h *SlashHandler) cmdTool(ctx context.Context, out io.Writer, rest string) {
 	name, jsonArgs := splitFirstWord(rest)
 	if name == "" {
 		fmt.Fprintln(os.Stderr, "testagent: /tool requires a tool name")
@@ -205,7 +207,7 @@ func (h *SlashHandler) cmdTool(ctx context.Context, rest string) {
 	}
 	args := parseJSONOr(jsonArgs, map[string]any{})
 	prettyArgs, _ := json.Marshal(args)
-	fmt.Fprintf(h.out, "%s %s\n",
+	fmt.Fprintf(out, "%s %s\n",
 		styleToolHeader.Render("▶ "+name),
 		styleToolArgs.Render(string(prettyArgs)))
 
@@ -217,24 +219,24 @@ func (h *SlashHandler) cmdTool(ctx context.Context, rest string) {
 
 // /result <json-or-text> — render the matching tool result with a checkmark.
 // JSON is pretty-printed; raw text passes through.
-func (h *SlashHandler) cmdResult(rest string) {
+func (h *SlashHandler) cmdResult(out io.Writer, rest string) {
 	mark := styleResultMark.Render("✓")
 	if rest == "" {
-		fmt.Fprintf(h.out, "%s %s\n", mark, styleResultBody.Render("(empty result)"))
+		fmt.Fprintf(out, "%s %s\n", mark, styleResultBody.Render("(empty result)"))
 		return
 	}
 	var parsed any
 	if err := json.Unmarshal([]byte(rest), &parsed); err == nil {
 		pretty, _ := json.MarshalIndent(parsed, "  ", "  ")
-		fmt.Fprintf(h.out, "%s\n  %s\n", mark, styleResultBody.Render(string(pretty)))
+		fmt.Fprintf(out, "%s\n  %s\n", mark, styleResultBody.Render(string(pretty)))
 		return
 	}
-	fmt.Fprintf(h.out, "%s %s\n", mark, rest)
+	fmt.Fprintf(out, "%s %s\n", mark, rest)
 }
 
 // /mcp <qualified-tool> <json-args> — invoke a real connected MCP tool.
 // qualified-tool is "<server>.<tool>".
-func (h *SlashHandler) cmdMCP(ctx context.Context, rest string) {
+func (h *SlashHandler) cmdMCP(ctx context.Context, out io.Writer, rest string) {
 	qualified, jsonArgs := splitFirstWord(rest)
 	if qualified == "" || !strings.Contains(qualified, ".") {
 		fmt.Fprintln(os.Stderr, "testagent: /mcp requires <server>.<tool> as first arg")
@@ -242,19 +244,19 @@ func (h *SlashHandler) cmdMCP(ctx context.Context, rest string) {
 	}
 	args := parseJSONOr(jsonArgs, map[string]any{})
 
-	fmt.Fprintf(h.out, "%s %s\n",
+	fmt.Fprintf(out, "%s %s\n",
 		styleToolHeader.Render("▶ mcp:"+qualified),
 		styleToolArgs.Render(jsonArgs))
 
 	res, err := h.mcp.Call(ctx, qualified, args)
 	if err != nil {
-		fmt.Fprintf(h.out, "%s %v\n", styleErr.Render("✗ mcp error:"), err)
+		fmt.Fprintf(out, "%s %v\n", styleErr.Render("✗ mcp error:"), err)
 		return
 	}
 	mark := styleResultMark.Render("✓")
 	for _, c := range res.Content {
 		if c.Type == "text" {
-			fmt.Fprintf(h.out, "%s %s\n", mark, c.Text)
+			fmt.Fprintf(out, "%s %s\n", mark, c.Text)
 		} else {
 			fmt.Fprintf(h.out, "%s %s\n", mark, styleResultBody.Render("("+c.Type+" content)"))
 		}

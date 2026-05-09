@@ -180,7 +180,7 @@ func main() {
 			out:            os.Stdout,
 		}
 
-		code := runTUI(context.Background(), tuiOptions{
+		code, reason := runTUI(context.Background(), tuiOptions{
 			name:           name,
 			sessionID:      sid,
 			resumed:        *resume != "",
@@ -198,7 +198,10 @@ func main() {
 			mcp:            mcpClient,
 			slash:          slash,
 		}, quitCh)
-		shutdown("other")
+		if reason == "" {
+			reason = "other"
+		}
+		shutdown(reason)
 		os.Exit(code)
 	}
 
@@ -224,6 +227,16 @@ func main() {
 // Used when stdin is not a TTY (piped input). The shutdown closure fires
 // SessionEnd + closes MCP and is invoked here on /exit, EOF, or signal.
 func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(string)) {
+	// Register signal handlers BEFORE any potentially-blocking I/O (banner
+	// render is fast, but MCP Connect can hang on an unreachable server).
+	// SIGINT/SIGTERM during connect must still trigger graceful shutdown.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+
+	// Handle SIGWINCH (terminal resize).
+	winchCh := make(chan os.Signal, 1)
+	signal.Notify(winchCh, syscall.SIGWINCH)
+
 	// Banner via lipgloss: rounded border auto-sizes to widest line and
 	// handles wide / multi-byte characters correctly.
 	sessionLabel := "session"
@@ -251,14 +264,6 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 	} else if tools := opts.mcp.Tools(); len(tools) > 0 {
 		fmt.Printf("\033[2m[mcp connected: %d tools]\033[0m\n", len(tools))
 	}
-
-	// Handle SIGTERM gracefully.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-
-	// Handle SIGWINCH (terminal resize).
-	winchCh := make(chan os.Signal, 1)
-	signal.Notify(winchCh, syscall.SIGWINCH)
 
 	fmt.Printf("\033[32m>\033[0m ")
 
