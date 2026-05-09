@@ -28,7 +28,7 @@ type RootFlags struct {
 	Verbose     bool
 	AutoExit    time.Duration
 	ExitAfter   int
-	Delay       time.Duration
+	ThinkDelay  time.Duration
 	StreamDelay time.Duration
 }
 
@@ -130,7 +130,7 @@ Bare invocation (testagent <flags>) defaults to this subcommand.`,
 				Name:        name,
 				SessionID:   sid,
 				Resumed:     resume != "",
-				Delay:       rf.Delay,
+				ThinkDelay:  rf.ThinkDelay,
 				StreamDelay: rf.StreamDelay,
 				ExitAfter:   rf.ExitAfter,
 				AutoExit:    rf.AutoExit,

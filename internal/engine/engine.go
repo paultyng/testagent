@@ -27,7 +27,7 @@ type Globals struct {
 	Name        string        // user-supplied session label (--name)
 	SessionID   string
 	Resumed     bool
-	Delay       time.Duration // default thinking-spinner duration per turn
+	ThinkDelay  time.Duration // default thinking-spinner duration per turn
 	StreamDelay time.Duration // default per-token interval for the response stream
 	ExitAfter   int
 	AutoExit    time.Duration

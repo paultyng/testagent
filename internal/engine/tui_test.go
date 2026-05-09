@@ -21,7 +21,7 @@ import (
 // testOpts is the optional override bag for newTestModel.
 type testOpts struct {
 	Name       string
-	Delay      time.Duration
+	ThinkDelay time.Duration
 	HistoryCap int
 	Hooks      *hooks.Sender
 	MCP        *mcp.Client
@@ -33,7 +33,7 @@ func newTestModel(opt *testOpts) model {
 	g := Globals{
 		Name:       "Test",
 		SessionID:  "sid-test",
-		Delay:      10 * time.Millisecond,
+		ThinkDelay: 10 * time.Millisecond,
 		HistoryCap: 1000,
 	}
 	d := Deps{
@@ -44,8 +44,8 @@ func newTestModel(opt *testOpts) model {
 		if opt.Name != "" {
 			g.Name = opt.Name
 		}
-		if opt.Delay != 0 {
-			g.Delay = opt.Delay
+		if opt.ThinkDelay != 0 {
+			g.ThinkDelay = opt.ThinkDelay
 		}
 		if opt.HistoryCap != 0 {
 			g.HistoryCap = opt.HistoryCap

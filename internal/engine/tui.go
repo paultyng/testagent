@@ -436,7 +436,7 @@ func (m *model) startPromptTurn(
 	thinkOverride time.Duration, hasThinkOverride bool,
 	streamOverride time.Duration, hasStreamOverride bool,
 ) tea.Cmd {
-	thinkDur := m.g.Delay
+	thinkDur := m.g.ThinkDelay
 	if hasThinkOverride {
 		thinkDur = thinkOverride
 	}

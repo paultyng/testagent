@@ -123,7 +123,7 @@ func runScanner(ctx context.Context, g Globals, d Deps, shutdown func(string)) {
 		// that the message should run through the same prompt path as raw
 		// input.
 		promptLine := input
-		thinkDur := g.Delay
+		thinkDur := g.ThinkDelay
 		streamDur := g.StreamDelay
 		if outcome := d.Slash.Dispatch(ctx, input); outcome.Handled {
 			if outcome.Exit {

@@ -27,7 +27,8 @@ testagent claude --session-id sid-x --settings ./s.json   # same thing, explicit
 
 - `--history-cap N` — interactive scrollback cap (default 1000; 0 = unlimited)
 - `--verbose` / `-v` — log every hook POST to stderr (`hook <event> POST <url> <status> <elapsed> <bodysize> [err=...]`)
-- `--auto-exit DUR`, `--exit-after N`, `--delay DUR` — pacing knobs for headless tests
+- `--think-delay DUR`, `--stream-delay DUR` — default thinking-spinner duration (2s) and per-token stream interval (30ms); overridable per-turn via `/think` and `/stream`
+- `--auto-exit DUR`, `--exit-after N` — pacing knobs for headless tests
 
 **Claude subcommand flags** (argv-compatible with Claude Code):
 

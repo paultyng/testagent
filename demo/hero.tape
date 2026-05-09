@@ -16,7 +16,7 @@ Env COLORTERM "truecolor"
 Env TERM "xterm-256color"
 
 # Type the launch command quickly — uuid is the long part, so blast it.
-Type@15ms "testagent claude -n 'Demo' --delay 5s --session-id 3ebe43d4-9ab2-4842-b3cd-237fce2ba36f"
+Type@15ms "testagent claude -n 'Demo' --think-delay 5s --session-id 3ebe43d4-9ab2-4842-b3cd-237fce2ba36f"
 Enter
 Sleep 1s
 
