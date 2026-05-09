@@ -258,7 +258,7 @@ func (h *SlashHandler) cmdMCP(ctx context.Context, out io.Writer, rest string) {
 		if c.Type == "text" {
 			fmt.Fprintf(out, "%s %s\n", mark, c.Text)
 		} else {
-			fmt.Fprintf(h.out, "%s %s\n", mark, styleResultBody.Render("("+c.Type+" content)"))
+			fmt.Fprintf(out, "%s %s\n", mark, styleResultBody.Render("("+c.Type+" content)"))
 		}
 	}
 }
