@@ -171,6 +171,7 @@ func TestSlash_Help_Format(t *testing.T) {
 	wantPhrases := []string{
 		"/think <duration>",        // duration-required /think advertised
 		"/stream <duration>",       // duration-required /stream advertised
+		"/link <url>",              // OSC 8 link helper advertised
 		"/fake-tool ",              // renamed from /tool
 		"/fake-tool-result ",       // renamed from /result
 		"/mcp-call ",               // renamed from /mcp to avoid collision with real Claude's /mcp
@@ -203,6 +204,64 @@ func TestSlash_Panel(t *testing.T) {
 	}
 	if !strings.Contains(s, "a panel message") {
 		t.Errorf("panel missing content")
+	}
+}
+
+// TestSlash_Link asserts /link emits the OSC 8 byte shape with URL +
+// text, falls back to URL when text is omitted, and writes a usage line
+// when URL is missing. Closes #24.
+func TestSlash_Link(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		line      string
+		wantSubs  []string
+		wantNoHit []string
+	}{
+		{
+			name:     "url + text",
+			line:     "/link https://example.com see-here",
+			wantSubs: []string{"\x1b]8;;https://example.com\x1b\\see-here\x1b]8;;\x1b\\"},
+		},
+		{
+			name:     "url only — text falls back to url",
+			line:     "/link https://example.com",
+			wantSubs: []string{"\x1b]8;;https://example.com\x1b\\https://example.com\x1b]8;;\x1b\\"},
+		},
+		{
+			name:     "multi-word text preserves spaces",
+			line:     "/link https://example.com click here please",
+			wantSubs: []string{"\x1b]8;;https://example.com\x1b\\click here please\x1b]8;;\x1b\\"},
+		},
+		{
+			name:      "missing url — usage line",
+			line:      "/link",
+			wantSubs:  []string{"usage: /link"},
+			wantNoHit: []string{"\x1b]8"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := &bytes.Buffer{}
+			h := newTestHandler(out)
+			outcome := h.Dispatch(context.Background(), tc.line)
+			if !outcome.Handled {
+				t.Errorf("Handled = false, want true")
+			}
+			s := out.String()
+			for _, sub := range tc.wantSubs {
+				if !strings.Contains(s, sub) {
+					t.Errorf("output missing %q\n--- output ---\n%q", sub, s)
+				}
+			}
+			for _, sub := range tc.wantNoHit {
+				if strings.Contains(s, sub) {
+					t.Errorf("output unexpectedly contains %q\n--- output ---\n%q", sub, s)
+				}
+			}
+		})
 	}
 }
 
