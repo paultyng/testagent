@@ -8,6 +8,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -69,6 +70,21 @@ type SlashOutcome struct {
 	Exit     bool // session should end (only set by /exit)
 	ExitCode int  // exit status when Exit is true
 	Reason   string
+}
+
+// DispatchString is the TUI-friendly entry point. It captures all rendered
+// output as a string (so the model can append it to history) and returns it
+// alongside the control-flow outcome. h.out is temporarily redirected to an
+// internal buffer for the duration of the call. Errors that Dispatch writes
+// to stderr today still go to stderr — the TUI can layer its own treatment
+// on top if needed.
+func (h *SlashHandler) DispatchString(ctx context.Context, line string) (string, SlashOutcome) {
+	var buf bytes.Buffer
+	prev := h.out
+	h.out = &buf
+	defer func() { h.out = prev }()
+	outcome := h.Dispatch(ctx, line)
+	return buf.String(), outcome
 }
 
 // Dispatch parses and runs a single line. If line doesn't start with "/",

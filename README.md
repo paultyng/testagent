@@ -25,6 +25,7 @@ Argv-compatible with Claude Code's flag surface:
 - `--output-format text|json|stream-json` — output shape for `--print`
 - `-n` / `--name` — banner label
 - `--delay`, `--auto-exit`, `--exit-after` — pacing knobs for headless tests
+- `--history-cap N` — interactive scrollback cap (default 1000; 0 = unlimited)
 
 In interactive mode, lines starting with `/` are slash commands that synthesize specific UI primitives. Type `/help` for the list:
 
@@ -38,6 +39,17 @@ In interactive mode, lines starting with `/` are slash commands that synthesize 
 - `/tool <name> <json-args>`
 
 Anything else is echoed back, just like the original PTY-echo behavior.
+
+## Interactive mode
+
+When stdin is a TTY, testagent runs a [bubbletea](https://github.com/charmbracelet/bubbletea) TUI in the alternate screen:
+
+- Keystrokes are accepted concurrently with the thinking spinner. You can type the next prompt (or a slash command) while the agent is "thinking" — submitted lines queue and run in order once the current turn completes.
+- Press **Esc** to cancel the in-flight thinking turn. A `[cancelled]` line is rendered, the `Stop` hook fires with `stop_hook_active=true` and an empty `last_assistant_message`, and queued prompts continue (use Esc, then `/exit`, to bail out mid-turn).
+- **Ctrl+C** quits immediately.
+- Scrollback is capped at `--history-cap` lines (default 1000; oldest dropped first).
+
+When stdin is **not** a TTY (piped input, `--print`), testagent falls back to a line-scanner loop with inline rendering — that's the path the e2e tests exercise.
 
 ## Hooks
 

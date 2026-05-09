@@ -20,6 +20,7 @@ import (
 	"unsafe"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-isatty"
 )
 
 // Settings mirrors Claude Code's settings.json shape (hooks + permissions).
@@ -61,6 +62,22 @@ type stringSlice []string
 func (s *stringSlice) String() string     { return strings.Join(*s, ",") }
 func (s *stringSlice) Set(v string) error { *s = append(*s, v); return nil }
 
+// scannerOptions bundles the inputs runScannerLoop needs from main().
+type scannerOptions struct {
+	name           string
+	sessionID      string
+	resumed        bool
+	cwd            string
+	transcriptPath string
+	permissionMode string
+	delay          time.Duration
+	exitAfter      int
+	autoExit       time.Duration
+	statusLine     string
+	hooks          *HookSender
+	mcp            *MCPClient
+}
+
 func main() {
 	var (
 		addDirs      stringSlice
@@ -75,6 +92,7 @@ func main() {
 		mcpPath      = flag.String("mcp-config", "", "path to Claude Code MCP config JSON")
 		systemPrompt = flag.String("append-system-prompt", "", "system prompt text to append")
 		outputFormat = flag.String("output-format", "text", "output format: text|json|stream-json")
+		historyCap   = flag.Int("history-cap", 1000, "TUI history cap (0 = unlimited)")
 	)
 	flag.StringVar(&name, "name", "test-agent", "session name for the banner")
 	flag.StringVar(&name, "n", "test-agent", "session name for the banner (short)")
@@ -135,25 +153,86 @@ func main() {
 		}, os.Stdin, os.Stdout))
 	}
 
-	// Handle SIGTERM gracefully.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	statusLine := loadedStatus(settings, mcpConfig, *systemPrompt, addDirs)
+	interactive := isatty.IsTerminal(os.Stdin.Fd())
 
-	// Handle SIGWINCH (terminal resize).
-	winchCh := make(chan os.Signal, 1)
-	signal.Notify(winchCh, syscall.SIGWINCH)
+	if interactive {
+		// TUI path: bubbletea handles SIGWINCH (WindowSizeMsg) and rendering.
+		// Wire SIGINT/SIGTERM into a one-shot channel that runTUI forwards to
+		// the program's Quit().
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+		quitCh := make(chan struct{})
+		go func() {
+			<-sigCh
+			close(quitCh)
+		}()
 
+		slash := &SlashHandler{
+			name:           name,
+			streamDelay:    30 * time.Millisecond,
+			sessionID:      sid,
+			cwd:            cwd,
+			transcriptPath: transcriptPath,
+			permissionMode: permissionMode,
+			hooks:          hooks,
+			mcp:            mcpClient,
+			out:            os.Stdout,
+		}
+
+		code := runTUI(context.Background(), tuiOptions{
+			name:           name,
+			sessionID:      sid,
+			resumed:        *resume != "",
+			cwd:            cwd,
+			transcriptPath: transcriptPath,
+			permissionMode: permissionMode,
+			delay:          *delay,
+			exitAfter:      *exitAfter,
+			autoExit:       *autoExit,
+			historyCap:     *historyCap,
+			statusLine:     statusLine,
+			settings:       settings,
+			mcpConfig:      mcpConfig,
+			hooks:          hooks,
+			mcp:            mcpClient,
+			slash:          slash,
+		}, quitCh)
+		shutdown("other")
+		os.Exit(code)
+	}
+
+	// Scanner path: piped stdin (e.g. e2e tests) — keeps the deterministic
+	// inline rendering that the e2e regex assertions rely on.
+	runScannerLoop(context.Background(), scannerOptions{
+		name:           name,
+		sessionID:      sid,
+		resumed:        *resume != "",
+		cwd:            cwd,
+		transcriptPath: transcriptPath,
+		permissionMode: permissionMode,
+		delay:          *delay,
+		exitAfter:      *exitAfter,
+		autoExit:       *autoExit,
+		statusLine:     statusLine,
+		hooks:          hooks,
+		mcp:            mcpClient,
+	}, shutdown)
+}
+
+// runScannerLoop is the original bufio.Scanner-driven interactive loop.
+// Used when stdin is not a TTY (piped input). The shutdown closure fires
+// SessionEnd + closes MCP and is invoked here on /exit, EOF, or signal.
+func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(string)) {
 	// Banner via lipgloss: rounded border auto-sizes to widest line and
-	// handles wide / multi-byte characters correctly (the prior hand-rolled
-	// pad miscounted UTF-8 bytes when the session id was truncated with an
-	// ellipsis).
+	// handles wide / multi-byte characters correctly.
 	sessionLabel := "session"
-	if *resume != "" {
+	if opts.resumed {
 		sessionLabel = "resumed"
 	}
 	bannerContent := lipgloss.JoinVertical(lipgloss.Left,
-		lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11")).Render(name),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Faint(true).Render(sessionLabel+" "+sid),
+		lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11")).Render(opts.name),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Faint(true).Render(sessionLabel+" "+opts.sessionID),
 		lipgloss.NewStyle().Faint(true).Render("Type anything; /help for commands"),
 	)
 	fmt.Println(lipgloss.NewStyle().
@@ -162,24 +241,32 @@ func main() {
 		Padding(0, 2).
 		Render(bannerContent))
 
-	if status := loadedStatus(settings, mcpConfig, *systemPrompt, addDirs); status != "" {
-		fmt.Printf("\033[2m[%s]\033[0m\n", status)
+	if opts.statusLine != "" {
+		fmt.Printf("\033[2m[%s]\033[0m\n", opts.statusLine)
 	}
 
 	// Connect to MCP servers (best-effort; logged on failure, session continues).
-	if err := mcpClient.Connect(context.Background()); err != nil {
+	if err := opts.mcp.Connect(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "testagent: mcp Connect: %v\n", err)
-	} else if tools := mcpClient.Tools(); len(tools) > 0 {
+	} else if tools := opts.mcp.Tools(); len(tools) > 0 {
 		fmt.Printf("\033[2m[mcp connected: %d tools]\033[0m\n", len(tools))
 	}
+
+	// Handle SIGTERM gracefully.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+
+	// Handle SIGWINCH (terminal resize).
+	winchCh := make(chan os.Signal, 1)
+	signal.Notify(winchCh, syscall.SIGWINCH)
 
 	fmt.Printf("\033[32m>\033[0m ")
 
 	// Auto-exit after a duration (for headless tests where no input is sent).
-	if *autoExit > 0 {
+	if opts.autoExit > 0 {
 		go func() {
-			time.Sleep(*autoExit)
-			fmt.Printf("\n\033[2m[auto-exit after %s]\033[0m\n", *autoExit)
+			time.Sleep(opts.autoExit)
+			fmt.Printf("\n\033[2m[auto-exit after %s]\033[0m\n", opts.autoExit)
 			shutdown("other")
 			os.Exit(0)
 		}()
@@ -194,14 +281,14 @@ func main() {
 	}()
 
 	slash := &SlashHandler{
-		name:           name,
+		name:           opts.name,
 		streamDelay:    30 * time.Millisecond,
-		sessionID:      sid,
-		cwd:            cwd,
-		transcriptPath: transcriptPath,
-		permissionMode: permissionMode,
-		hooks:          hooks,
-		mcp:            mcpClient,
+		sessionID:      opts.sessionID,
+		cwd:            opts.cwd,
+		transcriptPath: opts.transcriptPath,
+		permissionMode: opts.permissionMode,
+		hooks:          opts.hooks,
+		mcp:            opts.mcp,
 		out:            os.Stdout,
 	}
 
@@ -236,7 +323,7 @@ func main() {
 
 		// Slash commands drive UI primitives (tool blocks, panels, MCP calls,
 		// etc.) without going through the echo path. They don't fire OnPrompt.
-		if outcome := slash.Dispatch(context.Background(), input); outcome.Handled {
+		if outcome := slash.Dispatch(ctx, input); outcome.Handled {
 			if outcome.Exit {
 				shutdown(outcome.Reason)
 				os.Exit(outcome.ExitCode)
@@ -245,7 +332,7 @@ func main() {
 			continue
 		}
 
-		if err := hooks.OnPrompt(context.Background(), input, name); err != nil {
+		if err := opts.hooks.OnPrompt(ctx, input, opts.name); err != nil {
 			fmt.Fprintf(os.Stderr, "testagent: hook OnPrompt: %v\n", err)
 		}
 
@@ -253,19 +340,19 @@ func main() {
 
 		// Simulate thinking with a spinner + elapsed-seconds counter
 		// (matches the visual shape of real Claude's "thinking…" state).
-		showThinking(os.Stdout, *delay)
+		showThinking(os.Stdout, opts.delay)
 
 		// Echo response with color.
-		fmt.Printf("\033[1;35m[%s]\033[0m %s\n", name, input)
+		fmt.Printf("\033[1;35m[%s]\033[0m %s\n", opts.name, input)
 		fmt.Printf("\033[32m>\033[0m ")
-		lastAssistant = fmt.Sprintf("[%s] %s", name, input)
+		lastAssistant = fmt.Sprintf("[%s] %s", opts.name, input)
 
-		if err := hooks.OnStop(context.Background(), lastAssistant, false); err != nil {
+		if err := opts.hooks.OnStop(ctx, lastAssistant, false); err != nil {
 			fmt.Fprintf(os.Stderr, "testagent: hook OnStop: %v\n", err)
 		}
 
-		if *exitAfter > 0 && count >= *exitAfter {
-			fmt.Printf("\n\033[2m[exit-after %d reached]\033[0m\n", *exitAfter)
+		if opts.exitAfter > 0 && count >= opts.exitAfter {
+			fmt.Printf("\n\033[2m[exit-after %d reached]\033[0m\n", opts.exitAfter)
 			shutdown("other")
 			return
 		}

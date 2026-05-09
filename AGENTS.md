@@ -18,7 +18,8 @@ v1 ships a drop-in fake for Claude Code: argv compatibility for the flags orches
 ## Design conventions
 
 - **Schema types are duplicated, not imported.** `Settings` and `MCPConfig` mirror Claude Code's on-disk shapes. testagent stays self-contained.
-- **Stdlib-first; deps are deliberate.** Each non-stdlib dep is justified in the commit message that adds it (`mark3labs/mcp-go`, `lipgloss`, `glamour`).
+- **Stdlib-first; deps are deliberate.** Each non-stdlib dep is justified in the commit message that adds it (`mark3labs/mcp-go`, `lipgloss`, `glamour`, `bubbletea`, `bubbles`, `go-isatty`).
+- **Interactive vs non-interactive split.** TTY stdin → bubbletea TUI (`tui.go`, alt-screen, concurrent input during the thinking spinner). Piped stdin or `--print` → `runScannerLoop` (line-scanner, inline rendering). The `mattn/go-isatty` check on `os.Stdin` is the gate; e2e tests pipe stdin so they always hit the scanner path.
 - **Conventional Commits.** One commit per phase. Each phase's commit leaves the tree buildable and tested.
 - **Tests:** `t.Parallel()`, table-driven, real `httptest`/`exec`-driven integration over mocks where possible (see `e2e_test.go`). Fixtures in `testdata/`.
 
