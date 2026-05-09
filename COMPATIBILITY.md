@@ -65,7 +65,7 @@ Alphabetical by long name. Short flags shown inline. Global flags (common across
 |---------|-----------|-------|
 | `/add-dir <path>` | `✗ planned` | |
 | `/clear` | `✗ planned` | `/restart clear` simulates the hook side-effect |
-| `/compact` | `✗ planned` | `/restart compact` simulates the hook side-effect |
+| `/compact` | `✗ planned` | `/restart compact` simulates the hook side-effect; full support tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
 | `/config` | `not relevant` | No settings UI |
 | `/context` | `not relevant` | No context window |
 | `/exit` | ✓ supported | Accepts optional exit code |
@@ -111,7 +111,7 @@ Bundled skills always land at `not relevant` — testagent has no model.
 
 | Behavior | testagent | Notes |
 |----------|-----------|-------|
-| `!`-shell prefix | `not relevant` | TUI-internal; runs shell commands |
+| `!`-shell prefix | `✗ planned` | Spawns a shell for the rest of the line; tracked in [#17](https://github.com/paultyng/testagent/issues/17) |
 | `@`-mention / file autocomplete | `not relevant` | TUI-internal |
 | `Ctrl+C` | ✓ supported | Quits immediately |
 | `Ctrl+D` / EOF | partial | Exits scanner loop (non-interactive); not handled in TUI |
@@ -132,4 +132,6 @@ Bundled skills always land at `not relevant` — testagent has no model.
 | `UserPromptSubmit` | ✓ supported | Fired per user input line and `/think` |
 | `PostToolUse` | ✓ supported | Fired when `/fake-tool-result` completes a `/fake-tool` block |
 | `Stop` | ✓ supported | Fired after each assistant response; `stop_hook_active=true` on `Esc` cancel |
+| `PreCompact` | `✗ planned` | Tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
+| `PostCompact` | `✗ planned` | Tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
 | `Setup` | `✗ planned` | |
