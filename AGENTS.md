@@ -32,3 +32,10 @@ v1 ships a drop-in fake for Claude Code: argv compatibility for the flags orches
 ## Fixtures
 
 Real-Claude protocol shapes are captured from a real Claude session run against an orchestrator that records hook POSTs and MCP JSON-RPC frames. Captures live under `testdata/captures/` and are **gitignored** (they contain real session content). Sanitized, OSS-safe fixtures are committed under `testdata/fixtures/` as phases that need them are authored.
+
+## Demos
+
+`demo/hero.tape` renders `demo/hero.gif` (the README hero) via [vhs](https://github.com/charmbracelet/vhs). When a PR changes user-visible behavior:
+
+- **Re-render `demo/hero.gif`** if the change affects what the hero shows (banner, slash output, thinking animation, etc.).
+- **Add a PR-specific tape** under `demo/<short-slug>.tape` (e.g. `demo/queueing-during-thinking.tape`) when the fix benefits from a focused animation a reviewer can watch. Render it to `demo/<short-slug>.gif` and link it from the PR description. The hero stays the canonical "what is testagent" demo; per-PR tapes are illustrative and can be removed after merge if they're no longer load-bearing.
