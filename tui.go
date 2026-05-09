@@ -95,8 +95,9 @@ type cancelMsg struct{}
 var (
 	tuiStylePrompt = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	tuiStyleEcho   = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
-	tuiStyleDim    = lipgloss.NewStyle().Faint(true)
-	tuiStyleSpin   = lipgloss.NewStyle().Faint(true)
+	tuiStyleDim     = lipgloss.NewStyle().Faint(true)
+	tuiStyleSpin    = lipgloss.NewStyle().Faint(true)
+	tuiStyleThought = lipgloss.NewStyle().Faint(true).Italic(true)
 )
 
 // newModel builds the initial model. The textinput and spinner are
@@ -212,7 +213,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.thinking {
 			m.thinkTag++ // invalidate any pending thinkingDoneMsg
 			m.thinking = false
-			m.appendHistoryCapped(tuiStyleDim.Render("[cancelled]"))
+			elapsed := time.Since(m.thinkStart).Truncate(time.Second)
+			m.appendHistoryCapped(tuiStyleThought.Render(fmt.Sprintf("Interrupted (after %s)", elapsed)))
 			// Fire OnStop with empty last-assistant-message and stop_hook_active=true.
 			cmds = append(cmds, cmdHookStop(m.opts.hooks, "", true))
 		}
@@ -223,6 +225,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.thinking = false
+		elapsed := time.Since(m.thinkStart).Truncate(time.Second)
+		m.appendHistoryCapped(tuiStyleThought.Render(fmt.Sprintf("Thought for %s", elapsed)))
 		m.appendHistoryCapped(msg.response)
 		cmds = append(cmds, cmdHookStop(m.opts.hooks, msg.response, false))
 		m.count++

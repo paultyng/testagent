@@ -187,6 +187,7 @@ func TestE2E_SlashFlow(t *testing.T) {
 	wantInStdout := []string{
 		"E2E",             // banner name
 		"hi there",        // echo path
+		"Thought for ",    // post-thinking marker stays in scrollback
 		"notable thing",   // /panel content
 		"read_file",       // /tool header
 		`"path":"foo.go"`, // /tool args
