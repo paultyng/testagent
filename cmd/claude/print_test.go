@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/paultyng/testagent/internal/hooks"
@@ -166,5 +170,69 @@ func checkField(t *testing.T, m map[string]any, key string, want any) {
 	}
 	if got != want {
 		t.Errorf("field %q = %v, want %v", key, got, want)
+	}
+}
+
+// TestRunPrint_SessionStartHonorsResume verifies the SessionStart hook
+// fires with source="resume" when printOptions.resumed is true, matching
+// the interactive code path. Closes #25.
+func TestRunPrint_SessionStartHonorsResume(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		resumed    bool
+		wantSource string
+	}{
+		{name: "fresh session", resumed: false, wantSource: "startup"},
+		{name: "resumed session", resumed: true, wantSource: "resume"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var (
+				mu  sync.Mutex
+				got string
+			)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				var body map[string]any
+				_ = json.Unmarshal(raw, &body)
+				if name, _ := body["hook_event_name"].(string); name == "SessionStart" {
+					mu.Lock()
+					got, _ = body["source"].(string)
+					mu.Unlock()
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+
+			matchers := map[string][]hooks.Matcher{
+				hooks.SessionStart: {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
+			}
+			sender := hooks.NewSender(matchers, "sid-resume", "/tmp", "", "default", nil)
+
+			stdout := &bytes.Buffer{}
+			code := runPrint(context.Background(), printOptions{
+				name:         "Echo",
+				sessionID:    "sid-resume",
+				cwd:          "/tmp",
+				outputFormat: "text",
+				positional:   []string{"hi"},
+				resumed:      tc.resumed,
+				hooks:        sender,
+				mcp:          mcp.NewClient(nil),
+			}, strings.NewReader(""), stdout)
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0", code)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			if got != tc.wantSource {
+				t.Errorf("SessionStart source = %q, want %q", got, tc.wantSource)
+			}
+		})
 	}
 }

@@ -1,15 +1,6 @@
 ---
 name: research-claude-coverage
-description: >
-  Research the current Claude Code release and update the compat matrix
-  (COMPATIBILITY.md) with accurate flags, slash commands, and REPL behaviors.
-when_to_use:
-  - "update compat"
-  - "check claude coverage"
-  - "sync compatibility"
-  - "new claude version"
-  - "compat drift"
-  - "research claude"
+description: Use when refreshing COMPATIBILITY.md after a Claude Code release, when `task dumpcli:claude` reports drift, when a contributor adds a flag or slash command not yet in the matrix, or for periodic coverage checks. Triggers include "update compat", "check claude coverage", "sync compatibility", "new claude version", "compat drift", "research claude".
 ---
 
 # research-claude-coverage

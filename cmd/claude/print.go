@@ -35,6 +35,7 @@ type printOptions struct {
 	model        string
 	outputFormat string // "text" | "json" | "stream-json"
 	positional   []string
+	resumed      bool // true when --resume was set; selects SessionStart source
 	hooks        *hooks.Sender
 	mcp          *mcp.Client
 }
@@ -47,7 +48,11 @@ type printOptions struct {
 // code. SessionStart is paired with SessionEnd so orchestrators see a
 // complete lifecycle even on one-shot invocations.
 func runPrint(ctx context.Context, opt printOptions, stdin io.Reader, stdout io.Writer) int {
-	if err := opt.hooks.OnSessionStart(ctx, "startup"); err != nil {
+	startSource := "startup"
+	if opt.resumed {
+		startSource = "resume"
+	}
+	if err := opt.hooks.OnSessionStart(ctx, startSource); err != nil {
 		fmt.Fprintf(os.Stderr, "testagent: hook OnSessionStart: %v\n", err)
 	}
 

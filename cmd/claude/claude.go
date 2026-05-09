@@ -114,6 +114,7 @@ Bare invocation (testagent <flags>) defaults to this subcommand.`,
 					cwd:          cwd,
 					outputFormat: outputFormat,
 					positional:   args,
+					resumed:      resume != "",
 					hooks:        hookSender,
 					mcp:          mcpClient,
 				}, os.Stdin, os.Stdout)
