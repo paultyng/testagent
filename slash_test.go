@@ -19,7 +19,7 @@ func newTestSlashHandler(out *bytes.Buffer) *SlashHandler {
 		streamDelay: 0,
 		sessionID:   "sid-test",
 		cwd:         "/tmp",
-		hooks:       NewHookSender(nil, "sid-test", "/tmp", "", "default"),
+		hooks:       NewHookSender(nil, "sid-test", "/tmp", "", "default", nil),
 		mcp:         NewMCPClient(nil),
 		out:         out,
 	}
@@ -95,7 +95,7 @@ func TestSlash_ToolAlone_NoHookYet(t *testing.T) {
 		Hooks: map[string][]HookMatcher{
 			"PostToolUse": {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
 		},
-	}, "sid-test", "/tmp", "", "default")
+	}, "sid-test", "/tmp", "", "default", nil)
 
 	h.Dispatch(context.Background(), `/tool read_file {"path":"foo.go"}`)
 
@@ -130,7 +130,7 @@ func TestSlash_ToolResultPair(t *testing.T) {
 		Hooks: map[string][]HookMatcher{
 			"PostToolUse": {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
 		},
-	}, "sid-test", "/tmp", "", "default")
+	}, "sid-test", "/tmp", "", "default", nil)
 
 	h.Dispatch(context.Background(), `/tool read_file {"path":"foo.go"}`)
 	time.Sleep(2 * time.Millisecond) // ensure non-zero duration_ms
@@ -175,7 +175,7 @@ func TestSlash_OrphanResult(t *testing.T) {
 		Hooks: map[string][]HookMatcher{
 			"PostToolUse": {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
 		},
-	}, "sid-test", "/tmp", "", "default")
+	}, "sid-test", "/tmp", "", "default", nil)
 
 	h.Dispatch(context.Background(), `/result {"orphan":true}`)
 
@@ -210,7 +210,7 @@ func TestSlash_FlushPendingTool(t *testing.T) {
 		Hooks: map[string][]HookMatcher{
 			"PostToolUse": {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
 		},
-	}, "sid-test", "/tmp", "", "default")
+	}, "sid-test", "/tmp", "", "default", nil)
 
 	h.Dispatch(context.Background(), `/tool dangling {}`)
 	h.FlushPendingTool(context.Background())
@@ -251,7 +251,7 @@ func TestSlash_SecondToolReplacesPending(t *testing.T) {
 		Hooks: map[string][]HookMatcher{
 			"PostToolUse": {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
 		},
-	}, "sid-test", "/tmp", "", "default")
+	}, "sid-test", "/tmp", "", "default", nil)
 
 	h.Dispatch(context.Background(), `/tool first {}`)
 	h.Dispatch(context.Background(), `/tool second {}`)

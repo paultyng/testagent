@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -66,7 +68,7 @@ func settingsWithHooks(event string, headers map[string]string, urls ...string) 
 
 func newTestSender(t *testing.T, settings *Settings) *HookSender {
 	t.Helper()
-	return NewHookSender(settings, "session-xyz", "/tmp/cwd", "/tmp/transcript.jsonl", "auto")
+	return NewHookSender(settings, "session-xyz", "/tmp/cwd", "/tmp/transcript.jsonl", "auto", nil)
 }
 
 func TestHookSender_NilSettings_NoOp(t *testing.T) {
@@ -478,5 +480,134 @@ func TestHookSender_PostToolUseTableDriven(t *testing.T) {
 				t.Errorf("duration_ms = %v, want %v", rec.body["duration_ms"], tc.duration)
 			}
 		})
+	}
+}
+
+func TestHookSender_Verbose_EmitsLinePerHook(t *testing.T) {
+	t.Parallel()
+
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	var dbg bytes.Buffer
+	settings := &Settings{
+		Hooks: map[string][]HookMatcher{
+			"Stop": {
+				{Hooks: []Hook{
+					{Type: "http", URL: srv.URL + "/a", Timeout: 1},
+					{Type: "http", URL: srv.URL + "/b", Timeout: 1},
+				}},
+			},
+		},
+	}
+	h := NewHookSender(settings, "sid", "/tmp", "", "default", &dbg)
+	if err := h.OnStop(context.Background(), "msg", false); err != nil {
+		t.Fatalf("OnStop: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimRight(dbg.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("got %d debug lines, want 2:\n%s", len(lines), dbg.String())
+	}
+	for _, l := range lines {
+		if !strings.HasPrefix(l, "hook Stop POST ") {
+			t.Errorf("line missing prefix: %q", l)
+		}
+		if !strings.Contains(l, " 200 ") {
+			t.Errorf("line missing 200 status: %q", l)
+		}
+	}
+}
+
+func TestHookSender_Verbose_RecordsErrorStatus(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+	}))
+	defer srv.Close()
+
+	var dbg bytes.Buffer
+	settings := &Settings{
+		Hooks: map[string][]HookMatcher{
+			"Stop": {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
+		},
+	}
+	h := NewHookSender(settings, "sid", "/tmp", "", "default", &dbg)
+	_ = h.OnStop(context.Background(), "msg", false)
+
+	out := dbg.String()
+	if !strings.Contains(out, " 500 ") {
+		t.Errorf("verbose line missing 500 status: %q", out)
+	}
+	if !strings.Contains(out, `err="status 500"`) {
+		t.Errorf("verbose line missing err snippet: %q", out)
+	}
+}
+
+func TestHookSender_Verbose_RecordsTransportError(t *testing.T) {
+	t.Parallel()
+
+	var dbg bytes.Buffer
+	settings := &Settings{
+		Hooks: map[string][]HookMatcher{
+			"Stop": {{Hooks: []Hook{{Type: "http", URL: "http://127.0.0.1:1", Timeout: 1}}}},
+		},
+	}
+	h := NewHookSender(settings, "sid", "/tmp", "", "default", &dbg)
+	_ = h.OnStop(context.Background(), "msg", false)
+
+	out := dbg.String()
+	if !strings.Contains(out, " ERR ") {
+		t.Errorf("verbose line missing ERR token: %q", out)
+	}
+	if !strings.Contains(out, `err="posting:`) {
+		t.Errorf("verbose line missing err snippet: %q", out)
+	}
+}
+
+func TestHookSender_Verbose_DisabledByDefault(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	settings := &Settings{
+		Hooks: map[string][]HookMatcher{
+			"Stop": {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
+		},
+	}
+	// debugWriter == nil → no output collected anywhere; this test asserts
+	// the no-debug path doesn't panic and behaves like before.
+	h := NewHookSender(settings, "sid", "/tmp", "", "default", nil)
+	if err := h.OnStop(context.Background(), "msg", false); err != nil {
+		t.Fatalf("OnStop: %v", err)
+	}
+}
+
+func TestFormatBytes(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		n    int
+		want string
+	}{
+		{0, "0B"},
+		{512, "512B"},
+		{1024, "1.0kB"},
+		{2560, "2.5kB"},
+		{1024 * 1024, "1.0MB"},
+		{1024 * 1024 * 3, "3.0MB"},
+	}
+	for _, tc := range cases {
+		if got := formatBytes(tc.n); got != tc.want {
+			t.Errorf("formatBytes(%d) = %q, want %q", tc.n, got, tc.want)
+		}
 	}
 }

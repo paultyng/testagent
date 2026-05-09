@@ -84,6 +84,7 @@ func main() {
 		addDirs      stringSlice
 		name         string
 		printMode    bool
+		verbose      bool
 		delay        = flag.Duration("delay", 200*time.Millisecond, "simulated thinking delay before response")
 		exitAfter    = flag.Int("exit-after", 0, "auto-exit after N interactions (0 = never)")
 		autoExit     = flag.Duration("auto-exit", 0, "auto-exit after duration (0 = disabled)")
@@ -99,6 +100,8 @@ func main() {
 	flag.StringVar(&name, "n", "test-agent", "session name for the banner (short)")
 	flag.BoolVar(&printMode, "print", false, "non-interactive mode (one-shot)")
 	flag.BoolVar(&printMode, "p", false, "non-interactive mode (short)")
+	flag.BoolVar(&verbose, "verbose", false, "log hook activity to stderr")
+	flag.BoolVar(&verbose, "v", false, "log hook activity to stderr (short)")
 	flag.Var(&addDirs, "add-dir", "additional directory (repeatable)")
 	flag.Parse()
 
@@ -125,7 +128,11 @@ func main() {
 	transcriptPath := fmt.Sprintf("/tmp/testagent-transcript-%s.jsonl", sid)
 	const permissionMode = "default"
 
-	hooks := NewHookSender(settings, sid, cwd, transcriptPath, permissionMode)
+	var debugW io.Writer
+	if verbose {
+		debugW = os.Stderr
+	}
+	hooks := NewHookSender(settings, sid, cwd, transcriptPath, permissionMode, debugW)
 	mcpClient := NewMCPClient(mcpConfig)
 	slash := &SlashHandler{
 		name:           name,

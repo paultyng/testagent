@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -29,12 +30,18 @@ type HookSender struct {
 	transcriptPath string
 	permissionMode string
 	httpClient     *http.Client
+
+	// debugWriter, when non-nil, receives one line per POST attempt:
+	// "hook <event> POST <url> <status|ERR> <elapsed> <bodysize> [err=...]"
+	// Set to os.Stderr by --verbose. Nil silences debug output entirely.
+	debugWriter io.Writer
 }
 
 // NewHookSender returns a sender wired to the given settings. Settings may be
 // nil (no-op sender). sessionID is the value emitted in the body's session_id
 // field. cwd/transcriptPath/permissionMode populate every event body.
-func NewHookSender(settings *Settings, sessionID, cwd, transcriptPath, permissionMode string) *HookSender {
+// debugWriter is optional; nil disables verbose logging.
+func NewHookSender(settings *Settings, sessionID, cwd, transcriptPath, permissionMode string, debugWriter io.Writer) *HookSender {
 	return &HookSender{
 		settings:       settings,
 		sessionID:      sessionID,
@@ -42,6 +49,7 @@ func NewHookSender(settings *Settings, sessionID, cwd, transcriptPath, permissio
 		transcriptPath: transcriptPath,
 		permissionMode: permissionMode,
 		httpClient:     &http.Client{Timeout: 30 * time.Second},
+		debugWriter:    debugWriter,
 	}
 }
 
@@ -168,7 +176,7 @@ func (h *HookSender) fire(ctx context.Context, event string, body any) error {
 			if hook.Type != "http" {
 				continue
 			}
-			if err := h.post(ctx, hook, payload); err != nil {
+			if err := h.post(ctx, event, hook, payload); err != nil {
 				errs = append(errs, fmt.Errorf("%s hook %s: %w", event, hook.URL, err))
 			}
 		}
@@ -178,7 +186,17 @@ func (h *HookSender) fire(ctx context.Context, event string, body any) error {
 
 // post POSTs payload as application/json to hook.URL with hook.Headers applied.
 // hook.Timeout is honored as a per-request context deadline (0 → default).
-func (h *HookSender) post(ctx context.Context, hook Hook, payload []byte) error {
+// When debugWriter is set, emits a one-line trace per attempt regardless of
+// outcome (build error, transport error, success, non-2xx).
+func (h *HookSender) post(ctx context.Context, event string, hook Hook, payload []byte) (err error) {
+	start := time.Now()
+	status := 0
+	defer func() {
+		if h.debugWriter != nil {
+			h.writeDebug(event, hook.URL, status, time.Since(start), len(payload), err)
+		}
+	}()
+
 	timeout := time.Duration(hook.Timeout) * time.Second
 	if timeout <= 0 {
 		timeout = defaultHookTimeout
@@ -199,8 +217,40 @@ func (h *HookSender) post(ctx context.Context, hook Hook, payload []byte) error 
 		return fmt.Errorf("posting: %w", err)
 	}
 	defer resp.Body.Close()
+	status = resp.StatusCode
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// writeDebug emits one line to debugWriter:
+//
+//	hook <event> POST <url> <status|ERR> <elapsed> <bodysize> [err="..."]
+//
+// status 0 renders as ERR. Trailing err="..." is present only when err != nil.
+// Plain text, no ANSI — verbose output is for grepping/piping.
+func (h *HookSender) writeDebug(event, url string, status int, elapsed time.Duration, bodySize int, postErr error) {
+	statusStr := "ERR"
+	if status > 0 {
+		statusStr = fmt.Sprintf("%d", status)
+	}
+	line := fmt.Sprintf("hook %s POST %s %s %s %s",
+		event, url, statusStr, elapsed.Truncate(time.Millisecond), formatBytes(bodySize))
+	if postErr != nil {
+		line += fmt.Sprintf(" err=%q", postErr.Error())
+	}
+	fmt.Fprintln(h.debugWriter, line)
+}
+
+// formatBytes returns a compact size string: 412B / 1.2kB / 3.4MB.
+func formatBytes(n int) string {
+	switch {
+	case n < 1024:
+		return fmt.Sprintf("%dB", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%.1fkB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%.1fMB", float64(n)/(1024*1024))
+	}
 }
