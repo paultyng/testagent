@@ -1,7 +1,13 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -279,6 +285,83 @@ func TestModel_HistoryCapEvictsOldest(t *testing.T) {
 		if m.history[i] != w {
 			t.Errorf("history[%d] = %q, want %q", i, m.history[i], w)
 		}
+	}
+}
+
+// TestCmdSlashRestart_FiresHooksInOrder pins the wire-order contract for
+// /restart in the TUI path: a pending /fake-tool's PostToolUse must precede
+// SessionEnd, and SessionEnd must precede SessionStart. Earlier wiring used
+// tea.Batch which dispatched the two hook cmds concurrently and could race.
+func TestCmdSlashRestart_FiresHooksInOrder(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu    sync.Mutex
+		paths []string
+		ends  []map[string]any // bodies posted to /end
+		start map[string]any
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/end":
+			ends = append(ends, body)
+		case "/start":
+			start = body
+		}
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	settings := &Settings{
+		Hooks: map[string][]HookMatcher{
+			hookEventPostToolUse:  {{Hooks: []Hook{{Type: "http", URL: srv.URL + "/tool-use", Timeout: 1}}}},
+			hookEventSessionStart: {{Hooks: []Hook{{Type: "http", URL: srv.URL + "/start", Timeout: 1}}}},
+			hookEventSessionEnd:   {{Hooks: []Hook{{Type: "http", URL: srv.URL + "/end", Timeout: 1}}}},
+		},
+	}
+	hooks := NewHookSender(settings, "sid-test", "/tmp", "", "default", nil)
+	slash := &SlashHandler{
+		name:      "Test",
+		sessionID: "sid-test",
+		cwd:       "/tmp",
+		hooks:     hooks,
+		mcp:       NewMCPClient(nil),
+		out:       io.Discard,
+	}
+
+	// Stage a pending /fake-tool so we can prove its PostToolUse drains
+	// before SessionEnd.
+	slash.Dispatch(context.Background(), `/fake-tool read_file {"path":"foo.go"}`)
+
+	cmd := cmdSlashRestart(slash, hooks, "compact")
+	if cmd == nil {
+		t.Fatal("cmdSlashRestart returned nil cmd")
+	}
+	if msg := cmd(); msg != nil {
+		t.Errorf("expected nil tea.Msg on success, got %T %v", msg, msg)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	wantOrder := []string{"/tool-use", "/end", "/start"}
+	if len(paths) != len(wantOrder) {
+		t.Fatalf("paths = %v, want %v", paths, wantOrder)
+	}
+	for i, want := range wantOrder {
+		if paths[i] != want {
+			t.Errorf("paths[%d] = %q, want %q (full sequence: %v)", i, paths[i], want, paths)
+		}
+	}
+	if len(ends) != 1 || ends[0]["reason"] != "compact" {
+		t.Errorf("SessionEnd bodies = %v, want one with reason=compact", ends)
+	}
+	if start == nil || start["source"] != "compact" {
+		t.Errorf("SessionStart body = %v, want source=compact", start)
 	}
 }
 

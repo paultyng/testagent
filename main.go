@@ -351,9 +351,13 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 			}
 			if outcome.Restart {
 				// Simulate a Claude /clear or /compact reset on the wire:
-				// SessionEnd then SessionStart with the same matcher value.
-				// The process keeps running — no scrollback wipe (that's a
-				// future UI feature; this PR is hook-shape only).
+				// flush any pending /fake-tool so its PostToolUse fires
+				// before SessionEnd (same invariant the shutdown closure
+				// documents), then SessionEnd then SessionStart with the
+				// same matcher value. The process keeps running — no
+				// scrollback wipe (that's a future UI feature; this PR is
+				// hook-shape only).
+				slash.FlushPendingTool(ctx)
 				if err := opts.hooks.OnSessionEnd(ctx, outcome.RestartReason); err != nil {
 					fmt.Fprintf(os.Stderr, "testagent: hook OnSessionEnd: %v\n", err)
 				}

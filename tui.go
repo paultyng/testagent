@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -140,20 +141,18 @@ func banner(opts tuiOptions) string {
 }
 
 // Init seeds the initial command batch: spinner ticks (so it animates when
-// thinking starts), textinput cursor blink, MCP connect, SessionStart hook
-// (paired with the existing SessionEnd at shutdown), and optional auto-exit
-// timer. The banner and status line are appended to history here so they
-// appear once on first render.
+// thinking starts), textinput cursor blink, MCP connect, and optional
+// auto-exit timer. The banner and status line are appended to history here
+// so they appear once on first render. SessionStart fires later, from the
+// mcpConnectMsg handler, so the boot SessionStart waits on MCP connect
+// resolution — same invariant the scanner-path enforces synchronously
+// (tea.Batch runs commands concurrently, so firing SessionStart here would
+// race with cmdMCPConnect).
 func (m model) Init() tea.Cmd {
-	startSource := "startup"
-	if m.opts.resumed {
-		startSource = "resume"
-	}
 	cmds := []tea.Cmd{
 		textinput.Blink,
 		m.spin.Tick,
 		cmdMCPConnect(m.opts.mcp),
-		cmdHookSessionStart(m.opts.hooks, startSource),
 	}
 	if m.opts.autoExit > 0 {
 		cmds = append(cmds, cmdAutoExit(m.opts.autoExit))
@@ -262,13 +261,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.outcome.Restart {
 			// Simulate /clear- or /compact-style reset on the wire only:
-			// SessionEnd then SessionStart with the same matcher value.
-			// History/scrollback is not cleared in this PR — that's a
-			// future UI primitive.
-			cmds = append(cmds,
-				cmdHookSessionEnd(m.opts.hooks, msg.outcome.RestartReason),
-				cmdHookSessionStart(m.opts.hooks, msg.outcome.RestartReason),
-			)
+			// flush any pending /fake-tool, then SessionEnd then SessionStart
+			// with the same matcher value, all in one tea.Cmd goroutine so
+			// the ordering is sequential. tea.Batch would run them
+			// concurrently and lose the back-to-back contract on the wire.
+			// History/scrollback is not cleared — that's a future UI primitive.
+			cmds = append(cmds, cmdSlashRestart(m.opts.slash, m.opts.hooks, msg.outcome.RestartReason))
 			break
 		}
 		// /think — run the message through the regular prompt path so hooks
@@ -289,6 +287,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if msg.tools > 0 {
 			m.appendHistoryCapped(tuiStyleDim.Render(fmt.Sprintf("[mcp connected: %d tools]", msg.tools)))
 		}
+		// Boot SessionStart fires now that MCP connect has resolved (success
+		// or failure) — orchestrators see a complete boot state before the
+		// hook lands, matching the scanner-path ordering in main.go.
+		startSource := "startup"
+		if m.opts.resumed {
+			startSource = "resume"
+		}
+		cmds = append(cmds, cmdHookSessionStart(m.opts.hooks, startSource))
 
 	case autoExitMsg:
 		m.appendHistoryCapped(tuiStyleDim.Render(fmt.Sprintf("[auto-exit after %s]", m.opts.autoExit)))
@@ -421,12 +427,21 @@ func cmdHookSessionStart(hooks *HookSender, source string) tea.Cmd {
 	}
 }
 
-// cmdHookSessionEnd fires SessionEnd on a goroutine. Used by /restart, which
-// re-fires SessionStart immediately after; the shutdown path in main.go calls
-// OnSessionEnd directly because the program is exiting.
-func cmdHookSessionEnd(hooks *HookSender, reason string) tea.Cmd {
+// cmdSlashRestart performs the /restart sequence in one goroutine so
+// PostToolUse (for any pending /fake-tool), SessionEnd, and SessionStart land
+// on the wire in that fixed order. tea.Batch would dispatch separate cmds
+// concurrently, which would race the SessionEnd/SessionStart POSTs and
+// violate the back-to-back contract documented on SlashOutcome.Restart.
+func cmdSlashRestart(slash *SlashHandler, hooks *HookSender, reason string) tea.Cmd {
 	return func() tea.Msg {
-		return hookErrMsg{stage: "OnSessionEnd", err: hooks.OnSessionEnd(context.Background(), reason)}
+		ctx := context.Background()
+		slash.FlushPendingTool(ctx)
+		endErr := hooks.OnSessionEnd(ctx, reason)
+		startErr := hooks.OnSessionStart(ctx, reason)
+		if err := errors.Join(endErr, startErr); err != nil {
+			return hookErrMsg{stage: "OnRestart", err: err}
+		}
+		return nil
 	}
 }
 
