@@ -89,15 +89,21 @@ func TestModel_EnterSubmitsAndEchoes(t *testing.T) {
 	if m.thinking {
 		t.Errorf("expected thinking=false after thinkingDoneMsg")
 	}
-	found := false
+	foundEcho := false
+	foundThought := false
 	for _, line := range m.history {
 		if strings.Contains(line, "[Test] hi") {
-			found = true
-			break
+			foundEcho = true
+		}
+		if strings.Contains(line, "Thought for ") {
+			foundThought = true
 		}
 	}
-	if !found {
+	if !foundEcho {
 		t.Errorf("history missing [Test] hi echo:\n%v", m.history)
+	}
+	if !foundThought {
+		t.Errorf("history missing 'Thought for' marker:\n%v", m.history)
 	}
 }
 
@@ -237,13 +243,13 @@ func TestModel_EscCancelsThinking(t *testing.T) {
 	}
 	found := false
 	for _, line := range m.history {
-		if strings.Contains(line, "cancelled") {
+		if strings.Contains(line, "Interrupted") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("history missing [cancelled]:\n%v", m.history)
+		t.Errorf("history missing Interrupted marker:\n%v", m.history)
 	}
 
 	// A stale thinkingDoneMsg with the old tag must be ignored.

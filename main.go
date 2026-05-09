@@ -460,39 +460,53 @@ func loadedStatus(s *Settings, m *MCPConfig, systemPrompt string, addDirs []stri
 // On return the spinner line is cleared and the cursor is at the start of
 // that (now-empty) line, ready for the next output. For very short delays
 // (< 200ms) it simply sleeps — the animation would be invisible.
+// showThinking runs the live "Thinking… (Ns)" spinner for total. On
+// completion the spinner row is replaced with a static "Thought for Ns"
+// marker (dim italic) that stays in scrollback above whatever the caller
+// prints next. total <= 0 returns immediately without animation or marker.
 func showThinking(out io.Writer, total time.Duration) {
-	if total < 200*time.Millisecond {
-		time.Sleep(total)
+	if total <= 0 {
 		return
 	}
-	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 	start := time.Now()
-	deadline := start.Add(total)
-	const tick = 100 * time.Millisecond
 
-	// Print a blank line first so we have a row to repaint and a row below
-	// it where the cursor can rest.
-	fmt.Fprintln(out)
+	if total >= 200*time.Millisecond {
+		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		deadline := start.Add(total)
+		const tick = 100 * time.Millisecond
 
-	for i := 0; ; i++ {
+		// Print a blank line first so we have a row to repaint and a row below
+		// it where the cursor can rest.
+		fmt.Fprintln(out)
+
+		for i := 0; ; i++ {
+			elapsed := time.Since(start).Truncate(time.Second)
+			// Move cursor up to the spinner row, clear it, write the new content,
+			// and newline so the cursor returns to the row below.
+			fmt.Fprintf(out, "\033[1A\033[2K\033[2m%s Thinking… (%s · esc to interrupt)\033[0m\n",
+				frames[i%len(frames)], elapsed)
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				break
+			}
+			if remaining < tick {
+				time.Sleep(remaining)
+				break
+			}
+			time.Sleep(tick)
+		}
+		// Replace the spinner row with the static "Thought for Ns" marker.
+		// Cursor ends on the row below, ready for the caller's echo.
 		elapsed := time.Since(start).Truncate(time.Second)
-		// Move cursor up to the spinner row, clear it, write the new content,
-		// and newline so the cursor returns to the row below.
-		fmt.Fprintf(out, "\033[1A\033[2K\033[2m%s thinking… (%s · esc to interrupt)\033[0m\n",
-			frames[i%len(frames)], elapsed)
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			break
-		}
-		if remaining < tick {
-			time.Sleep(remaining)
-			break
-		}
-		time.Sleep(tick)
+		fmt.Fprintf(out, "\033[1A\033[2K\033[2;3mThought for %s\033[0m\n", elapsed)
+		return
 	}
-	// Clear the spinner row; cursor ends at column 0 of that row, ready for
-	// the next print.
-	fmt.Fprint(out, "\033[1A\033[2K\r")
+
+	// Sub-200ms: skip the animation but still emit the marker so consumers
+	// see a consistent shape regardless of how short the thinking phase was.
+	time.Sleep(total)
+	elapsed := time.Since(start).Truncate(time.Second)
+	fmt.Fprintf(out, "\033[2;3mThought for %s\033[0m\n", elapsed)
 }
 
 func getTermSize() (rows, cols int) {
