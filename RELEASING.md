@@ -6,28 +6,53 @@ local fallback both produce identical artifacts.
 ## Semver policy
 
 testagent follows [Semantic Versioning](https://semver.org/) starting at
-**v1.0.0**. Releases below v1.0.0 (the v0.x series) may change CLI flags
-and hook payload shapes without a major bump — adopt them only if you can
-track each release.
+**v1.0.0**. Releases below v1.0.0 (the v0.x series) may change the public
+interface without a major bump — adopt them only if you can track each
+release.
 
-State transitions in [COMPATIBILITY.md](COMPATIBILITY.md) drive the
-version-bump decision:
+The bump is driven by **the binary's public interface**, not by edits to
+[COMPATIBILITY.md](COMPATIBILITY.md). The matrix is documentation; the
+binary is source of truth. The interface comprises:
 
-| Surface | Breaking | Additive | Non-breaking |
-|---|---|---|---|
-| CLI flags | Removing or renaming a `✓ supported` flag | Adding a new flag (any state) | Changing the default value of an internal flag |
-| Slash commands | Removing or renaming a `✓ supported` command | Adding a new command (any state) | Refactoring command rendering |
-| Hook payload fields | Removing or renaming a field on any `✓ supported` event | Adding an optional field | Changing log verbosity or `--verbose` formatting |
-| Hook event names | Removing a `✓ supported` event | Adding a new event (e.g. `PostCompact`) | — |
-| MCP protocol version | Dropping a previously-advertised `protocolVersion` | Advertising an additional version | Internal MCP client refactor |
-| `internal/` packages | N/A — not public API | N/A | All changes |
+1. **CLI flags** — root persistent flags + per-subcommand flags
+   (visible via `testagent --help` and `testagent <subcommand> --help`).
+2. **Slash commands** — the names + argument shapes the slash dispatcher
+   accepts (`internal/slash/slash.go`).
+3. **Hook event names** — the constants in `internal/hooks/hooks.go`
+   (`UserPromptSubmit`, `Stop`, etc.).
+4. **Hook payload fields** — the JSON tags on event body structs.
+5. **MCP `protocolVersion`** advertised by the client.
+6. **`--print` output formats** and their JSON / stream-JSON shapes.
 
-Specifically:
+Bump table (apply per change; the highest-impact one wins for the release):
 
-- `✓ supported` → removed = **major** (or **patch** while pre-1.0)
-- `✗ planned` → `✓ supported` = **minor** (or **patch** while pre-1.0)
-- Bug fix within a `✓ supported` surface = **patch**
-- Internal refactor with no surface change = **patch**
+| Change | Bump (post-1.0) | Bump (pre-1.0) |
+|---|---|---|
+| Remove or rename a flag, slash command, hook event, payload field | **major** | patch |
+| Drop a previously-advertised MCP `protocolVersion` | **major** | patch |
+| Change a flag's accepted-value shape (e.g. `--output-format` enum) in a non-superset way | **major** | patch |
+| Add a new flag, slash command, hook event, optional payload field | **minor** | patch |
+| Advertise an additional MCP `protocolVersion` | **minor** | patch |
+| Add a new `--print` output-format value | **minor** | patch |
+| Bug fix within an existing surface (output matches what was already documented) | **patch** | patch |
+| Default-value change on an existing flag (rare; treat as breaking unless purely internal) | **major** | patch |
+| Anything in `internal/`, `cmd/<vendor>/` private logic, `Taskfile.yaml`, demo, docs, CI, tests | none (not public API) | none |
+
+`COMPATIBILITY.md` row state changes (`✗ planned` → `✓ supported`, etc.)
+are *consequences* of the above — update the matrix in the same PR that
+flips the binary's behavior. The matrix should never lag the surface in
+a published release.
+
+## Pre-tag checklist
+
+Before pushing a release tag, eyeball the diff against the previous tag:
+
+```sh
+git diff vPREV..HEAD -- main.go cmd/ internal/slash/slash.go internal/hooks/hooks.go cmd/claude/print.go
+```
+
+Anything in the bump table that touches any of those files is the
+candidate bump. Pick the highest-impact category and tag accordingly.
 
 ## Cutting a release
 
