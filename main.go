@@ -146,7 +146,7 @@ func main() {
 		out:            os.Stdout,
 	}
 	shutdown := func(reason string) {
-		// Flush any in-flight /tool that never got a /result so its
+		// Flush any in-flight /fake-tool that never got a /fake-tool-result so its
 		// PostToolUse fires (with empty response) before SessionEnd.
 		slash.FlushPendingTool(context.Background())
 		if err := hooks.OnSessionEnd(context.Background(), reason); err != nil {

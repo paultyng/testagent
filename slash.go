@@ -340,8 +340,8 @@ func (h *SlashHandler) takePending() *pendingToolCall {
 }
 
 // firePendingHook posts PostToolUse for a captured /fake-tool. response is the
-// /fake-tool-result body (parsed JSON or raw string) or nil when flushing a dangling
-// /tool. Errors are logged to stderr and do not abort the session.
+// /fake-tool-result body (parsed JSON or raw string) or nil when flushing a
+// dangling /fake-tool. Errors are logged to stderr and do not abort the session.
 func (h *SlashHandler) firePendingHook(ctx context.Context, p *pendingToolCall, response any) {
 	dur := time.Since(p.startedAt).Milliseconds()
 	if err := h.hooks.OnToolUse(ctx, p.toolUseID, p.name, p.input, response, dur); err != nil {
