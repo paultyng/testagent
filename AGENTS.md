@@ -35,7 +35,9 @@ Real-Claude protocol shapes are captured from a real Claude session run against 
 
 ## Demos
 
-`demo/hero.tape` renders `demo/hero.gif` (the README hero) via [vhs](https://github.com/charmbracelet/vhs). When a PR changes user-visible behavior:
+`demo/hero.tape` renders `demo/hero.gif` (the README hero) via [vhs](https://github.com/charmbracelet/vhs). The `demo/` directory holds **only** the hero — nothing else gets committed there.
+
+When a PR changes user-visible behavior:
 
 - **Re-render `demo/hero.gif`** if the change affects what the hero shows (banner, slash output, thinking animation, etc.).
-- **Add a PR-specific tape** under `demo/<short-slug>.tape` (e.g. `demo/queueing-during-thinking.tape`) when the fix benefits from a focused animation a reviewer can watch. Render it to `demo/<short-slug>.gif` and link it from the PR description. The hero stays the canonical "what is testagent" demo; per-PR tapes are illustrative and can be removed after merge if they're no longer load-bearing.
+- **For a focused per-PR animation**, paste the tape body inline in a PR comment (in a fenced ```` ```vhs ```` block) and **attach the rendered gif to the same comment** via GitHub's drag-and-drop upload. Do NOT commit the tape or gif to `demo/`. Per-PR demos are review aids, not project artifacts — they live with the PR thread and disappear when the branch is deleted.
