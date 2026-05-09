@@ -8,6 +8,10 @@ The point isn't "no LLM" as a virtue — wiring a local LLM into your test harne
 
 Use it when you're building something that *drives* a coding agent (a TUI wrapper, a session manager, a multi-agent orchestrator) and you need a deterministic, network-free fake to exercise the integration.
 
+## Compatibility
+
+See [COMPATIBILITY.md](COMPATIBILITY.md) for the per-vendor matrix of flags, slash commands, and REPL behaviors testagent supports, accepts, or intentionally omits.
+
 ## Install
 
 ```sh

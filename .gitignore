@@ -1,4 +1,11 @@
 /testagent
-.claude/
+# .claude/ is partially tracked: skills/ is committed; everything else is local-only.
+.claude/rules/
+.claude/settings*.json
+.claude/settings.local.json
+.claude/*.json
+.claude/*.md
 testdata/captures/
+compat/
+RELEASE_PLAN.md
 .DS_Store
