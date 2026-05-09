@@ -8,7 +8,7 @@ A fake CLI agent for testing orchestration tooling that drives real coding agent
 
 The product framing is **deterministic output for tests**, not "no LLM" as a virtue. Wiring a local LLM into a test harness is a valid choice for some workflows; testagent is explicitly not that. Every assertion-relevant byte (slash dispatch, hook payloads, MCP frames, stream-json shapes) is scripted by the user, not generated, so tests stay stable across runs.
 
-v1 ships a drop-in fake for Claude Code: argv compatibility for the flags orchestrators commonly emit, HTTP hooks (`UserPromptSubmit` / `PostToolUse` / `Stop` / `SessionEnd`), an MCP HTTP client that handshakes and dispatches `tools/call`, `--print --output-format stream-json` for non-interactive callers, a slash-command grammar for driving UI primitives interactively, and lipgloss/glamour rendering for plausible-shape output.
+v1 ships a drop-in fake for Claude Code: argv compatibility for the flags orchestrators commonly emit, HTTP hooks (`UserPromptSubmit` / `PostToolUse` / `Stop` / `SessionEnd`), an MCP HTTP client that handshakes and dispatches `tools/call`, `--print --output-format stream-json` for non-interactive callers, a slash-command grammar for driving UI primitives interactively, and lipgloss-rendered plausible-shape output.
 
 ## Future phases
 
@@ -20,7 +20,7 @@ v1 ships a drop-in fake for Claude Code: argv compatibility for the flags orches
 ## Design conventions
 
 - **Schema types are duplicated, not imported.** `Settings` and `MCPConfig` mirror Claude Code's on-disk shapes. testagent stays self-contained.
-- **Stdlib-first; deps are deliberate.** Each non-stdlib dep is justified in the commit message that adds it (`mark3labs/mcp-go`, `lipgloss`, `glamour`, `bubbletea`, `bubbles`, `go-isatty`).
+- **Stdlib-first; deps are deliberate.** Each non-stdlib dep is justified in the commit message that adds it (`mark3labs/mcp-go`, `lipgloss`, `bubbletea`, `bubbles`, `go-isatty`).
 - **Interactive vs non-interactive split.** TTY stdin → bubbletea TUI (`tui.go`, alt-screen, concurrent input during the thinking spinner). Piped stdin or `--print` → `runScannerLoop` (line-scanner, inline rendering). The `mattn/go-isatty` check on `os.Stdin` is the gate; e2e tests pipe stdin so they always hit the scanner path.
 - **Conventional Commits.** One commit per phase. Each phase's commit leaves the tree buildable and tested.
 - **Tests:** `t.Parallel()`, table-driven, real `httptest`/`exec`-driven integration over mocks where possible (see `e2e_test.go`). Fixtures in `testdata/`.
@@ -30,7 +30,7 @@ v1 ships a drop-in fake for Claude Code: argv compatibility for the flags orches
 
 - **One subcommand per emulated agent type**: `testagent claude ...`, `testagent codex ...`, `testagent gemini ...`, etc. The current bare invocation is the implicit `claude` mode.
 - **One package per agent type** under `internal/agents/<vendor>/` containing the vendor's argv shape, payload encoders, and any vendor-specific quirks. Shared engine in `internal/`.
-- **Package boundaries** worth carving as the codebase grows: `internal/slash` (command grammar + dispatcher), `internal/hooks` (HTTP hook sender), `internal/mcp` (MCP client), `internal/render` (lipgloss/glamour wrappers). Currently all in `package main` for v1 simplicity.
+- **Package boundaries** worth carving as the codebase grows: `internal/slash` (command grammar + dispatcher), `internal/hooks` (HTTP hook sender), `internal/mcp` (MCP client), `internal/render` (lipgloss wrappers). Currently all in `package main` for v1 simplicity.
 
 ## Fixtures
 

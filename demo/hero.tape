@@ -31,11 +31,11 @@ Enter
 Sleep 4500ms
 
 # Tool-use cycle (runs after the queue drains).
-Type@40ms `/tool read_file {"path":"hello.go"}`
+Type@40ms `/fake-tool read_file {"path":"hello.go"}`
 Enter
 Sleep 400ms
 
-Type@40ms `/result {"ok":true,"size":42}`
+Type@40ms `/fake-tool-result {"ok":true,"size":42}`
 Enter
 Sleep 800ms
 

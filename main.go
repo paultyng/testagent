@@ -85,7 +85,7 @@ func main() {
 		name         string
 		printMode    bool
 		verbose      bool
-		delay        = flag.Duration("delay", 200*time.Millisecond, "simulated thinking delay before response")
+		delay        = flag.Duration("delay", 3*time.Second, "simulated thinking delay before response (also the default for /think)")
 		exitAfter    = flag.Int("exit-after", 0, "auto-exit after N interactions (0 = never)")
 		autoExit     = flag.Duration("auto-exit", 0, "auto-exit after duration (0 = disabled)")
 		sessionID    = flag.String("session-id", "", "session ID (new session)")
@@ -146,7 +146,7 @@ func main() {
 		out:            os.Stdout,
 	}
 	shutdown := func(reason string) {
-		// Flush any in-flight /tool that never got a /result so its
+		// Flush any in-flight /fake-tool that never got a /fake-tool-result so its
 		// PostToolUse fires (with empty response) before SessionEnd.
 		slash.FlushPendingTool(context.Background())
 		if err := hooks.OnSessionEnd(context.Background(), reason); err != nil {
@@ -327,18 +327,30 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 			return
 		}
 
-		// Slash commands drive UI primitives (tool blocks, panels, MCP calls,
-		// etc.) without going through the echo path. They don't fire OnPrompt.
+		// Slash commands drive UI primitives (fake-tool blocks, panels, MCP
+		// calls, etc.) without going through the echo path. They don't fire
+		// OnPrompt — except /think, which signals via outcome.Prompt that it
+		// should run through the same prompt path as raw input.
+		promptLine := input
+		thinkDur := opts.delay
 		if outcome := slash.Dispatch(ctx, input); outcome.Handled {
 			if outcome.Exit {
 				shutdown(outcome.Reason)
 				os.Exit(outcome.ExitCode)
 			}
-			fmt.Printf("\033[32m>\033[0m ")
-			continue
+			if outcome.Prompt == "" && !outcome.HasThinkDuration {
+				// Pure slash side-effect (panel, fake-tool, mcp, etc.).
+				fmt.Printf("\033[32m>\033[0m ")
+				continue
+			}
+			// /think — route the message through the regular prompt path.
+			promptLine = outcome.Prompt
+			if outcome.HasThinkDuration {
+				thinkDur = outcome.ThinkDuration
+			}
 		}
 
-		if err := opts.hooks.OnPrompt(ctx, input, opts.name); err != nil {
+		if err := opts.hooks.OnPrompt(ctx, promptLine, opts.name); err != nil {
 			fmt.Fprintf(os.Stderr, "testagent: hook OnPrompt: %v\n", err)
 		}
 
@@ -346,12 +358,12 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 
 		// Simulate thinking with a spinner + elapsed-seconds counter
 		// (matches the visual shape of real Claude's "thinking…" state).
-		showThinking(os.Stdout, opts.delay)
+		showThinking(os.Stdout, thinkDur)
 
 		// Echo response with color.
-		fmt.Printf("\033[1;35m[%s]\033[0m %s\n", opts.name, input)
+		fmt.Printf("\033[1;35m[%s]\033[0m %s\n", opts.name, promptLine)
 		fmt.Printf("\033[32m>\033[0m ")
-		lastAssistant = fmt.Sprintf("[%s] %s", opts.name, input)
+		lastAssistant = fmt.Sprintf("[%s] %s", opts.name, promptLine)
 
 		if err := opts.hooks.OnStop(ctx, lastAssistant, false); err != nil {
 			fmt.Fprintf(os.Stderr, "testagent: hook OnStop: %v\n", err)

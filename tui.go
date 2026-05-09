@@ -250,6 +250,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitCode = msg.outcome.ExitCode
 			return m, tea.Quit
 		}
+		// /think — run the message through the regular prompt path so hooks
+		// fire and the thinking animation runs. Outcome carries the optional
+		// duration override.
+		if msg.outcome.Prompt != "" || msg.outcome.HasThinkDuration {
+			return m, m.startPromptTurn(msg.outcome.Prompt, msg.outcome.ThinkDuration, msg.outcome.HasThinkDuration)
+		}
 
 	case hookErrMsg:
 		if msg.err != nil {
@@ -295,7 +301,20 @@ func (m *model) startTurn(line string) tea.Cmd {
 		return cmdSlashDispatch(m.opts.slash, line)
 	}
 
-	// Regular prompt: fire UserPromptSubmit hook + start thinking.
+	return m.startPromptTurn(line, 0, false)
+}
+
+// startPromptTurn fires UserPromptSubmit + the thinking animation for a
+// message. Used by raw-input prompts and by /think (which routes through the
+// same code path so it shares hooks + animation behavior). hasOverride
+// distinguishes "no duration parsed → use default" from "explicit /think 0 …
+// → no thinking, immediate echo."
+func (m *model) startPromptTurn(line string, override time.Duration, hasOverride bool) tea.Cmd {
+	delay := m.opts.delay
+	if hasOverride {
+		delay = override
+	}
+
 	m.thinking = true
 	m.thinkingInput = line
 	m.thinkStart = time.Now()
@@ -305,7 +324,7 @@ func (m *model) startTurn(line string) tea.Cmd {
 	response := fmt.Sprintf("[%s] %s", m.opts.name, line)
 	return tea.Batch(
 		cmdHookPrompt(m.opts.hooks, line, m.opts.name),
-		cmdThink(m.opts.delay, tag, response),
+		cmdThink(delay, tag, response),
 		m.spin.Tick,
 	)
 }
