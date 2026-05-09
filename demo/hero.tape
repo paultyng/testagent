@@ -39,7 +39,7 @@ Type@40ms `/result {"ok":true,"size":42}`
 Enter
 Sleep 800ms
 
-Type "/panel fake CLI agent for orchestrator tests — no LLM, no network, no $$$"
+Type "/panel real MCP calls, real HTTP hook execution — no LLM, no network, no $$$"
 Enter
 Sleep 1500ms
 

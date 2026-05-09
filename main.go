@@ -76,6 +76,7 @@ type scannerOptions struct {
 	statusLine     string
 	hooks          *HookSender
 	mcp            *MCPClient
+	slash          *SlashHandler
 }
 
 func main() {
@@ -126,7 +127,21 @@ func main() {
 
 	hooks := NewHookSender(settings, sid, cwd, transcriptPath, permissionMode)
 	mcpClient := NewMCPClient(mcpConfig)
+	slash := &SlashHandler{
+		name:           name,
+		streamDelay:    30 * time.Millisecond,
+		sessionID:      sid,
+		cwd:            cwd,
+		transcriptPath: transcriptPath,
+		permissionMode: permissionMode,
+		hooks:          hooks,
+		mcp:            mcpClient,
+		out:            os.Stdout,
+	}
 	shutdown := func(reason string) {
+		// Flush any in-flight /tool that never got a /result so its
+		// PostToolUse fires (with empty response) before SessionEnd.
+		slash.FlushPendingTool(context.Background())
 		if err := hooks.OnSessionEnd(context.Background(), reason); err != nil {
 			fmt.Fprintf(os.Stderr, "testagent: hook OnSessionEnd: %v\n", err)
 		}
@@ -168,18 +183,6 @@ func main() {
 			close(quitCh)
 		}()
 
-		slash := &SlashHandler{
-			name:           name,
-			streamDelay:    30 * time.Millisecond,
-			sessionID:      sid,
-			cwd:            cwd,
-			transcriptPath: transcriptPath,
-			permissionMode: permissionMode,
-			hooks:          hooks,
-			mcp:            mcpClient,
-			out:            os.Stdout,
-		}
-
 		code, reason := runTUI(context.Background(), tuiOptions{
 			name:           name,
 			sessionID:      sid,
@@ -219,6 +222,7 @@ func main() {
 		autoExit:       *autoExit,
 		statusLine:     statusLine,
 		hooks:          hooks,
+		slash:          slash,
 		mcp:            mcpClient,
 	}, shutdown)
 }
@@ -285,17 +289,7 @@ func runScannerLoop(ctx context.Context, opts scannerOptions, shutdown func(stri
 		}
 	}()
 
-	slash := &SlashHandler{
-		name:           opts.name,
-		streamDelay:    30 * time.Millisecond,
-		sessionID:      opts.sessionID,
-		cwd:            opts.cwd,
-		transcriptPath: opts.transcriptPath,
-		permissionMode: opts.permissionMode,
-		hooks:          opts.hooks,
-		mcp:            opts.mcp,
-		out:            os.Stdout,
-	}
+	slash := opts.slash
 
 	scanner := bufio.NewScanner(os.Stdin)
 	count := 0

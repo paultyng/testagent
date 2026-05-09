@@ -3,10 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func newTestSlashHandler(out *bytes.Buffer) *SlashHandler {
@@ -75,12 +79,12 @@ func TestSlash_Panel(t *testing.T) {
 	}
 }
 
-func TestSlash_Tool(t *testing.T) {
+func TestSlash_ToolAlone_NoHookYet(t *testing.T) {
 	t.Parallel()
 
-	var captured []byte
+	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		captured, _ = readAll(r.Body)
+		atomic.AddInt32(&hits, 1)
 		w.WriteHeader(200)
 	}))
 	defer srv.Close()
@@ -98,11 +102,177 @@ func TestSlash_Tool(t *testing.T) {
 	if !strings.Contains(out.String(), "read_file") {
 		t.Errorf("output missing tool name: %q", out.String())
 	}
-	if !strings.Contains(string(captured), `"tool_name":"read_file"`) {
-		t.Errorf("hook payload missing tool_name: %s", captured)
+	if got := atomic.LoadInt32(&hits); got != 0 {
+		t.Errorf("/tool alone fired %d hook(s); want 0 (paired with /result)", got)
 	}
-	if !strings.Contains(string(captured), `"path":"foo.go"`) {
-		t.Errorf("hook payload missing tool_input: %s", captured)
+}
+
+func TestSlash_ToolResultPair(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu       sync.Mutex
+		captured []map[string]any
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		captured = append(captured, body)
+		mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	out := &bytes.Buffer{}
+	h := newTestSlashHandler(out)
+	h.hooks = NewHookSender(&Settings{
+		Hooks: map[string][]HookMatcher{
+			"PostToolUse": {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
+		},
+	}, "sid-test", "/tmp", "", "default")
+
+	h.Dispatch(context.Background(), `/tool read_file {"path":"foo.go"}`)
+	time.Sleep(2 * time.Millisecond) // ensure non-zero duration_ms
+	h.Dispatch(context.Background(), `/result {"contents":"package foo"}`)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(captured) != 1 {
+		t.Fatalf("got %d hook calls, want 1", len(captured))
+	}
+	body := captured[0]
+	if body["tool_name"] != "read_file" {
+		t.Errorf("tool_name = %v, want read_file", body["tool_name"])
+	}
+	input, _ := body["tool_input"].(map[string]any)
+	if input == nil || input["path"] != "foo.go" {
+		t.Errorf("tool_input = %v, want {path:foo.go}", body["tool_input"])
+	}
+	resp, _ := body["tool_response"].(map[string]any)
+	if resp == nil || resp["contents"] != "package foo" {
+		t.Errorf("tool_response = %v, want {contents:package foo}", body["tool_response"])
+	}
+	dur, _ := body["duration_ms"].(float64)
+	if dur < 1 {
+		t.Errorf("duration_ms = %v, want >= 1ms", body["duration_ms"])
+	}
+}
+
+func TestSlash_OrphanResult(t *testing.T) {
+	t.Parallel()
+
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	out := &bytes.Buffer{}
+	h := newTestSlashHandler(out)
+	h.hooks = NewHookSender(&Settings{
+		Hooks: map[string][]HookMatcher{
+			"PostToolUse": {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
+		},
+	}, "sid-test", "/tmp", "", "default")
+
+	h.Dispatch(context.Background(), `/result {"orphan":true}`)
+
+	if !strings.Contains(out.String(), "orphan") {
+		t.Errorf("output missing result body: %q", out.String())
+	}
+	if got := atomic.LoadInt32(&hits); got != 0 {
+		t.Errorf("orphan /result fired %d hook(s); want 0", got)
+	}
+}
+
+func TestSlash_FlushPendingTool(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu       sync.Mutex
+		captured []map[string]any
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		captured = append(captured, body)
+		mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	out := &bytes.Buffer{}
+	h := newTestSlashHandler(out)
+	h.hooks = NewHookSender(&Settings{
+		Hooks: map[string][]HookMatcher{
+			"PostToolUse": {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
+		},
+	}, "sid-test", "/tmp", "", "default")
+
+	h.Dispatch(context.Background(), `/tool dangling {}`)
+	h.FlushPendingTool(context.Background())
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(captured) != 1 {
+		t.Fatalf("got %d hook calls, want 1", len(captured))
+	}
+	if captured[0]["tool_name"] != "dangling" {
+		t.Errorf("tool_name = %v, want dangling", captured[0]["tool_name"])
+	}
+	if captured[0]["tool_response"] != nil {
+		t.Errorf("tool_response = %v, want nil", captured[0]["tool_response"])
+	}
+}
+
+func TestSlash_SecondToolReplacesPending(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu       sync.Mutex
+		captured []map[string]any
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		captured = append(captured, body)
+		mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	out := &bytes.Buffer{}
+	h := newTestSlashHandler(out)
+	h.hooks = NewHookSender(&Settings{
+		Hooks: map[string][]HookMatcher{
+			"PostToolUse": {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
+		},
+	}, "sid-test", "/tmp", "", "default")
+
+	h.Dispatch(context.Background(), `/tool first {}`)
+	h.Dispatch(context.Background(), `/tool second {}`)
+	h.Dispatch(context.Background(), `/result {"ok":true}`)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(captured) != 2 {
+		t.Fatalf("got %d hook calls, want 2", len(captured))
+	}
+	if captured[0]["tool_name"] != "first" {
+		t.Errorf("first tool_name = %v, want first", captured[0]["tool_name"])
+	}
+	if captured[0]["tool_response"] != nil {
+		t.Errorf("first tool_response = %v, want nil (flushed)", captured[0]["tool_response"])
+	}
+	if captured[1]["tool_name"] != "second" {
+		t.Errorf("second tool_name = %v, want second", captured[1]["tool_name"])
+	}
+	if resp, _ := captured[1]["tool_response"].(map[string]any); resp == nil || resp["ok"] != true {
+		t.Errorf("second tool_response = %v, want {ok:true}", captured[1]["tool_response"])
 	}
 }
 
