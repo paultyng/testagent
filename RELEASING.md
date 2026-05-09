@@ -56,41 +56,117 @@ candidate bump. Pick the highest-impact category and tag accordingly.
 
 ## Cutting a release
 
-### Prerequisites
+Two runbooks, both producing identical artifacts (they share
+`.goreleaser.yaml`). Pick one; recovery instructions below if a CI
+release stalls partway.
 
-- [`goreleaser`](https://goreleaser.com/install/) installed
-  (`brew install goreleaser` or
-  `go install github.com/goreleaser/goreleaser/v2@latest`).
-- `task ci` passes locally (lint, test, build).
+### Prerequisites (both paths)
+
+- [`goreleaser`](https://goreleaser.com/install/) installed for local —
+  `brew install goreleaser` or
+  `go install github.com/goreleaser/goreleaser/v2@latest`.
+  Not needed if you're confident CI will handle it.
 - `gh auth status` shows authenticated.
+- `task ci` passes locally.
+- Pre-tag checklist above is done; bump category decided.
 
-### CI path (preferred)
+### Runbook A — CI path (preferred)
 
-Push a `vX.Y.Z` tag. GitHub Actions picks it up via
-`.github/workflows/release.yml`, runs goreleaser, and uploads the
-artifacts to the GitHub release.
+1. **Pull latest main and confirm it's clean:**
+   ```sh
+   git checkout main && git pull --ff-only
+   git status   # working tree must be clean
+   ```
+2. **Tag the commit:**
+   ```sh
+   git tag v0.1.0
+   ```
+3. **Push the tag:**
+   ```sh
+   git push origin v0.1.0
+   ```
+4. **Watch the workflow:**
+   ```sh
+   gh run watch     # or: gh run list --workflow=release.yml
+   ```
+   The `Release` workflow validates the tag is semver-2.0, runs
+   goreleaser, and uploads cross-OS archives + checksums to a new
+   GitHub release.
+5. **Curate the release notes** on the GitHub release page (see
+   *Writing release notes* below). The workflow leaves the
+   auto-generated commit list in the body; prepend the curated
+   summary on top.
 
-```sh
-git tag v0.1.0
-git push origin v0.1.0
-```
+### Runbook B — Local release
 
-### Local fallback (when CI minutes are exhausted or unavailable)
+Use this when CI minutes are exhausted, the workflow is disabled, or
+you want to verify a release locally before pushing.
 
-Both paths share `.goreleaser.yaml`, so the artifacts are identical —
-they differ only in WHERE the upload auth comes from.
+1. **Pull latest main and confirm it's clean:**
+   ```sh
+   git checkout main && git pull --ff-only
+   git status   # working tree must be clean
+   ```
+2. **Auth:**
+   ```sh
+   export GH_TOKEN=$(gh auth token)
+   ```
+3. **Tag and push:**
+   ```sh
+   git tag v0.1.0
+   git push origin v0.1.0
+   ```
+4. **Run goreleaser locally:**
+   ```sh
+   task release:local
+   ```
+   The task validates `goreleaser` is on PATH, `GH_TOKEN` is set, and
+   the current tag is semver-2.0, then runs
+   `goreleaser release --clean` against the tag. Artifacts land in
+   `dist/` and are uploaded to the GitHub release for the tag.
+5. **Curate the release notes** on the GitHub release page (see
+   *Writing release notes* below).
 
-```sh
-export GH_TOKEN=$(gh auth token)
-git tag v0.1.0
-git push origin v0.1.0
-task release:local
-```
+### Recovery — tag pushed but no release published
 
-`task release:local` validates `goreleaser` is on PATH and `GH_TOKEN`
-is set, then runs `goreleaser release --clean` against the current tag.
-Artifacts land in `dist/` and are uploaded to the GitHub release for the
-tag.
+If you pushed a tag expecting Runbook A and the workflow didn't run
+(disabled, minutes exhausted, etc.) or failed before goreleaser
+finished:
+
+1. **Check the workflow state:**
+   ```sh
+   gh run list --workflow=release.yml --limit 3
+   ```
+2. **If no run started**, switch to the local path. The tag already
+   exists on the remote, so just:
+   ```sh
+   git fetch --tags
+   git checkout v0.1.0
+   export GH_TOKEN=$(gh auth token)
+   task release:local
+   ```
+   goreleaser creates a new GitHub release for the tag.
+3. **If a run started but failed mid-flight** (a partial GitHub
+   release may exist), delete it first so goreleaser can re-upload
+   from a clean slate:
+   ```sh
+   gh release delete v0.1.0 --yes --cleanup-tag=false
+   git checkout v0.1.0
+   export GH_TOKEN=$(gh auth token)
+   task release:local
+   ```
+   `--cleanup-tag=false` keeps the tag intact so the same `v0.1.0`
+   gets the artifacts.
+4. **If the tag itself is wrong** (e.g., points at the wrong
+   commit), delete and re-tag:
+   ```sh
+   git push origin :refs/tags/v0.1.0   # delete on remote
+   git tag -d v0.1.0                    # delete locally
+   gh release delete v0.1.0 --yes --cleanup-tag=false 2>/dev/null || true
+   git tag v0.1.0                       # re-tag at HEAD
+   git push origin v0.1.0
+   # then Runbook A or B
+   ```
 
 ## Writing release notes
 
