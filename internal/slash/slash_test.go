@@ -132,10 +132,10 @@ func TestParseDurationPrefix(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		in       string
-		wantDur  time.Duration
-		wantMsg  string
-		wantOk   bool
+		in      string
+		wantDur time.Duration
+		wantMsg string
+		wantOk  bool
 	}{
 		{in: "5s working on it", wantDur: 5 * time.Second, wantMsg: "working on it", wantOk: true},
 		{in: "200ms quick", wantDur: 200 * time.Millisecond, wantMsg: "quick", wantOk: true},

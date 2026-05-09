@@ -76,7 +76,7 @@ var (
 
 func Prompt() string                        { return okStyle.Render("> ") }
 func Echo(name, msg string) string          { return EchoHeader(name) + " " + msg }
-func EchoHeader(name string) string          { return echoStyle.Render("[" + name + "]") }
+func EchoHeader(name string) string         { return echoStyle.Render("[" + name + "]") }
 func Lifecycle(s string) string             { return MuteStyle.Render("[" + s + "]") }
 func LifecycleWarn(s string) string         { return warnStyle.Render("[" + s + "]") }
 func ToolHeader(prefix, name string) string { return ToolStyle.Render(prefix + name) }

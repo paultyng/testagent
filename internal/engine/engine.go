@@ -23,8 +23,8 @@ import (
 // loops. Values come from the caller's flag set; the engine treats them as
 // immutable for the lifetime of Run.
 type Globals struct {
-	Emulator    string        // "Claude", "Codex", etc. — vendor type prefix shown in the banner
-	Name        string        // user-supplied session label (--name)
+	Emulator    string // "Claude", "Codex", etc. — vendor type prefix shown in the banner
+	Name        string // user-supplied session label (--name)
 	SessionID   string
 	Resumed     bool
 	ThinkDelay  time.Duration // default thinking-spinner duration per turn
