@@ -25,6 +25,7 @@ v1 ships a drop-in fake for Claude Code: argv compatibility for the flags orches
 - **Conventional Commits.** One commit per phase. Each phase's commit leaves the tree buildable and tested.
 - **Tests:** `t.Parallel()`, table-driven, real `httptest`/`exec`-driven integration over mocks where possible (see `e2e_test.go`). Fixtures in `testdata/`.
 - **Debug output goes to stderr.** Verbose / debug logging (e.g. `--verbose` hook traces) is plain text, one event per line, never ANSI-styled — it gets grepped and piped. Stdout stays reserved for stream-json frames and TUI rendering.
+- **`COMPATIBILITY.md` is the contract artifact.** It is the per-vendor source of record for which flags, slash commands, and REPL behaviors testagent implements, accepts, or omits. Update it when adding vendor-facing features. Use the `research-claude-coverage` skill to refresh it after a Claude Code release.
 
 ## Layout
 

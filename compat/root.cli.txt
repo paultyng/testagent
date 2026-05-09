@@ -1,0 +1,21 @@
+Fake CLI agent for testing orchestration tooling
+
+Usage:
+  testagent [command]
+
+Available Commands:
+  claude      Emulate the Claude Code CLI
+  codex       (stub) emulate Codex CLI — not yet implemented
+  completion  Generate the autocompletion script for the specified shell
+  help        Help about any command
+
+Flags:
+      --auto-exit duration      auto-exit after duration (0 = disabled)
+      --exit-after int          auto-exit after N interactions (0 = never)
+  -h, --help                    help for testagent
+      --history-cap int         TUI history cap (0 = unlimited) (default 1000)
+      --stream-delay duration   default per-token stream interval for the response (override per-turn with /stream) (default 30ms)
+      --think-delay duration    default thinking-spinner duration per turn (override per-turn with /think) (default 2s)
+  -v, --verbose                 log hook activity to stderr
+
+Use "testagent [command] --help" for more information about a command.
