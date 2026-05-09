@@ -1,4 +1,4 @@
-package main
+package engine
 
 import (
 	"context"
@@ -12,47 +12,53 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/paultyng/testagent/internal/hooks"
+	"github.com/paultyng/testagent/internal/mcp"
+	"github.com/paultyng/testagent/internal/slash"
 )
+
+// testOpts is the optional override bag for newTestModel.
+type testOpts struct {
+	Name       string
+	Delay      time.Duration
+	HistoryCap int
+	Hooks      *hooks.Sender
+	MCP        *mcp.Client
+}
 
 // newTestModel builds a model wired up against in-memory hook/MCP/slash
 // dependencies. opt can be nil for defaults.
-func newTestModel(opt *tuiOptions) model {
-	o := tuiOptions{
-		name:       "Test",
-		sessionID:  "sid-test",
-		cwd:        "/tmp",
-		delay:      10 * time.Millisecond,
-		historyCap: 1000,
-		hooks:      NewHookSender(nil, "sid-test", "/tmp", "", "default", nil),
-		mcp:        NewMCPClient(nil),
+func newTestModel(opt *testOpts) model {
+	g := Globals{
+		Name:       "Test",
+		SessionID:  "sid-test",
+		Delay:      10 * time.Millisecond,
+		HistoryCap: 1000,
+	}
+	d := Deps{
+		Hooks: hooks.NewSender(nil, "sid-test", "/tmp", "", "default", nil),
+		MCP:   mcp.NewClient(nil),
 	}
 	if opt != nil {
-		// Caller-provided overrides
-		if opt.name != "" {
-			o.name = opt.name
+		if opt.Name != "" {
+			g.Name = opt.Name
 		}
-		if opt.delay != 0 {
-			o.delay = opt.delay
+		if opt.Delay != 0 {
+			g.Delay = opt.Delay
 		}
-		if opt.historyCap != 0 {
-			o.historyCap = opt.historyCap
+		if opt.HistoryCap != 0 {
+			g.HistoryCap = opt.HistoryCap
 		}
-		if opt.hooks != nil {
-			o.hooks = opt.hooks
+		if opt.Hooks != nil {
+			d.Hooks = opt.Hooks
 		}
-		if opt.mcp != nil {
-			o.mcp = opt.mcp
+		if opt.MCP != nil {
+			d.MCP = opt.MCP
 		}
 	}
-	o.slash = &SlashHandler{
-		name:        o.name,
-		streamDelay: 0,
-		sessionID:   o.sessionID,
-		cwd:         o.cwd,
-		hooks:       o.hooks,
-		mcp:         o.mcp,
-	}
-	return newModel(o)
+	d.Slash = slash.New(0, d.Hooks, d.MCP, io.Discard)
+	return newModel(g, d)
 }
 
 // type-and-update feeds each rune through Update so the textinput sees them
@@ -272,8 +278,7 @@ func TestModel_EscCancelsThinking(t *testing.T) {
 func TestModel_HistoryCapEvictsOldest(t *testing.T) {
 	t.Parallel()
 
-	o := tuiOptions{historyCap: 3}
-	m := newTestModel(&o)
+	m := newTestModel(&testOpts{HistoryCap: 3})
 	for _, s := range []string{"one", "two", "three", "four", "five"} {
 		m.appendHistoryCapped(s)
 	}
@@ -317,28 +322,18 @@ func TestCmdSlashRestart_FiresHooksInOrder(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	settings := &Settings{
-		Hooks: map[string][]HookMatcher{
-			hookEventPostToolUse:  {{Hooks: []Hook{{Type: "http", URL: srv.URL + "/tool-use", Timeout: 1}}}},
-			hookEventSessionStart: {{Hooks: []Hook{{Type: "http", URL: srv.URL + "/start", Timeout: 1}}}},
-			hookEventSessionEnd:   {{Hooks: []Hook{{Type: "http", URL: srv.URL + "/end", Timeout: 1}}}},
-		},
-	}
-	hooks := NewHookSender(settings, "sid-test", "/tmp", "", "default", nil)
-	slash := &SlashHandler{
-		name:      "Test",
-		sessionID: "sid-test",
-		cwd:       "/tmp",
-		hooks:     hooks,
-		mcp:       NewMCPClient(nil),
-		out:       io.Discard,
-	}
+	hookSender := hooks.NewSender(map[string][]hooks.Matcher{
+		hooks.PostToolUse:  {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/tool-use", Timeout: 1}}}},
+		hooks.SessionStart: {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/start", Timeout: 1}}}},
+		hooks.SessionEnd:   {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/end", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
+	handler := slash.New(0, hookSender, mcp.NewClient(nil), io.Discard)
 
 	// Stage a pending /fake-tool so we can prove its PostToolUse drains
 	// before SessionEnd.
-	slash.Dispatch(context.Background(), `/fake-tool read_file {"path":"foo.go"}`)
+	handler.Dispatch(context.Background(), `/fake-tool read_file {"path":"foo.go"}`)
 
-	cmd := cmdSlashRestart(slash, hooks, "compact")
+	cmd := cmdSlashRestart(handler, hookSender, "compact")
 	if cmd == nil {
 		t.Fatal("cmdSlashRestart returned nil cmd")
 	}

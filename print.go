@@ -6,8 +6,9 @@
 // stream-json from a real claude binary can parse testagent's output the
 // same way.
 //
-// --verbose hook trace lines (when enabled) go to stderr via the HookSender,
-// so stdout stays clean for stream-json consumers reading JSONL frames.
+// --verbose hook trace lines (when enabled) go to stderr via the hook
+// sender, so stdout stays clean for stream-json consumers reading JSONL
+// frames.
 
 package main
 
@@ -21,6 +22,9 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/paultyng/testagent/internal/hooks"
+	"github.com/paultyng/testagent/internal/mcp"
 )
 
 // printOptions bundles the inputs runPrint needs from main().
@@ -31,8 +35,8 @@ type printOptions struct {
 	model        string
 	outputFormat string // "text" | "json" | "stream-json"
 	positional   []string
-	hooks        *HookSender
-	mcp          *MCPClient
+	hooks        *hooks.Sender
+	mcp          *mcp.Client
 }
 
 // runPrint executes one non-interactive turn and returns the exit code.
@@ -180,7 +184,7 @@ func emitStreamJSON(w io.Writer, opt printOptions, result string, durationMs int
 
 // mcpServersForInit returns the connected-server name list for the system/init
 // event. Nil-safe: returns an empty slice when MCP isn't configured.
-func mcpServersForInit(c *MCPClient) []map[string]any {
+func mcpServersForInit(c *mcp.Client) []map[string]any {
 	if c == nil {
 		return []map[string]any{}
 	}

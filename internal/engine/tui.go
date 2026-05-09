@@ -1,9 +1,8 @@
-// Bubbletea-driven interactive TUI. Replaces the bufio.Scanner blocking loop
-// when stdin is a TTY and --print is not set, so that input keystrokes are
-// accepted concurrently with the thinking spinner. Headless paths (--print
-// and piped stdin) keep using runScannerLoop in main.go.
+// Bubbletea-driven interactive TUI. Used when stdin is a TTY so input
+// keystrokes are accepted concurrently with the thinking spinner. Headless
+// paths (piped stdin) use runScanner instead.
 
-package main
+package engine
 
 import (
 	"context"
@@ -17,31 +16,17 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-)
 
-// tuiOptions bundles inputs runTUI needs from main().
-type tuiOptions struct {
-	name           string
-	sessionID      string
-	resumed        bool
-	cwd            string
-	transcriptPath string
-	permissionMode string
-	delay          time.Duration
-	exitAfter      int
-	autoExit       time.Duration
-	historyCap     int // 0 = unlimited
-	statusLine     string
-	settings       *Settings
-	mcpConfig      *MCPConfig
-	hooks          *HookSender
-	mcp            *MCPClient
-	slash          *SlashHandler
-}
+	"github.com/paultyng/testagent/internal/hooks"
+	"github.com/paultyng/testagent/internal/mcp"
+	"github.com/paultyng/testagent/internal/render"
+	"github.com/paultyng/testagent/internal/slash"
+)
 
 // model is the bubbletea Model driving the interactive session.
 type model struct {
-	opts tuiOptions
+	g Globals
+	d Deps
 
 	history []string // rendered scrollback
 	pending []string // queued prompts submitted while thinking
@@ -75,7 +60,7 @@ type thinkingDoneMsg struct {
 // slashDoneMsg fires when an asynchronously-dispatched slash command finishes.
 type slashDoneMsg struct {
 	rendered string
-	outcome  SlashOutcome
+	outcome  slash.Outcome
 }
 
 // hookErrMsg surfaces a hook error from a goroutine. When err is nil, no-op.
@@ -106,24 +91,22 @@ type autoExitMsg struct{}
 // cancelMsg fires when the user presses Esc during a thinking turn.
 type cancelMsg struct{}
 
-// Styling tokens (accentOk, accentEcho, mute, thoughtMarker, styleBanner,
-// accentSession, bannerMeta) live in style.go.
-
 // newModel builds the initial model. The textinput and spinner are
 // bubbles components; both honor m.width on each Update.
-func newModel(opts tuiOptions) model {
+func newModel(g Globals, d Deps) model {
 	ti := textinput.New()
 	ti.Placeholder = ""
-	ti.Prompt = renderPrompt()
+	ti.Prompt = render.Prompt()
 	ti.Focus()
 	ti.CharLimit = 0
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
-	sp.Style = thinking
+	sp.Style = render.ThinkingStyle
 
 	return model{
-		opts:  opts,
+		g:     g,
+		d:     d,
 		input: ti,
 		spin:  sp,
 	}
@@ -131,17 +114,17 @@ func newModel(opts tuiOptions) model {
 
 // banner renders the rounded banner shown once at session start. Same shape
 // as the scanner-path banner so users see the same intro across both modes.
-func banner(opts tuiOptions) string {
+func banner(g Globals) string {
 	sessionLabel := "session"
-	if opts.resumed {
+	if g.Resumed {
 		sessionLabel = "resumed"
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left,
-		accentSession.Render(opts.name),
-		bannerMeta.Faint(true).Render(sessionLabel+" "+opts.sessionID),
-		mute.Render("Type anything; /help for commands"),
+		render.SessionStyle.Render(g.Name),
+		render.BannerMetaStyle.Faint(true).Render(sessionLabel+" "+g.SessionID),
+		render.MuteStyle.Render("Type anything; /help for commands"),
 	)
-	return styleBanner.Render(content)
+	return render.BannerStyle.Render(content)
 }
 
 // Init seeds the initial command batch: spinner ticks (so it animates when
@@ -154,16 +137,16 @@ func banner(opts tuiOptions) string {
 // for the serialization caveat against concurrent user-driven hook cmds.
 func (m model) Init() tea.Cmd {
 	startSource := "startup"
-	if m.opts.resumed {
+	if m.g.Resumed {
 		startSource = "resume"
 	}
 	cmds := []tea.Cmd{
 		textinput.Blink,
 		m.spin.Tick,
-		cmdBoot(m.opts.mcp, m.opts.hooks, startSource),
+		cmdBoot(m.d.MCP, m.d.Hooks, startSource),
 	}
-	if m.opts.autoExit > 0 {
-		cmds = append(cmds, cmdAutoExit(m.opts.autoExit))
+	if m.g.AutoExit > 0 {
+		cmds = append(cmds, cmdAutoExit(m.g.AutoExit))
 	}
 	return tea.Batch(cmds...)
 }
@@ -174,9 +157,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Lazy banner injection — Init can't mutate state, so we do it once on
 	// the first Update tick.
 	if !m.bannerDone {
-		m.history = append(m.history, banner(m.opts))
-		if m.opts.statusLine != "" {
-			m.history = append(m.history, mute.Render("["+m.opts.statusLine+"]"))
+		m.history = append(m.history, banner(m.g))
+		if m.g.StatusLine != "" {
+			m.history = append(m.history, render.MuteStyle.Render("["+m.g.StatusLine+"]"))
 		}
 		m.bannerDone = true
 	}
@@ -211,7 +194,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.thinking {
 				// Queue everything (regular + slash) while thinking.
 				m.pending = append(m.pending, line)
-				m.appendHistoryCapped(mute.Render("[queued] " + line))
+				m.appendHistoryCapped(render.MuteStyle.Render("[queued] " + line))
 				return m, nil
 			}
 			cmd := m.startTurn(line)
@@ -227,9 +210,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.thinkTag++ // invalidate any pending thinkingDoneMsg
 			m.thinking = false
 			elapsed := time.Since(m.thinkStart).Truncate(time.Second)
-			m.appendHistoryCapped(thoughtMarker.Render(fmt.Sprintf("Interrupted (after %s)", elapsed)))
+			m.appendHistoryCapped(render.ThoughtMarkerStyle.Render(fmt.Sprintf("Interrupted (after %s)", elapsed)))
 			// Fire OnStop with empty last-assistant-message and stop_hook_active=true.
-			cmds = append(cmds, cmdHookStop(m.opts.hooks, "", true))
+			cmds = append(cmds, cmdHookStop(m.d.Hooks, "", true))
 		}
 
 	case thinkingDoneMsg:
@@ -239,12 +222,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.thinking = false
 		elapsed := time.Since(m.thinkStart).Truncate(time.Second)
-		m.appendHistoryCapped(thoughtMarker.Render(fmt.Sprintf("Thought for %s", elapsed)))
-		m.appendHistoryCapped(renderEcho(msg.name, msg.body))
-		cmds = append(cmds, cmdHookStop(m.opts.hooks, fmt.Sprintf("[%s] %s", msg.name, msg.body), false))
+		m.appendHistoryCapped(render.ThoughtMarkerStyle.Render(fmt.Sprintf("Thought for %s", elapsed)))
+		m.appendHistoryCapped(render.Echo(msg.name, msg.body))
+		cmds = append(cmds, cmdHookStop(m.d.Hooks, fmt.Sprintf("[%s] %s", msg.name, msg.body), false))
 		m.count++
-		if m.opts.exitAfter > 0 && m.count >= m.opts.exitAfter {
-			m.appendHistoryCapped(mute.Render(fmt.Sprintf("[exit-after %d reached]", m.opts.exitAfter)))
+		if m.g.ExitAfter > 0 && m.count >= m.g.ExitAfter {
+			m.appendHistoryCapped(render.MuteStyle.Render(fmt.Sprintf("[exit-after %d reached]", m.g.ExitAfter)))
 			m.quitReason = "other"
 			return m, tea.Quit
 		}
@@ -274,7 +257,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// the ordering is sequential. tea.Batch would run them
 			// concurrently and lose the back-to-back contract on the wire.
 			// History/scrollback is not cleared — that's a future UI primitive.
-			cmds = append(cmds, cmdSlashRestart(m.opts.slash, m.opts.hooks, msg.outcome.RestartReason))
+			cmds = append(cmds, cmdSlashRestart(m.d.Slash, m.d.Hooks, msg.outcome.RestartReason))
 			break
 		}
 		// /think — run the message through the regular prompt path so hooks
@@ -288,21 +271,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			// Hook errors get the LifecycleWarn token (yellow) so they don't
 			// vanish into the mute lifecycle-note stream.
-			m.appendHistoryCapped(renderLifecycleWarn(fmt.Sprintf("hook %s error: %v", msg.stage, msg.err)))
+			m.appendHistoryCapped(render.LifecycleWarn(fmt.Sprintf("hook %s error: %v", msg.stage, msg.err)))
 		}
 
 	case mcpConnectMsg:
 		if msg.err != nil {
-			m.appendHistoryCapped(mute.Render(fmt.Sprintf("[mcp connect failed: %v]", msg.err)))
+			m.appendHistoryCapped(render.MuteStyle.Render(fmt.Sprintf("[mcp connect failed: %v]", msg.err)))
 		} else if msg.tools > 0 {
-			m.appendHistoryCapped(mute.Render(fmt.Sprintf("[mcp connected: %d tools]", msg.tools)))
+			m.appendHistoryCapped(render.MuteStyle.Render(fmt.Sprintf("[mcp connected: %d tools]", msg.tools)))
 		}
 		if msg.startErr != nil {
-			m.appendHistoryCapped(renderLifecycleWarn(fmt.Sprintf("hook OnSessionStart error: %v", msg.startErr)))
+			m.appendHistoryCapped(render.LifecycleWarn(fmt.Sprintf("hook OnSessionStart error: %v", msg.startErr)))
 		}
 
 	case autoExitMsg:
-		m.appendHistoryCapped(mute.Render(fmt.Sprintf("[auto-exit after %s]", m.opts.autoExit)))
+		m.appendHistoryCapped(render.MuteStyle.Render(fmt.Sprintf("[auto-exit after %s]", m.g.AutoExit)))
 		m.quitReason = "other"
 		return m, tea.Quit
 
@@ -324,13 +307,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // the command(s) to run for this turn.
 func (m *model) startTurn(line string) tea.Cmd {
 	// Echo the user prompt into history (matching the scanner path's "> line").
-	m.appendHistoryCapped(renderPrompt() + line)
+	m.appendHistoryCapped(render.Prompt() + line)
 
 	if strings.HasPrefix(line, "/") {
 		// Slash dispatch. We render synchronously (most slash commands are
 		// near-instant; /stream sleeps a few hundred ms which is fine in the
 		// tea.Cmd goroutine).
-		return cmdSlashDispatch(m.opts.slash, line)
+		return cmdSlashDispatch(m.d.Slash, line)
 	}
 
 	return m.startPromptTurn(line, 0, false)
@@ -342,7 +325,7 @@ func (m *model) startTurn(line string) tea.Cmd {
 // distinguishes "no duration parsed → use default" from "explicit /think 0 …
 // → no thinking, immediate echo."
 func (m *model) startPromptTurn(line string, override time.Duration, hasOverride bool) tea.Cmd {
-	delay := m.opts.delay
+	delay := m.g.Delay
 	if hasOverride {
 		delay = override
 	}
@@ -354,8 +337,8 @@ func (m *model) startPromptTurn(line string, override time.Duration, hasOverride
 	tag := m.thinkTag
 
 	return tea.Batch(
-		cmdHookPrompt(m.opts.hooks, line, m.opts.name),
-		cmdThink(delay, tag, m.opts.name, line),
+		cmdHookPrompt(m.d.Hooks, line, m.g.Name),
+		cmdThink(delay, tag, m.g.Name, line),
 		m.spin.Tick,
 	)
 }
@@ -374,8 +357,8 @@ func (m model) View() string {
 		// Spinner glyph (already styled by m.spin.Style = thinking) +
 		// "thinking…" in the same warm token, then the mute parenthetical.
 		b.WriteString(m.spin.View())
-		b.WriteString(renderThinking(" thinking…"))
-		b.WriteString(mute.Render(fmt.Sprintf(" (%s · esc to interrupt)", elapsed)))
+		b.WriteString(render.Thinking(" thinking…"))
+		b.WriteString(render.MuteStyle.Render(fmt.Sprintf(" (%s · esc to interrupt)", elapsed)))
 		b.WriteString("\n")
 	}
 	b.WriteString(m.input.View())
@@ -387,7 +370,7 @@ func (m model) View() string {
 // when the cap is exceeded. cap=0 disables eviction.
 func (m *model) appendHistoryCapped(line string) {
 	m.history = append(m.history, strings.TrimRight(line, "\n"))
-	limit := m.opts.historyCap
+	limit := m.g.HistoryCap
 	if limit <= 0 {
 		return
 	}
@@ -407,24 +390,24 @@ func cmdThink(delay time.Duration, tag int, name, body string) tea.Cmd {
 
 // cmdSlashDispatch runs a slash command on a goroutine and returns its
 // rendered output + outcome.
-func cmdSlashDispatch(slash *SlashHandler, line string) tea.Cmd {
+func cmdSlashDispatch(handler *slash.Handler, line string) tea.Cmd {
 	return func() tea.Msg {
-		rendered, outcome := slash.DispatchString(context.Background(), line)
+		rendered, outcome := handler.DispatchString(context.Background(), line)
 		return slashDoneMsg{rendered: rendered, outcome: outcome}
 	}
 }
 
 // cmdHookPrompt fires UserPromptSubmit on a goroutine.
-func cmdHookPrompt(hooks *HookSender, prompt, name string) tea.Cmd {
+func cmdHookPrompt(sender *hooks.Sender, prompt, name string) tea.Cmd {
 	return func() tea.Msg {
-		return hookErrMsg{stage: "OnPrompt", err: hooks.OnPrompt(context.Background(), prompt, name)}
+		return hookErrMsg{stage: "OnPrompt", err: sender.OnPrompt(context.Background(), prompt, name)}
 	}
 }
 
 // cmdHookStop fires Stop on a goroutine.
-func cmdHookStop(hooks *HookSender, last string, stopHookActive bool) tea.Cmd {
+func cmdHookStop(sender *hooks.Sender, last string, stopHookActive bool) tea.Cmd {
 	return func() tea.Msg {
-		return hookErrMsg{stage: "OnStop", err: hooks.OnStop(context.Background(), last, stopHookActive)}
+		return hookErrMsg{stage: "OnStop", err: sender.OnStop(context.Background(), last, stopHookActive)}
 	}
 }
 
@@ -435,15 +418,15 @@ func cmdHookStop(hooks *HookSender, last string, stopHookActive bool) tea.Cmd {
 // mcp.Connect → OnSessionStart ordering and prevents races between boot
 // SessionStart and user-driven hooks (e.g. /restart) submitted before the
 // boot goroutine resolves.
-func cmdBoot(mcp *MCPClient, hooks *HookSender, source string) tea.Cmd {
+func cmdBoot(client *mcp.Client, sender *hooks.Sender, source string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		connectErr := mcp.Connect(ctx)
+		connectErr := client.Connect(ctx)
 		tools := 0
 		if connectErr == nil {
-			tools = len(mcp.Tools())
+			tools = len(client.Tools())
 		}
-		startErr := hooks.OnSessionStart(ctx, source)
+		startErr := sender.OnSessionStart(ctx, source)
 		return mcpConnectMsg{err: connectErr, tools: tools, startErr: startErr}
 	}
 }
@@ -452,13 +435,13 @@ func cmdBoot(mcp *MCPClient, hooks *HookSender, source string) tea.Cmd {
 // PostToolUse (for any pending /fake-tool), SessionEnd, and SessionStart land
 // on the wire in that fixed order. tea.Batch would dispatch separate cmds
 // concurrently, which would race the SessionEnd/SessionStart POSTs and
-// violate the back-to-back contract documented on SlashOutcome.Restart.
-func cmdSlashRestart(slash *SlashHandler, hooks *HookSender, reason string) tea.Cmd {
+// violate the back-to-back contract documented on slash.Outcome.Restart.
+func cmdSlashRestart(handler *slash.Handler, sender *hooks.Sender, reason string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		slash.FlushPendingTool(ctx)
-		endErr := hooks.OnSessionEnd(ctx, reason)
-		startErr := hooks.OnSessionStart(ctx, reason)
+		handler.FlushPendingTool(ctx)
+		endErr := sender.OnSessionEnd(ctx, reason)
+		startErr := sender.OnSessionStart(ctx, reason)
 		if err := errors.Join(endErr, startErr); err != nil {
 			return hookErrMsg{stage: "OnRestart", err: err}
 		}
@@ -476,8 +459,8 @@ func cmdAutoExit(d time.Duration) tea.Cmd {
 // otherwise) so callers can pass it through to the SessionEnd hook. Caller
 // supplies quitCh — closing it forwards SIGINT/SIGTERM into p.Quit() once
 // without racing with the alt-screen teardown.
-func runTUI(ctx context.Context, opts tuiOptions, quitCh <-chan struct{}) (int, string) {
-	m := newModel(opts)
+func runTUI(ctx context.Context, g Globals, d Deps, quitCh <-chan struct{}) (int, string) {
+	m := newModel(g, d)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
 
 	if quitCh != nil {

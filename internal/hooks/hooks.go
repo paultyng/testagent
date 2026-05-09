@@ -1,4 +1,8 @@
-package main
+// Package hooks posts Claude-Code-shaped hook events to URLs declared by
+// the caller. Sender accepts a flat map of matchers keyed by event name —
+// callers (e.g. cmd/claude) own the on-disk Settings struct that wraps
+// this map.
+package hooks
 
 import (
 	"bytes"
@@ -11,21 +15,37 @@ import (
 	"time"
 )
 
-// Claude Code hook event names.
+// Claude Code hook event names, exported so callers can build matcher maps
+// without stringly-typed event keys.
 const (
-	hookEventUserPromptSubmit = "UserPromptSubmit"
-	hookEventPostToolUse      = "PostToolUse"
-	hookEventStop             = "Stop"
-	hookEventSessionStart     = "SessionStart"
-	hookEventSessionEnd       = "SessionEnd"
+	UserPromptSubmit = "UserPromptSubmit"
+	PostToolUse      = "PostToolUse"
+	Stop             = "Stop"
+	SessionStart     = "SessionStart"
+	SessionEnd       = "SessionEnd"
 )
 
-// defaultHookTimeout is used when a Hook in settings does not specify Timeout.
-const defaultHookTimeout = 10 * time.Second
+// defaultTimeout is used when a Hook in settings does not specify Timeout.
+const defaultTimeout = 10 * time.Second
 
-// HookSender posts Claude-Code-shaped hook events to URLs declared in Settings.
-type HookSender struct {
-	settings       *Settings
+// Matcher binds a matcher pattern to one or more http hooks. Mirrors the
+// shape Claude Code's settings.json uses under hooks.<event>[].
+type Matcher struct {
+	Matcher string `json:"matcher"`
+	Hooks   []Hook `json:"hooks"`
+}
+
+// Hook is a single hook target. Only Type="http" is implemented.
+type Hook struct {
+	Type    string            `json:"type"`
+	URL     string            `json:"url"`
+	Timeout int               `json:"timeout"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// Sender posts hook events to URLs declared in matchers.
+type Sender struct {
+	matchers       map[string][]Matcher
 	sessionID      string
 	cwd            string
 	transcriptPath string
@@ -38,13 +58,13 @@ type HookSender struct {
 	debugWriter io.Writer
 }
 
-// NewHookSender returns a sender wired to the given settings. Settings may be
+// NewSender returns a sender wired to the given matcher map. matchers may be
 // nil (no-op sender). sessionID is the value emitted in the body's session_id
 // field. cwd/transcriptPath/permissionMode populate every event body.
 // debugWriter is optional; nil disables verbose logging.
-func NewHookSender(settings *Settings, sessionID, cwd, transcriptPath, permissionMode string, debugWriter io.Writer) *HookSender {
-	return &HookSender{
-		settings:       settings,
+func NewSender(matchers map[string][]Matcher, sessionID, cwd, transcriptPath, permissionMode string, debugWriter io.Writer) *Sender {
+	return &Sender{
+		matchers:       matchers,
 		sessionID:      sessionID,
 		cwd:            cwd,
 		transcriptPath: transcriptPath,
@@ -111,83 +131,83 @@ type sessionEndBody struct {
 }
 
 // OnPrompt fires UserPromptSubmit. sessionTitle is the human-facing label.
-func (h *HookSender) OnPrompt(ctx context.Context, prompt, sessionTitle string) error {
+func (s *Sender) OnPrompt(ctx context.Context, prompt, sessionTitle string) error {
 	body := userPromptSubmitBody{
-		CWD:            h.cwd,
-		HookEventName:  hookEventUserPromptSubmit,
-		PermissionMode: h.permissionMode,
+		CWD:            s.cwd,
+		HookEventName:  UserPromptSubmit,
+		PermissionMode: s.permissionMode,
 		Prompt:         prompt,
-		SessionID:      h.sessionID,
+		SessionID:      s.sessionID,
 		SessionTitle:   sessionTitle,
-		TranscriptPath: h.transcriptPath,
+		TranscriptPath: s.transcriptPath,
 	}
-	return h.fire(ctx, hookEventUserPromptSubmit, body)
+	return s.fire(ctx, UserPromptSubmit, body)
 }
 
 // OnToolUse fires PostToolUse.
-func (h *HookSender) OnToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error {
+func (s *Sender) OnToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error {
 	body := postToolUseBody{
-		CWD:            h.cwd,
+		CWD:            s.cwd,
 		DurationMs:     durationMs,
-		HookEventName:  hookEventPostToolUse,
-		PermissionMode: h.permissionMode,
-		SessionID:      h.sessionID,
+		HookEventName:  PostToolUse,
+		PermissionMode: s.permissionMode,
+		SessionID:      s.sessionID,
 		ToolInput:      toolInput,
 		ToolName:       toolName,
 		ToolResponse:   toolResponse,
 		ToolUseID:      toolUseID,
-		TranscriptPath: h.transcriptPath,
+		TranscriptPath: s.transcriptPath,
 	}
-	return h.fire(ctx, hookEventPostToolUse, body)
+	return s.fire(ctx, PostToolUse, body)
 }
 
 // OnStop fires Stop.
-func (h *HookSender) OnStop(ctx context.Context, lastAssistantMessage string, stopHookActive bool) error {
+func (s *Sender) OnStop(ctx context.Context, lastAssistantMessage string, stopHookActive bool) error {
 	body := stopBody{
-		CWD:                  h.cwd,
-		HookEventName:        hookEventStop,
+		CWD:                  s.cwd,
+		HookEventName:        Stop,
 		LastAssistantMessage: lastAssistantMessage,
-		PermissionMode:       h.permissionMode,
-		SessionID:            h.sessionID,
+		PermissionMode:       s.permissionMode,
+		SessionID:            s.sessionID,
 		StopHookActive:       stopHookActive,
-		TranscriptPath:       h.transcriptPath,
+		TranscriptPath:       s.transcriptPath,
 	}
-	return h.fire(ctx, hookEventStop, body)
+	return s.fire(ctx, Stop, body)
 }
 
 // OnSessionStart fires SessionStart. source is one of "startup", "resume",
 // "clear", "compact" — same vocabulary Claude Code uses on the matcher field.
-func (h *HookSender) OnSessionStart(ctx context.Context, source string) error {
+func (s *Sender) OnSessionStart(ctx context.Context, source string) error {
 	body := sessionStartBody{
-		CWD:            h.cwd,
-		HookEventName:  hookEventSessionStart,
-		SessionID:      h.sessionID,
+		CWD:            s.cwd,
+		HookEventName:  SessionStart,
+		SessionID:      s.sessionID,
 		Source:         source,
-		TranscriptPath: h.transcriptPath,
+		TranscriptPath: s.transcriptPath,
 	}
-	return h.fire(ctx, hookEventSessionStart, body)
+	return s.fire(ctx, SessionStart, body)
 }
 
 // OnSessionEnd fires SessionEnd. reason is one of "clear", "logout", "other", etc.
-func (h *HookSender) OnSessionEnd(ctx context.Context, reason string) error {
+func (s *Sender) OnSessionEnd(ctx context.Context, reason string) error {
 	body := sessionEndBody{
-		CWD:            h.cwd,
-		HookEventName:  hookEventSessionEnd,
+		CWD:            s.cwd,
+		HookEventName:  SessionEnd,
 		Reason:         reason,
-		SessionID:      h.sessionID,
-		TranscriptPath: h.transcriptPath,
+		SessionID:      s.sessionID,
+		TranscriptPath: s.transcriptPath,
 	}
-	return h.fire(ctx, hookEventSessionEnd, body)
+	return s.fire(ctx, SessionEnd, body)
 }
 
-// fire iterates every HookMatcher registered for event and POSTs body to each
+// fire iterates every Matcher registered for event and POSTs body to each
 // matcher's HTTP hooks. Per-hook errors are aggregated via errors.Join; a
 // failing hook does not prevent the rest from firing.
-func (h *HookSender) fire(ctx context.Context, event string, body any) error {
-	if h.settings == nil || len(h.settings.Hooks) == 0 {
+func (s *Sender) fire(ctx context.Context, event string, body any) error {
+	if len(s.matchers) == 0 {
 		return nil
 	}
-	matchers, ok := h.settings.Hooks[event]
+	matchers, ok := s.matchers[event]
 	if !ok || len(matchers) == 0 {
 		return nil
 	}
@@ -201,7 +221,7 @@ func (h *HookSender) fire(ctx context.Context, event string, body any) error {
 			if hook.Type != "http" {
 				continue
 			}
-			if err := h.post(ctx, event, hook, payload); err != nil {
+			if err := s.post(ctx, event, hook, payload); err != nil {
 				errs = append(errs, fmt.Errorf("%s hook %s: %w", event, hook.URL, err))
 			}
 		}
@@ -213,18 +233,18 @@ func (h *HookSender) fire(ctx context.Context, event string, body any) error {
 // hook.Timeout is honored as a per-request context deadline (0 → default).
 // When debugWriter is set, emits a one-line trace per attempt regardless of
 // outcome (build error, transport error, success, non-2xx).
-func (h *HookSender) post(ctx context.Context, event string, hook Hook, payload []byte) (err error) {
+func (s *Sender) post(ctx context.Context, event string, hook Hook, payload []byte) (err error) {
 	start := time.Now()
 	status := 0
 	defer func() {
-		if h.debugWriter != nil {
-			h.writeDebug(event, hook.URL, status, time.Since(start), len(payload), err)
+		if s.debugWriter != nil {
+			s.writeDebug(event, hook.URL, status, time.Since(start), len(payload), err)
 		}
 	}()
 
 	timeout := time.Duration(hook.Timeout) * time.Second
 	if timeout <= 0 {
-		timeout = defaultHookTimeout
+		timeout = defaultTimeout
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -237,7 +257,7 @@ func (h *HookSender) post(ctx context.Context, event string, hook Hook, payload 
 	for k, v := range hook.Headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := h.httpClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("posting: %w", err)
 	}
@@ -255,7 +275,7 @@ func (h *HookSender) post(ctx context.Context, event string, hook Hook, payload 
 //
 // status 0 renders as ERR. Trailing err="..." is present only when err != nil.
 // Plain text, no ANSI — verbose output is for grepping/piping.
-func (h *HookSender) writeDebug(event, url string, status int, elapsed time.Duration, bodySize int, postErr error) {
+func (s *Sender) writeDebug(event, url string, status int, elapsed time.Duration, bodySize int, postErr error) {
 	statusStr := "ERR"
 	if status > 0 {
 		statusStr = fmt.Sprintf("%d", status)
@@ -265,7 +285,7 @@ func (h *HookSender) writeDebug(event, url string, status int, elapsed time.Dura
 	if postErr != nil {
 		line += fmt.Sprintf(" err=%q", postErr.Error())
 	}
-	fmt.Fprintln(h.debugWriter, line)
+	fmt.Fprintln(s.debugWriter, line)
 }
 
 // formatBytes returns a compact size string: 412B / 1.2kB / 3.4MB.

@@ -1,4 +1,4 @@
-package main
+package mcp
 
 import (
 	"context"
@@ -189,7 +189,7 @@ func stdTools(prefix string) []map[string]any {
 func TestMCPClient_NilConfig(t *testing.T) {
 	t.Parallel()
 
-	c := NewMCPClient(nil)
+	c := NewClient(nil)
 	if err := c.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect on nil config: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestMCPClient_NilConfig(t *testing.T) {
 func TestMCPClient_EmptyConfig(t *testing.T) {
 	t.Parallel()
 
-	c := NewMCPClient(&MCPConfig{MCPServers: map[string]MCPServer{}})
+	c := NewClient(map[string]Server{})
 	if err := c.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -247,10 +247,8 @@ func TestMCPClient_HandshakeAndTools(t *testing.T) {
 			ts := httptest.NewServer(fake.handler())
 			defer ts.Close()
 
-			c := NewMCPClient(&MCPConfig{
-				MCPServers: map[string]MCPServer{
-					"fileserver": {Type: "http", URL: ts.URL},
-				},
+			c := NewClient(map[string]Server{
+				"fileserver": {Type: "http", URL: ts.URL},
 			})
 			if err := c.Connect(context.Background()); err != nil {
 				t.Fatalf("Connect: %v", err)
@@ -303,15 +301,13 @@ func TestMCPClient_HeadersPropagated(t *testing.T) {
 	ts := httptest.NewServer(fake.handler())
 	defer ts.Close()
 
-	c := NewMCPClient(&MCPConfig{
-		MCPServers: map[string]MCPServer{
-			"fileserver": {
-				Type: "http",
-				URL:  ts.URL,
-				Headers: map[string]string{
-					"Authorization": "Bearer test-token",
-					"X-Session-Id":  "ses-from-config",
-				},
+	c := NewClient(map[string]Server{
+		"fileserver": {
+			Type: "http",
+			URL:  ts.URL,
+			Headers: map[string]string{
+				"Authorization": "Bearer test-token",
+				"X-Session-Id":  "ses-from-config",
 			},
 		},
 	})
@@ -344,11 +340,9 @@ func TestMCPClient_UnionAcrossServers(t *testing.T) {
 	tsB := httptest.NewServer(b.handler())
 	defer tsB.Close()
 
-	c := NewMCPClient(&MCPConfig{
-		MCPServers: map[string]MCPServer{
-			"alpha": {Type: "http", URL: tsA.URL},
-			"beta":  {Type: "http", URL: tsB.URL},
-		},
+	c := NewClient(map[string]Server{
+		"alpha": {Type: "http", URL: tsA.URL},
+		"beta":  {Type: "http", URL: tsB.URL},
 	})
 	if err := c.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect: %v", err)
@@ -389,10 +383,8 @@ func TestMCPClient_Call(t *testing.T) {
 	ts := httptest.NewServer(fake.handler())
 	defer ts.Close()
 
-	c := NewMCPClient(&MCPConfig{
-		MCPServers: map[string]MCPServer{
-			"fileserver": {Type: "http", URL: ts.URL},
-		},
+	c := NewClient(map[string]Server{
+		"fileserver": {Type: "http", URL: ts.URL},
 	})
 	if err := c.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect: %v", err)
@@ -421,10 +413,8 @@ func TestMCPClient_CallUnknown(t *testing.T) {
 	ts := httptest.NewServer(fake.handler())
 	defer ts.Close()
 
-	c := NewMCPClient(&MCPConfig{
-		MCPServers: map[string]MCPServer{
-			"fileserver": {Type: "http", URL: ts.URL},
-		},
+	c := NewClient(map[string]Server{
+		"fileserver": {Type: "http", URL: ts.URL},
 	})
 	if err := c.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect: %v", err)
@@ -461,10 +451,8 @@ func TestMCPClient_CloseIdempotent(t *testing.T) {
 	ts := httptest.NewServer(fake.handler())
 	defer ts.Close()
 
-	c := NewMCPClient(&MCPConfig{
-		MCPServers: map[string]MCPServer{
-			"fileserver": {Type: "http", URL: ts.URL},
-		},
+	c := NewClient(map[string]Server{
+		"fileserver": {Type: "http", URL: ts.URL},
 	})
 	if err := c.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect: %v", err)
@@ -489,10 +477,8 @@ func TestMCPClient_ConnectIdempotent(t *testing.T) {
 	ts := httptest.NewServer(fake.handler())
 	defer ts.Close()
 
-	c := NewMCPClient(&MCPConfig{
-		MCPServers: map[string]MCPServer{
-			"fileserver": {Type: "http", URL: ts.URL},
-		},
+	c := NewClient(map[string]Server{
+		"fileserver": {Type: "http", URL: ts.URL},
 	})
 	if err := c.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect 1: %v", err)
@@ -523,10 +509,8 @@ func TestMCPClient_ConnectError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c := NewMCPClient(&MCPConfig{
-		MCPServers: map[string]MCPServer{
-			"fileserver": {Type: "http", URL: ts.URL},
-		},
+	c := NewClient(map[string]Server{
+		"fileserver": {Type: "http", URL: ts.URL},
 	})
 	err := c.Connect(context.Background())
 	if err == nil {
