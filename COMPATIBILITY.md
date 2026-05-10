@@ -136,3 +136,137 @@ Bundled skills always land at `not relevant` — testagent has no model.
 | `PreCompact` | `✗ planned` | Tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
 | `PostCompact` | `✗ planned` | Tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
 | `Setup` | `✗ planned` | |
+
+---
+
+## Codex
+
+**Upstream version researched:** codex-cli v0.130.0 (2026-05-08) — tag `rust-v0.130.0`
+**Local binary version:** `codex --version` → codex-cli 0.130.0
+
+### Flags
+
+Alphabetical by long name. Short flags shown inline. These are global flags for interactive mode; subcommand-specific flags (e.g., `codex exec --ephemeral`) are not modeled in the stub.
+
+| Flag | testagent | Notes |
+|------|-----------|-------|
+| `--add-dir` | `✗ planned` | Additional writable directories; tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
+| `--ask-for-approval` / `-a` | `not relevant` | Approval policy; no execution engine |
+| `--cd` / `-C` | `✗ planned` | Working root override; tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
+| `--config` / `-c` | `not relevant` | Runtime `config.toml` key override; no config system in stub |
+| `--dangerously-bypass-approvals-and-sandbox` | `not relevant` | No sandbox in testagent |
+| `--disable` | `not relevant` | Feature flag disable; no feature system |
+| `--enable` | `not relevant` | Feature flag enable; no feature system |
+| `--image` / `-i` | `not relevant` | Image attachment; no model |
+| `--local-provider` | `not relevant` | OSS provider (lmstudio/ollama) selection; no model |
+| `--model` / `-m` | `accepted` | Parsed by stub (`cmd/codex/codex.go`); silently ignored |
+| `--no-alt-screen` | `not relevant` | TUI-internal; alternate screen toggle |
+| `--oss` | `not relevant` | Use open-source provider; no model |
+| `--profile` / `-p` | `not relevant` | Config profile selection; no config system |
+| `--remote` | `not relevant` | Remote app-server websocket endpoint; not applicable |
+| `--remote-auth-token-env` | `not relevant` | Remote auth bearer token env var; not applicable |
+| `--sandbox` / `-s` | `not relevant` | Sandbox policy (`read-only`, `workspace-write`, `danger-full-access`); no execution engine |
+| `--search` | `not relevant` | Enable web search tool; no model |
+| `--session` | `accepted` | Testagent-invented stub flag; no real codex equivalent (real resume is `codex resume [SESSION_ID]` subcommand); tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
+| `--version` / `-V` | `not relevant` | testagent uses its own `--version` |
+
+### Slash commands
+
+> **Naming collision:** Codex's `/mcp` lists configured MCP tools (use `/mcp verbose` for details). testagent uses `/mcp-call` for tool dispatch to avoid colliding with this. Codex's `/exit` and `/quit` both exit the CLI; testagent's `/exit [code]` maps to either. Codex's `/clear` clears the terminal and starts a new chat; testagent's `/restart clear` simulates the hook side-effect only. Codex's `/status` shows session config and token usage; testagent has no equivalent.
+
+#### Built-in
+
+All rows from the `SlashCommand` enum in `codex-rs/tui/src/slash_command.rs`. Alphabetical. All `✗ planned` rows tracked in [#13](https://github.com/paultyng/testagent/issues/13) unless noted.
+
+| Command | testagent | Notes |
+|---------|-----------|-------|
+| `/agent` | `✗ planned` | Switch active agent thread |
+| `/apps` | `not relevant` | App/connector management; no connector system |
+| `/approve` | `not relevant` | Approve one auto-review denial retry; no approval system |
+| `/clear` | `✗ planned` | Clears terminal + starts new chat; `/restart clear` fires hook side-effect only |
+| `/collab` | `not relevant` | Collaboration mode (experimental); requires model |
+| `/compact` | `✗ planned` | Context summarization; tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
+| `/copy` | `not relevant` | Copy last response to clipboard; TUI-internal |
+| `/debug-config` | `not relevant` | Config layer debug view; no config system |
+| `/diff` | `not relevant` | Show git diff including untracked; TUI-internal |
+| `/exit` | `✗ planned` | Exit Codex (also `/quit`); tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
+| `/experimental` | `not relevant` | Toggle experimental features; no feature system |
+| `/feedback` | `not relevant` | Send logs to maintainers; TUI-internal |
+| `/fork` | `✗ planned` | Fork current chat session |
+| `/goal` | `not relevant` | Set/view long-running task goal; requires model |
+| `/hooks` | `not relevant` | View/manage lifecycle hooks via TUI; no TUI hook browser |
+| `/ide` | `not relevant` | Include IDE selection/open-files context; no IDE integration |
+| `/init` | `not relevant` | Create `AGENTS.md` for the project; requires model |
+| `/keymap` | `not relevant` | Remap TUI shortcuts; TUI-internal |
+| `/logout` | `not relevant` | Log out of Codex; no auth system |
+| `/mcp` | `not relevant` | List configured MCP tools; testagent uses `/mcp-call` instead |
+| `/memories` | `not relevant` | Configure memory use and generation; requires model |
+| `/mention` | `not relevant` | File mention/autocomplete; TUI-internal |
+| `/model` | `not relevant` | Model and reasoning effort picker; no model |
+| `/new` | `✗ planned` | Start new chat without clearing terminal |
+| `/permissions` | `not relevant` | Permission management; no permission system |
+| `/personality` | `not relevant` | Communication style picker; requires model |
+| `/plan` | `not relevant` | Switch to plan mode; requires model |
+| `/plugins` | `not relevant` | Browse plugin marketplace; no plugin system |
+| `/ps` | `not relevant` | List background terminals; TUI-internal |
+| `/quit` | `✗ planned` | Exit Codex (alias of `/exit`) |
+| `/raw` | `not relevant` | Toggle raw scrollback mode for copy-friendly selection; TUI-internal |
+| `/realtime` | `not relevant` | Toggle realtime voice mode (experimental) |
+| `/rename` | `✗ planned` | Rename the current thread |
+| `/resume` | `✗ planned` | Resume a saved chat session |
+| `/review` | `not relevant` | Code review of current changes; requires model |
+| `/sandbox-add-read-dir` | `not relevant` | Grant sandbox read access to a directory; no sandbox |
+| `/settings` | `not relevant` | Configure realtime microphone/speaker; TUI-internal |
+| `/setup-default-sandbox` | `not relevant` | Set up elevated agent sandbox; no sandbox |
+| `/side` | `not relevant` | Start ephemeral side conversation; requires model |
+| `/skills` | `not relevant` | Browse/install user skills; requires model |
+| `/status` | `not relevant` | Show session config and token usage; no session state tracking |
+| `/statusline` | `not relevant` | Configure status line items; TUI-internal |
+| `/stop` | `not relevant` | Stop all background terminals; TUI-internal |
+| `/subagents` | `not relevant` | Switch active agent thread (alias of `/agent`) |
+| `/theme` | `not relevant` | Syntax highlighting theme picker; TUI-internal |
+| `/title` | `not relevant` | Configure terminal title items; TUI-internal |
+| `/vim` | `not relevant` | Toggle Vim composer mode; TUI-internal |
+
+#### Plugin/MCP-contributed (service-tier)
+
+| Pattern | testagent | Notes |
+|---------|-----------|-------|
+| Service-tier commands | `not relevant` | Dynamically contributed by connected MCP servers; no model |
+
+### REPL behaviors
+
+| Behavior | testagent | Notes |
+|----------|-----------|-------|
+| `!`-shell prefix | `not relevant` | Spawns shell command in the composer; TUI-internal |
+| `Ctrl+C` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
+| `Ctrl+D` / EOF | `not relevant` | TUI-internal |
+| `Esc` (cancel in-flight turn) | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
+| External editor (`open_external_editor` action) | `not relevant` | Opens draft in external editor; TUI-internal |
+| Transcript overlay (`open_transcript` action) | `not relevant` | TUI-internal |
+| Vim composer mode (`/vim` or `toggle_vim_mode`) | `not relevant` | TUI-internal |
+| Alternate screen mode / `--no-alt-screen` | `not relevant` | TUI-internal; auto-disables in Zellij |
+
+### Hook events
+
+Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes an array of `MatcherGroup` objects; each group specifies a `command` (shell string) with optional `async`, `timeout`, and `statusMessage` fields. Note: hook handler shape differs from Claude Code (shell command vs HTTP POST).
+
+| Event | testagent | Notes |
+|-------|-----------|-------|
+| `SessionStart` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
+| `UserPromptSubmit` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
+| `PreToolUse` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13); no Claude Code equivalent |
+| `PostToolUse` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
+| `Stop` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
+| `PreCompact` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
+| `PostCompact` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
+| `PermissionRequest` | `not relevant` | Approval/permission hook; no permission system in testagent |
+
+### Config and conventions
+
+| Feature | testagent | Notes |
+|---------|-----------|-------|
+| `~/.codex/config.toml` | `not relevant` | Codex config home (`$CODEX_HOME` overrides); testagent has no Codex config loading |
+| `AGENTS.md` project instructions | `not relevant` | Read by the model at session start; testagent has no model |
+| `[mcp_servers]` in config.toml | `not relevant` | MCP servers configured via TOML; differs from Claude's `--mcp-config` JSON file |
+| `codex mcp add/remove/list` | `not relevant` | Subcommands managing `[mcp_servers]`; no config management in stub |
