@@ -1,7 +1,6 @@
 package codex
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -17,10 +16,10 @@ import (
 // interactive one-shot — codex's analog of `claude --print`. MVP emits
 // text only; JSON / stream-json frame shapes are deferred to #32.
 //
-// Lifecycle: read prompt → produce echo → exit. Hooks are not fired
-// in MVP (commit 4 wires the codex shell-command hook runner); when
-// they are wired this is the analog of claude/print.go's
-// SessionStart → UserPromptSubmit → Stop → SessionEnd sequence.
+// Lifecycle: read prompt → produce echo → exit. Hooks are intentionally
+// not fired here in MVP — once exec grows real work this will mirror
+// claude/print.go's SessionStart → UserPromptSubmit → Stop → SessionEnd
+// sequence against codexhooks.Runner.
 func newExecCommand(rf *claude.RootFlags, cf *flags) *cobra.Command {
 	return &cobra.Command{
 		Use:          "exec [prompt]",
@@ -45,19 +44,10 @@ func newExecCommand(rf *claude.RootFlags, cf *flags) *cobra.Command {
 				return errors.New("codex exec requires a prompt (positional arg or stdin)")
 			}
 
-			_ = ctxOrBackgroundExec(cmd) // ctx will plumb into the hook runner in commit 4
+			// TODO: when exec gains real work (hook runner, MCP, model dispatch),
+			// thread ctxOrBackground(cmd) through so SIGINT/cancellation propagates.
 			fmt.Fprintf(os.Stdout, "[%s] %s\n", "session", prompt)
 			return nil
 		},
 	}
-}
-
-// ctxOrBackgroundExec mirrors codex.go's helper but lives in this file
-// so commit 4 can drop a runner-aware variant in without churning the
-// import set in codex.go.
-func ctxOrBackgroundExec(cmd *cobra.Command) context.Context {
-	if c := cmd.Context(); c != nil {
-		return c
-	}
-	return context.Background()
 }

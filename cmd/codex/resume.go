@@ -9,7 +9,7 @@ import (
 // newResumeCommand returns the `codex resume <SESSION_ID>` subcommand.
 // Boots an interactive session keyed to the supplied session ID, with
 // `engine.Globals.Resumed=true` so SessionStart fires with
-// `source="resume"` once the codex hook runner is wired in commit 4.
+// `source="resume"` against the codex hook runner.
 func newResumeCommand(rf *claude.RootFlags, cf *flags) *cobra.Command {
 	return &cobra.Command{
 		Use:          "resume <SESSION_ID>",

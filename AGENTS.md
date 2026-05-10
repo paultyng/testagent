@@ -55,9 +55,9 @@ Real-Claude protocol shapes are captured from a real Claude session run against 
 
 ## Demos
 
-`demo/hero.tape` renders `demo/hero.gif` (the README hero) via [vhs](https://github.com/charmbracelet/vhs). The `demo/` directory holds **only** the hero — nothing else gets committed there.
+`demo/` holds one rendered `<vendor>.tape` + `<vendor>.gif` pair per emulation shown in the README hero (currently `claude` and `codex`); the README stacks them in order so a reader sees each emulation flavor at the top of the page. vhs renders each tape via [vhs](https://github.com/charmbracelet/vhs).
 
 When a PR changes user-visible behavior:
 
-- **Re-render `demo/hero.gif`** if the change affects what the hero shows (banner, slash output, thinking animation, etc.).
-- **For a focused per-PR animation**, paste it into the **PR description or a PR comment**. Layout: the rendered gif goes inline (visible — uploaded via GitHub's drag-and-drop attachment so reviewers see the animation immediately), and the tape source goes inside a `<details><summary>tape</summary>…</details>` collapse with a fenced ```` ```vhs ```` block. Do NOT commit the tape or gif to `demo/`. Per-PR demos are review aids, not project artifacts — they live with the PR thread and disappear when the branch is deleted.
+- **Re-render the affected vendor's `<vendor>.gif`** if the change affects what its hero shows (banner, slash output, thinking animation, etc.). Add a new `<vendor>.tape` + `<vendor>.gif` pair when introducing a new emulation; update the README to embed it alongside the existing pairs.
+- **For a focused per-PR animation** that is not a hero update, paste it into the **PR description or a PR comment** instead of committing it. Layout: the rendered gif goes inline (uploaded via GitHub's drag-and-drop attachment so reviewers see the animation immediately), and the tape source goes inside a `<details><summary>tape</summary>…</details>` collapse with a fenced ```` ```vhs ```` block. Per-PR review-aid animations are not project artifacts — they live with the PR thread and disappear when the branch is deleted.

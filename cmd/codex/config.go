@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,9 +12,6 @@ import (
 // Config mirrors the subset of `~/.codex/config.toml` the MVP consumes.
 // Unknown TOML keys are tolerated — the loader uses BurntSushi/toml's
 // default decoder, which silently ignores fields that don't appear here.
-//
-// The MCP servers and hooks blocks are parsed in commits 2 and 4
-// respectively; commit 1 only validates the file is loadable.
 type Config struct {
 	MCPServers map[string]MCPServer `toml:"mcp_servers"`
 	Hooks      HooksTable           `toml:"hooks"`
@@ -33,7 +31,8 @@ type MCPServer struct {
 
 // HooksTable maps a codex hook event name (e.g. "session_start") to a
 // list of matcher groups. Each group has a shell `command` invoked when
-// the event fires. Wired in commit 4.
+// the event fires. Wired through codexhooks.Runner in
+// cmd/codex.runInteractive via matchersFromConfig.
 type HooksTable map[string][]HookMatcher
 
 // HookMatcher is one entry in a codex hook event's matcher array.
@@ -55,7 +54,7 @@ func loadConfig() (*Config, error) {
 		return nil, err
 	}
 	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("stat codex config %s: %w", path, err)

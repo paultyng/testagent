@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -40,6 +41,12 @@ const (
 // doesn't specify one. Mirrors the conservative default Claude's HTTP
 // hooks ship with.
 const defaultTimeout = 10 * time.Second
+
+// shutdownGracePeriod caps how long OnSessionEnd waits for in-flight
+// async hook goroutines to finish after their cancel signal fires.
+// Keeps process exit bounded even if a misbehaving hook ignores its
+// SIGKILL'd shell.
+const shutdownGracePeriod = 5 * time.Second
 
 // Matcher is one entry under a [hooks.<event>] array in the codex TOML.
 // Mirrors the codex source's HookMatcher shape.
@@ -63,6 +70,14 @@ type Runner struct {
 	// Set to os.Stderr by --verbose. Plain text — never ANSI-styled, per
 	// AGENTS.md.
 	debugWriter io.Writer
+
+	// done is closed by OnSessionEnd to signal async goroutines to stop;
+	// inflight tracks them so OnSessionEnd can join them before returning.
+	// closeOnce guards close(done) so multiple OnSessionEnd calls are
+	// idempotent (engine fires it on /exit AND on signal/EOF teardown).
+	done      chan struct{}
+	closeOnce sync.Once
+	inflight  sync.WaitGroup
 }
 
 // NewRunner returns a runner wired to the given matcher map. matchers
@@ -78,6 +93,7 @@ func NewRunner(matchers map[string][]Matcher, sessionID, cwd, transcriptPath, pe
 		transcriptPath: transcriptPath,
 		permissionMode: permissionMode,
 		debugWriter:    debugWriter,
+		done:           make(chan struct{}),
 	}
 }
 
@@ -110,11 +126,25 @@ func (r *Runner) OnSessionStart(ctx context.Context, source string) error {
 	})
 }
 
-// OnSessionEnd is a no-op — codex's HooksToml has no session_end event.
-// Engine still calls this on shutdown for parity with the claude path;
-// the runner just returns nil so behavior matches what real codex would
-// do (no shell command fires).
+// OnSessionEnd does not fire a hook — codex's HooksToml has no
+// session_end event, so behavior matches what real codex would do.
+// It IS the runner's lifecycle signal: closes the done channel so any
+// async goroutines spawned by fire stop their child processes, then
+// joins them with shutdownGracePeriod as a hard cap so process exit
+// stays bounded even if a hook ignores SIGKILL.
 func (r *Runner) OnSessionEnd(ctx context.Context, reason string) error {
+	r.closeOnce.Do(func() { close(r.done) })
+
+	waitCh := make(chan struct{})
+	go func() {
+		r.inflight.Wait()
+		close(waitCh)
+	}()
+	select {
+	case <-waitCh:
+	case <-ctx.Done():
+	case <-time.After(shutdownGracePeriod):
+	}
 	return nil
 }
 
@@ -131,7 +161,8 @@ func (r *Runner) fire(ctx context.Context, event string, extraEnv map[string]str
 	var errs []error
 	for _, m := range matchers {
 		if m.Async {
-			go func(m Matcher) { _ = r.runOne(context.Background(), event, m, baseEnv) }(m)
+			r.inflight.Add(1)
+			go r.runAsync(event, m, baseEnv)
 			continue
 		}
 		if err := r.runOne(ctx, event, m, baseEnv); err != nil {
@@ -139,6 +170,28 @@ func (r *Runner) fire(ctx context.Context, event string, extraEnv map[string]str
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// runAsync is the goroutine body for async matchers. It plumbs a
+// fresh context that cancels when the runner's done channel closes,
+// so OnSessionEnd can stop in-flight hooks instead of letting them
+// leak past process teardown.
+func (r *Runner) runAsync(event string, m Matcher, env []string) {
+	defer r.inflight.Done()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		select {
+		case <-r.done:
+			cancel()
+		case <-stop:
+		}
+	}()
+
+	_ = r.runOne(ctx, event, m, env)
 }
 
 // runOne spawns /bin/sh -c <command>, applies the per-matcher timeout,

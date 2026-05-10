@@ -44,7 +44,7 @@ func (s *stringSlice) Type() string       { return "stringSlice" }
 // NewCommand returns the "codex" subcommand wired against the given root
 // flags. The bare `testagent codex` invocation drops into an interactive
 // session; `codex resume <SESSION_ID>` and `codex exec <prompt>` are
-// child subcommands (commit 2 of #13's MVP plan).
+// child subcommands.
 func NewCommand(rf *claude.RootFlags) *cobra.Command {
 	cf := &flags{}
 
@@ -52,8 +52,8 @@ func NewCommand(rf *claude.RootFlags) *cobra.Command {
 		Use:   "codex",
 		Short: "Emulate the Codex CLI",
 		Long: `Drives an interactive Codex-shaped session: argv compatibility,
-~/.codex/config.toml loading, and AGENTS.md surfacing. Hooks and full
-slash-command coverage land in follow-up commits — see #13.
+~/.codex/config.toml loading, AGENTS.md surfacing, lifecycle slash
+commands, and TOML-configured shell-runner hooks.
 
 Subcommands:
   codex resume <SESSION_ID>   resume a saved session
