@@ -18,6 +18,25 @@ See [COMPATIBILITY.md](COMPATIBILITY.md) for the per-vendor matrix of flags, sla
 go install github.com/paultyng/testagent@latest
 ```
 
+### As a Go tool module (Go 1.24+)
+
+If your project drives a coding-agent orchestrator, pin testagent alongside your other dependencies so CI always uses the same version without a separate install step:
+
+```sh
+go get -tool github.com/paultyng/testagent@latest
+```
+
+This adds a `tool` directive to your `go.mod`. Update it later with `go get -tool github.com/paultyng/testagent@<version>` or `go get -u tool` to upgrade all pinned tools.
+
+Invoke the pinned binary via:
+
+```sh
+go tool testagent claude --help
+go tool testagent codex exec "hello"
+```
+
+Requires Go 1.24+ in the consuming project (`go.mod` must declare `go 1.24` or later).
+
 ## What it does
 
 The argv shape is `testagent [global-flags] <subcommand> [subcommand-flags] [positional]`. Bare invocation defaults to the `claude` subcommand, so existing scripts that pre-date the split keep working:
