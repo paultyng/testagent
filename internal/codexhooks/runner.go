@@ -163,6 +163,7 @@ func (r *Runner) runOne(ctx context.Context, event string, m Matcher, env []stri
 	cmd.Dir = r.cwd
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
+	setProcessGroup(cmd)
 	return cmd.Run()
 }
 
