@@ -52,7 +52,8 @@ Alphabetical by long name. Short flags shown inline. Global flags (common across
 | `--system-prompt` | `not relevant` | No model to prompt |
 | `--system-prompt-file` | `not relevant` | No model to prompt |
 | `--think-delay` *(global)* | ✓ supported | Thinking-spinner duration (default 2s) |
-| `--verbose` / `-v` *(global)* | ✓ supported | Logs hook POSTs to stderr |
+| `--verbose` *(global)* | ✓ supported | Logs hook POSTs to stderr (no `-v` short — that's `--version`) |
+| `--version` / `-v` *(global)* | ✓ supported | Prints `testagent version <X.Y.Z>`; injected at build time via `-ldflags`, falls back to `dev` |
 | `--worktree` / `-w` | `not relevant` | No git worktree management |
 
 ### Slash commands

@@ -1,0 +1,47 @@
+# Tag-driven release workflow. Push a `vX.Y.Z` tag and goreleaser uploads
+# the cross-OS binaries to the GitHub release. The local fallback
+# (`task release:local`) shares .goreleaser.yaml and produces identical
+# artifacts. See RELEASING.md.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate tag is semver-2.0
+        # Reject malformed tags (v1.x, v9garbage, v1.2.3.4, v1.2.3-..foo,
+        # etc.) before goreleaser invests build time. Pattern matches
+        # semver-2.0: major.minor.patch with optional -prerelease and
+        # +build segments, each composed of dot-separated non-empty
+        # [0-9A-Za-z-] identifiers.
+        run: |
+          tag="${{ github.ref_name }}"
+          if ! printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
+            echo "ERROR: tag '$tag' is not a valid semver-2.0 release tag (expected vX.Y.Z[-prerelease][+build])" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
