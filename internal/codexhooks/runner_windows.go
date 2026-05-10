@@ -6,7 +6,17 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"time"
 )
+
+// waitDelay caps how long exec.Cmd.Wait blocks for I/O completion
+// after the spawned process exits. On Windows, cmd.exe-spawned children
+// (like ping in tests) inherit stderr handles and keep the pipe open
+// even after cmd.exe is killed via context cancel — without WaitDelay,
+// Wait blocks until the grandchild dies, defeating the per-matcher
+// timeout. 100ms is plenty for normal exit; well under the timeout
+// slack the runner caller allows.
+const waitDelay = 100 * time.Millisecond
 
 // defaultShellCommand returns an exec.Cmd that runs command via the
 // Windows command processor. Mirrors upstream codex's
@@ -25,8 +35,13 @@ func shellOrDefault(envVar, fallback string) string {
 	return fallback
 }
 
-// setProcessGroup is a no-op on Windows. Windows has no Unix-style
-// process groups; exec.CommandContext's default kill (TerminateProcess
-// on the spawned cmd.exe) is sufficient for the timeout behavior the
-// Unix path uses Setpgid + group-kill to achieve.
-func setProcessGroup(cmd *exec.Cmd) {}
+// setProcessGroup configures Windows-specific kill semantics. Windows
+// has no Unix-style process groups, but cmd.exe-spawned children can
+// inherit stderr/stdout pipe handles and keep them open after the
+// parent cmd.exe is killed (e.g. `ping -n 6`). Set cmd.WaitDelay so
+// Wait force-closes the inherited pipes after process death — without
+// this, per-matcher timeouts are not honored when the shell spawns
+// long-running children.
+func setProcessGroup(cmd *exec.Cmd) {
+	cmd.WaitDelay = waitDelay
+}
