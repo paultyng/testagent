@@ -9,10 +9,13 @@ builds:
   - id: testagent
     binary: testagent
     main: .
+    flags:
+      - -trimpath
     ldflags:
       - -s -w -X main.version={{.Version}}
     env:
       - CGO_ENABLED=0
+    mod_timestamp: '{{ .CommitTimestamp }}'
     goos:
       - linux
       - darwin
