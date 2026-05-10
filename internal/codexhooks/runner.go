@@ -30,6 +30,18 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/paultyng/testagent/internal/engine"
+	"github.com/paultyng/testagent/internal/slash"
+)
+
+// Compile-time conformance: Runner satisfies both interfaces the
+// engine and slash dispatcher consume. Keeping the assertions here
+// rather than at the consumer site mirrors the *hooks.Sender pattern
+// while pinning conformance to this package's own changes.
+var (
+	_ engine.HookSender    = (*Runner)(nil)
+	_ slash.ToolHookSender = (*Runner)(nil)
 )
 
 // Codex hook event names. TOML keys are snake_case to match the
@@ -45,10 +57,9 @@ const (
 // hooks ship with.
 const defaultTimeout = 10 * time.Second
 
-// shutdownGracePeriod caps how long OnSessionEnd waits for in-flight
-// async hook goroutines to finish after their cancel signal fires.
-// Keeps process exit bounded even if a misbehaving hook ignores its
-// SIGKILL'd shell.
+// shutdownGracePeriod caps how long Close waits for in-flight async
+// hook goroutines to finish their per-matcher timeout. Keeps process
+// exit bounded even if a misbehaving hook ignores its SIGKILL'd shell.
 const shutdownGracePeriod = 5 * time.Second
 
 // Matcher is one entry under a [hooks.<event>] array in the codex TOML.
@@ -79,9 +90,12 @@ type Runner struct {
 	// against a race with Close: once closed is true, fire stops
 	// spawning new async goroutines so the WaitGroup invariant
 	// (no Add at counter=0 once Wait has begun) is preserved.
-	mu       sync.Mutex
-	closed   bool
-	inflight sync.WaitGroup
+	// closeOnce makes Close idempotent — engine's shutdown closure can
+	// be called from racing AutoExit / SIGINT goroutines.
+	mu        sync.Mutex
+	closed    bool
+	closeOnce sync.Once
+	inflight  sync.WaitGroup
 }
 
 // NewRunner returns a runner wired to the given matcher map. matchers
@@ -112,20 +126,22 @@ func NewRunner(matchers map[string][]Matcher, sessionID, cwd, transcriptPath, pe
 // first — so process exit stays bounded even if a hook ignores its
 // SIGKILL'd shell.
 func (r *Runner) Close(ctx context.Context) error {
-	r.mu.Lock()
-	r.closed = true
-	r.mu.Unlock()
+	r.closeOnce.Do(func() {
+		r.mu.Lock()
+		r.closed = true
+		r.mu.Unlock()
 
-	waitCh := make(chan struct{})
-	go func() {
-		r.inflight.Wait()
-		close(waitCh)
-	}()
-	select {
-	case <-waitCh:
-	case <-ctx.Done():
-	case <-time.After(shutdownGracePeriod):
-	}
+		waitCh := make(chan struct{})
+		go func() {
+			r.inflight.Wait()
+			close(waitCh)
+		}()
+		select {
+		case <-waitCh:
+		case <-ctx.Done():
+		case <-time.After(shutdownGracePeriod):
+		}
+	})
 	return nil
 }
 

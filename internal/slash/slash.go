@@ -35,9 +35,8 @@ type ToolHookSender interface {
 }
 
 // Compile-time assertion that the canonical claude HTTP sender
-// satisfies the slash interface. Other implementations (e.g.
-// internal/codexhooks.Runner) are conformance-checked at the assignment
-// site in their respective cmd/<vendor>/ wiring.
+// satisfies the slash interface. internal/codexhooks.Runner has its
+// own assertion in that package.
 var _ ToolHookSender = (*hooks.Sender)(nil)
 
 // Handler dispatches slash commands and renders their output.

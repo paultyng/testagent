@@ -22,9 +22,10 @@ tasks:
     deps: [lint, test, build]
 
   gen:demo:
-    desc: Re-render demo/hero.gif from demo/hero.tape via vhs.
+    desc: Re-render per-vendor demo GIFs from their tape files via vhs.
     cmds:
-      - vhs demo/hero.tape
+      - vhs demo/claude.tape
+      - vhs demo/codex.tape
 
   dumpcli:claude:
     desc: Capture the claude subcommand's --help for compat-matrix drift detection.

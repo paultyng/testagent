@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -53,9 +54,9 @@ type HookSender interface {
 }
 
 // Compile-time check that the canonical HTTP sender satisfies the
-// interface. Other implementations (e.g. internal/codexhooks.Runner)
-// are conformance-checked at the assignment site in their respective
-// cmd/<vendor>/ wiring.
+// interface. internal/codexhooks.Runner has its own assertion in
+// that package (it can import internal/engine without inducing a
+// cycle; internal/hooks cannot, hence the asymmetry).
 var _ HookSender = (*hooks.Sender)(nil)
 
 // Deps are the runtime dependencies the engine drives. All fields are
@@ -72,26 +73,34 @@ type Deps struct {
 // The returned reason for SessionEnd mirrors Claude Code's vocabulary
 // ("logout" for /exit, "other" for SIGINT, EOF, /auto-exit, etc.).
 func Run(ctx context.Context, g Globals, d Deps) int {
+	// shutdownOnce guards the teardown sequence against double-invocation
+	// when the AutoExit goroutine races SIGINT, or when the scanner loop
+	// returns after a quit path that already called shutdown. Without
+	// this, runners would drain twice and MCP.Close would log a
+	// benign-but-noisy second error.
+	var shutdownOnce sync.Once
 	shutdown := func(reason string) {
-		// Flush any in-flight /fake-tool that never got a /fake-tool-result so its
-		// PostToolUse fires (with empty response) before SessionEnd.
-		d.Slash.FlushPendingTool(ctx)
-		if err := d.Hooks.OnSessionEnd(ctx, reason); err != nil {
-			fmt.Fprintf(os.Stderr, "testagent: hook OnSessionEnd: %v\n", err)
-		}
-		// Drain any in-flight async hook goroutines bounded by the
-		// runner's grace period. Implementations that don't have
-		// async work (HTTP sender) don't satisfy this and are skipped.
-		if closer, ok := d.Hooks.(interface {
-			Close(context.Context) error
-		}); ok {
-			if err := closer.Close(ctx); err != nil {
-				fmt.Fprintf(os.Stderr, "testagent: hook Close: %v\n", err)
+		shutdownOnce.Do(func() {
+			// Flush any in-flight /fake-tool that never got a /fake-tool-result
+			// so its PostToolUse fires (with empty response) before SessionEnd.
+			d.Slash.FlushPendingTool(ctx)
+			if err := d.Hooks.OnSessionEnd(ctx, reason); err != nil {
+				fmt.Fprintf(os.Stderr, "testagent: hook OnSessionEnd: %v\n", err)
 			}
-		}
-		if err := d.MCP.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "testagent: mcp Close: %v\n", err)
-		}
+			// Drain any in-flight async hook goroutines bounded by the
+			// runner's grace period. Implementations without async work
+			// (the HTTP sender) don't satisfy this and are skipped.
+			if closer, ok := d.Hooks.(interface {
+				Close(context.Context) error
+			}); ok {
+				if err := closer.Close(ctx); err != nil {
+					fmt.Fprintf(os.Stderr, "testagent: hook Close: %v\n", err)
+				}
+			}
+			if err := d.MCP.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "testagent: mcp Close: %v\n", err)
+			}
+		})
 	}
 
 	if isatty.IsTerminal(os.Stdin.Fd()) {
