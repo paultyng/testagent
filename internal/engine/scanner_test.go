@@ -23,9 +23,13 @@ import (
 // runtime goroutine selects on un-bubbled channels — otherwise a later
 // signal.Notify call from inside runScanner (under synctest.Test) panics
 // with "select on synctest channel from outside bubble".
+//
+// SIGTERM is used (not SIGUSR1) because SIGUSR1 isn't defined on
+// Windows. The signal is immediately Stop'd, so it never actually
+// reaches anything — only the side effect of priming ensureSigM matters.
 func TestMain(m *testing.M) {
 	priming := make(chan os.Signal, 1)
-	signal.Notify(priming, syscall.SIGUSR1)
+	signal.Notify(priming, syscall.SIGTERM)
 	signal.Stop(priming)
 	os.Exit(m.Run())
 }
