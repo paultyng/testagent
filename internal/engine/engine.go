@@ -53,8 +53,9 @@ type HookSender interface {
 }
 
 // Compile-time check that the canonical HTTP sender satisfies the
-// engine's interface. The codex runner has its own assertion in its
-// package.
+// interface. Other implementations (e.g. internal/codexhooks.Runner)
+// are conformance-checked at the assignment site in their respective
+// cmd/<vendor>/ wiring.
 var _ HookSender = (*hooks.Sender)(nil)
 
 // Deps are the runtime dependencies the engine drives. All fields are
@@ -77,6 +78,16 @@ func Run(ctx context.Context, g Globals, d Deps) int {
 		d.Slash.FlushPendingTool(ctx)
 		if err := d.Hooks.OnSessionEnd(ctx, reason); err != nil {
 			fmt.Fprintf(os.Stderr, "testagent: hook OnSessionEnd: %v\n", err)
+		}
+		// Drain any in-flight async hook goroutines bounded by the
+		// runner's grace period. Implementations that don't have
+		// async work (HTTP sender) don't satisfy this and are skipped.
+		if closer, ok := d.Hooks.(interface {
+			Close(context.Context) error
+		}); ok {
+			if err := closer.Close(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "testagent: hook Close: %v\n", err)
+			}
 		}
 		if err := d.MCP.Close(); err != nil {
 			fmt.Fprintf(os.Stderr, "testagent: mcp Close: %v\n", err)
