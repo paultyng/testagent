@@ -145,6 +145,17 @@ Bundled skills always land at `not relevant` — testagent has no model.
 **Upstream version researched:** codex-cli v0.130.0 (2026-05-08) — tag `rust-v0.130.0`
 **Local binary version:** `codex --version` → codex-cli 0.130.0
 
+### Subcommands
+
+| Subcommand | testagent | Notes |
+|------------|-----------|-------|
+| `codex` (no subcommand) | ✓ supported | Interactive session via the shared engine |
+| `codex resume <SESSION_ID>` | ✓ supported | Boots interactive with `Resumed=true` (codex's analog of claude `--resume`) |
+| `codex exec <prompt>` | partial | Text output only; JSON / stream-json shapes tracked in [#32](https://github.com/paultyng/testagent/issues/32) |
+| `codex login` | `✗ planned` | Tracked in [#35](https://github.com/paultyng/testagent/issues/35) |
+| `codex logout` | `✗ planned` | Tracked in [#35](https://github.com/paultyng/testagent/issues/35) |
+| `codex mcp add/list/remove` | `✗ planned` | Tracked in [#37](https://github.com/paultyng/testagent/issues/37) |
+
 ### Flags
 
 Alphabetical by long name. Short flags shown inline. These are global flags for interactive mode; subcommand-specific flags (e.g., `codex exec --ephemeral`) are not modeled in the stub.
