@@ -39,9 +39,11 @@ Type@40ms `/fake-tool-result {"ok":true,"size":42}`
 Enter
 Sleep 800ms
 
-Type "/panel real MCP calls, real HTTP hook execution — no LLM, no network, no $$$"
+# /think showcases claude's extended-thinking spinner override
+# (claude-shaped knob — codex's TUI has no equivalent).
+Type "/think 2s real MCP calls, real HTTP hook execution — no LLM, no network, no $$$"
 Enter
-Sleep 1500ms
+Sleep 3500ms
 
 # Linger on /exit before pressing Enter so altscreen teardown
 # doesn't whip back to a blank canvas immediately.

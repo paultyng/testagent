@@ -17,6 +17,9 @@ Env TERM "xterm-256color"
 
 # Launch via `codex resume` so the banner shows a stable session id and
 # "resumed" label — a codex-shaped subcommand the claude tape doesn't exercise.
+# Codex has no --name / -n flag (banner label is fixed "session"); the
+# claude tape uses -n 'Demo' for its banner. Session id is UUID-v4 to match
+# real codex (see cmd/codex/session.go and COMPATIBILITY.md).
 Type@15ms "testagent --think-delay 5s codex resume 7c2f1d18-9d4a-4d9d-9b6a-1c0a8b3e5e22 -m gpt-5 -s workspace-write"
 Enter
 Sleep 1s
