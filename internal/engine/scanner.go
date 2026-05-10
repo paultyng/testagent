@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -19,10 +20,13 @@ import (
 	"github.com/paultyng/testagent/internal/render"
 )
 
-// runScanner is the bufio.Scanner-driven interactive loop. The shutdown
-// closure fires SessionEnd + closes MCP and is invoked here on /exit, EOF,
-// or signal.
-func runScanner(ctx context.Context, g Globals, d Deps, shutdown func(string)) {
+// runScanner is the bufio.Scanner-driven interactive loop. It returns
+// (exit code, shutdown reason) so the caller can run the shutdown
+// closure once, in one place, with the right reason — mirroring runTUI's
+// shape. Returning instead of calling os.Exit inside the loop closes the
+// race where an AutoExit goroutine could fire os.Exit(0) and silently
+// override the non-zero exit code from a /exit slash command.
+func runScanner(ctx context.Context, g Globals, d Deps, stdin io.Reader) (int, string) {
 	// Register signal handlers BEFORE any potentially-blocking I/O (banner
 	// render is fast, but MCP Connect can hang on an unreachable server).
 	// SIGINT/SIGTERM during connect must still trigger graceful shutdown.
@@ -72,42 +76,97 @@ func runScanner(ctx context.Context, g Globals, d Deps, shutdown func(string)) {
 
 	fmt.Print(render.Prompt())
 
+	// loopDone is closed when the main loop returns. The auxiliary
+	// goroutines (auto-exit timer, resize handler, stdin reader) watch
+	// this so they unblock and exit instead of leaking — this matters
+	// for the synctest tests in scanner_test.go, which deadlock if any
+	// bubble goroutine is still running after the test goroutine exits.
+	// In production runScanner returning means the process is about to
+	// exit, so leaks would be cosmetic; the cleanup is for testability.
+	loopDone := make(chan struct{})
+	defer close(loopDone)
+
 	// Auto-exit after a duration (for headless tests where no input is sent).
+	// The goroutine signals via autoExitCh; the main loop owns the return
+	// (and therefore os.Exit, in Run). Buffered so the goroutine never
+	// blocks if the loop exits via another path first.
+	autoExitCh := make(chan struct{}, 1)
 	if g.AutoExit > 0 {
 		go func() {
-			time.Sleep(g.AutoExit)
-			fmt.Printf("\n%s\n", render.Lifecycle(fmt.Sprintf("auto-exit after %s", g.AutoExit)))
-			shutdown("other")
-			os.Exit(0)
+			t := time.NewTimer(g.AutoExit)
+			defer t.Stop()
+			select {
+			case <-t.C:
+				select {
+				case autoExitCh <- struct{}{}:
+				default:
+				}
+			case <-loopDone:
+			}
 		}()
 	}
 
-	// Process resize events in background.
+	// Process resize events in background until the loop returns.
 	go func() {
-		for range winchCh {
-			rows, cols := getTermSize()
-			fmt.Printf("\n%s\n%s", render.Lifecycle(fmt.Sprintf("resized: %dx%d", cols, rows)), render.Prompt())
+		for {
+			select {
+			case <-loopDone:
+				return
+			case _, ok := <-winchCh:
+				if !ok {
+					return
+				}
+				rows, cols := getTermSize()
+				fmt.Printf("\n%s\n%s", render.Lifecycle(fmt.Sprintf("resized: %dx%d", cols, rows)), render.Prompt())
+			}
 		}
 	}()
 
-	scanner := bufio.NewScanner(os.Stdin)
+	// inputCh decouples the blocking bufio.Scan from the select loop so
+	// signals / auto-exit / context cancel can preempt a stuck read. The
+	// channel carries each scanned line; closing it signals EOF. The
+	// reader exits naturally on EOF; if the main loop returns first
+	// (e.g. /exit), the goroutine is left blocked on Read until stdin
+	// closes — acceptable in production (process is about to exit) and
+	// the synctest tests in scanner_test.go close their pipe writer to
+	// unblock it.
+	inputCh := make(chan string)
+	go func() {
+		defer close(inputCh)
+		scanner := bufio.NewScanner(stdin)
+		for scanner.Scan() {
+			select {
+			case inputCh <- scanner.Text():
+			case <-loopDone:
+				return
+			}
+		}
+	}()
+
 	count := 0
 	var lastAssistant string
 
 	for {
+		var input string
+		var ok bool
 		select {
+		case <-ctx.Done():
+			fmt.Printf("\n%s\n", render.ErrorStyle.Render("Goodbye!"))
+			return 0, "other"
 		case <-sigCh:
 			fmt.Printf("\n%s\n", render.ErrorStyle.Render("Goodbye!"))
-			shutdown("other")
-			os.Exit(0)
-		default:
+			return 0, "other"
+		case <-autoExitCh:
+			fmt.Printf("\n%s\n", render.Lifecycle(fmt.Sprintf("auto-exit after %s", g.AutoExit)))
+			return 0, "other"
+		case input, ok = <-inputCh:
+			if !ok {
+				// EOF on stdin.
+				return 0, "other"
+			}
 		}
 
-		if !scanner.Scan() {
-			break
-		}
-
-		input := strings.TrimSpace(scanner.Text())
+		input = strings.TrimSpace(input)
 		if input == "" {
 			fmt.Print(render.Prompt())
 			continue
@@ -115,8 +174,7 @@ func runScanner(ctx context.Context, g Globals, d Deps, shutdown func(string)) {
 
 		if input == "exit" || input == "quit" {
 			fmt.Println(render.ErrorStyle.Render("Goodbye!"))
-			shutdown("logout")
-			return
+			return 0, "logout"
 		}
 
 		// Slash commands drive UI primitives (fake-tool blocks, panels, MCP
@@ -129,8 +187,7 @@ func runScanner(ctx context.Context, g Globals, d Deps, shutdown func(string)) {
 		streamDur := g.StreamDelay
 		if outcome := d.Slash.Dispatch(ctx, input); outcome.Handled {
 			if outcome.Exit {
-				shutdown(outcome.Reason)
-				os.Exit(outcome.ExitCode)
+				return outcome.ExitCode, outcome.Reason
 			}
 			if outcome.Restart {
 				// Simulate a Claude /clear or /compact reset on the wire:
@@ -189,10 +246,7 @@ func runScanner(ctx context.Context, g Globals, d Deps, shutdown func(string)) {
 
 		if g.ExitAfter > 0 && count >= g.ExitAfter {
 			fmt.Printf("\n%s\n", render.Lifecycle(fmt.Sprintf("exit-after %d reached", g.ExitAfter)))
-			shutdown("other")
-			return
+			return 0, "other"
 		}
 	}
-
-	shutdown("other")
 }

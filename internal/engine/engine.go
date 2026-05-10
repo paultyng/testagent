@@ -124,7 +124,14 @@ func Run(ctx context.Context, g Globals, d Deps) int {
 	}
 
 	// Scanner path: piped stdin (e.g. e2e tests) — keeps the deterministic
-	// inline rendering that the e2e regex assertions rely on.
-	runScanner(ctx, g, d, shutdown)
-	return 0
+	// inline rendering that the e2e regex assertions rely on. runScanner
+	// returns (code, reason) like runTUI; the engine owns the single
+	// shutdown call so a /exit slash command's non-zero code can't be
+	// silently overridden by an AutoExit goroutine.
+	code, reason := runScanner(ctx, g, d, os.Stdin)
+	if reason == "" {
+		reason = "other"
+	}
+	shutdown(reason)
+	return code
 }
