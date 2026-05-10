@@ -15,11 +15,17 @@ import (
 // writeTwoLineCmd returns a shell command string that writes the values
 // of two env vars (one per line) to outPath. Portable across
 // `$SHELL -lc` (Unix) and `cmd.exe /C` (Windows).
+//
+// Note: the Windows form deliberately avoids parens AND outer quotes
+// around outPath. Go's exec wraps any cmd.exe argument containing
+// spaces/special chars in `"..."` with backslash-escaped inner quotes,
+// which cmd.exe /C does NOT understand (it doesn't recognize `\"` as a
+// quote-escape). Using two `>` / `>>` redirects joined by `&` keeps the
+// command free of inner quotes, and t.TempDir paths on the standard
+// GitHub Windows runner are space-free (`C:\Users\RUNNER~1\...`).
 func writeTwoLineCmd(envA, envB, outPath string) string {
 	if runtime.GOOS == "windows" {
-		// cmd.exe: %VAR% expansion, parens to group two echos into one
-		// redirect. Quoting outPath handles spaces in tmp paths.
-		return fmt.Sprintf(`(echo %%%s%% & echo %%%s%%) > "%s"`, envA, envB, outPath)
+		return fmt.Sprintf(`echo %%%s%% > %s & echo %%%s%% >> %s`, envA, outPath, envB, outPath)
 	}
 	return fmt.Sprintf(`printf '%%s\n%%s\n' "${%s}" "${%s}" > %q`, envA, envB, outPath)
 }
@@ -116,7 +122,7 @@ func TestRunner_FiresShellCommands(t *testing.T) {
 func TestRunner_NilMatchers_NoOp(t *testing.T) {
 	t.Parallel()
 
-	r := NewRunner(nil, "sid", "/tmp", "", "default", nil)
+	r := NewRunner(nil, "sid", t.TempDir(), "", "default", nil)
 	ctx := context.Background()
 	for _, fn := range []func() error{
 		func() error { return r.OnSessionStart(ctx, "startup") },
@@ -159,7 +165,7 @@ func TestRunner_TimeoutHonored(t *testing.T) {
 	matchers := map[string][]Matcher{
 		EventStop: {{Command: sleepCmd(5), Timeout: 1}},
 	}
-	r := NewRunner(matchers, "sid", "/tmp", "", "default", nil)
+	r := NewRunner(matchers, "sid", t.TempDir(), "", "default", nil)
 	start := time.Now()
 	err := r.OnStop(context.Background(), "msg", false)
 	elapsed := time.Since(start)
@@ -178,7 +184,7 @@ func TestRunner_DebugWriterEmitsLine(t *testing.T) {
 	matchers := map[string][]Matcher{
 		EventStop: {{Command: "exit 0", Timeout: 5}},
 	}
-	r := NewRunner(matchers, "sid", "/tmp", "", "default", &dbg)
+	r := NewRunner(matchers, "sid", t.TempDir(), "", "default", &dbg)
 	if err := r.OnStop(context.Background(), "msg", false); err != nil {
 		t.Fatalf("OnStop: %v", err)
 	}
