@@ -151,24 +151,23 @@ Alphabetical by long name. Short flags shown inline. These are global flags for 
 
 | Flag | testagent | Notes |
 |------|-----------|-------|
-| `--add-dir` | `✗ planned` | Additional writable directories; tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
-| `--ask-for-approval` / `-a` | `not relevant` | Approval policy; no execution engine |
-| `--cd` / `-C` | `✗ planned` | Working root override; tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
-| `--config` / `-c` | `not relevant` | Runtime `config.toml` key override; no config system in stub |
+| `--add-dir` | ✓ supported | Repeatable; stored, count surfaced in status line |
+| `--ask-for-approval` / `-a` | accepted | Parsed; surfaced in status line; semantics tracked in [#38](https://github.com/paultyng/testagent/issues/38) |
+| `--cd` / `-C` | ✓ supported | Honored via `os.Chdir` before any cwd-relative work |
+| `--config` / `-c` | accepted | Repeatable `KEY=VALUE`; parsed and surfaced in status line; no value-application semantics |
 | `--dangerously-bypass-approvals-and-sandbox` | `not relevant` | No sandbox in testagent |
 | `--disable` | `not relevant` | Feature flag disable; no feature system |
 | `--enable` | `not relevant` | Feature flag enable; no feature system |
 | `--image` / `-i` | `not relevant` | Image attachment; no model |
 | `--local-provider` | `not relevant` | OSS provider (lmstudio/ollama) selection; no model |
-| `--model` / `-m` | `accepted` | Parsed by stub (`cmd/codex/codex.go`); silently ignored |
+| `--model` / `-m` | accepted | Parsed; surfaced in status line; not modeled |
 | `--no-alt-screen` | `not relevant` | TUI-internal; alternate screen toggle |
 | `--oss` | `not relevant` | Use open-source provider; no model |
 | `--profile` / `-p` | `not relevant` | Config profile selection; no config system |
 | `--remote` | `not relevant` | Remote app-server websocket endpoint; not applicable |
 | `--remote-auth-token-env` | `not relevant` | Remote auth bearer token env var; not applicable |
-| `--sandbox` / `-s` | `not relevant` | Sandbox policy (`read-only`, `workspace-write`, `danger-full-access`); no execution engine |
+| `--sandbox` / `-s` | accepted | Parsed; surfaced in status line; semantics tracked in [#38](https://github.com/paultyng/testagent/issues/38) |
 | `--search` | `not relevant` | Enable web search tool; no model |
-| `--session` | `accepted` | Testagent-invented stub flag; no real codex equivalent (real resume is `codex resume [SESSION_ID]` subcommand); tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
 | `--version` / `-V` | `not relevant` | testagent uses its own `--version` |
 
 ### Slash commands
@@ -267,7 +266,7 @@ Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes
 
 | Feature | testagent | Notes |
 |---------|-----------|-------|
-| `~/.codex/config.toml` | `not relevant` | Codex config home (`$CODEX_HOME` overrides); testagent has no Codex config loading |
-| `AGENTS.md` project instructions | `not relevant` | Read by the model at session start; testagent has no model |
-| `[mcp_servers]` in config.toml | `not relevant` | MCP servers configured via TOML; differs from Claude's `--mcp-config` JSON file |
+| `~/.codex/config.toml` | partial | Loaded if present; `$CODEX_HOME` honored; only `[mcp_servers]` and `[hooks]` blocks consumed (skeleton); other keys tolerated and ignored |
+| `AGENTS.md` project instructions | partial | Presence surfaced in status line; content not interpreted (testagent has no model) |
+| `[mcp_servers]` in config.toml | `✗ planned` | Parsed by config skeleton; not yet consumed by the MCP client (tracked in [#13](https://github.com/paultyng/testagent/issues/13)) |
 | `codex mcp add/remove/list` | `not relevant` | Subcommands managing `[mcp_servers]`; no config management in stub |
