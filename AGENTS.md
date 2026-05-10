@@ -56,7 +56,7 @@ Real-Claude protocol shapes are captured from a real Claude session run against 
 
 ## Demos
 
-`demo/` holds one rendered `<vendor>.tape` + `<vendor>.gif` pair per emulation shown in the README hero (currently `claude` and `codex`); the README stacks them in order so a reader sees each emulation flavor at the top of the page. vhs renders each tape via [vhs](https://github.com/charmbracelet/vhs).
+`demo/` holds one rendered `<vendor>.tape` + `<vendor>.gif` pair per emulation shown in the README hero (currently `claude` and `codex`) plus a short `demo/README.md` that explains how to re-render. The top-of-README stacks the GIFs in order so a reader sees each emulation flavor immediately. vhs renders each tape via [vhs](https://github.com/charmbracelet/vhs).
 
 When a PR changes user-visible behavior:
 

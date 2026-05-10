@@ -12,8 +12,9 @@ import (
 
 // TestRunner_FiresShellCommands writes a sentinel file from a hook's
 // shell command and asserts the runner actually executed it. Real
-// process — `os/exec` is not stubbable, and per testing-philosophy.md
-// real code beats mocks.
+// process via os/exec — that path is not stubbable, and asserting the
+// real subprocess effect is the only honest test of what the runner
+// will do in production.
 func TestRunner_FiresShellCommands(t *testing.T) {
 	t.Parallel()
 
