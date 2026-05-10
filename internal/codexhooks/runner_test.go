@@ -5,10 +5,23 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
+
+// skipIfNoPosixShell skips a test when the runtime has no `/bin/sh`.
+// TODO(#45): once the runner routes through `cmd /c` (or fail-fasts)
+// on Windows, replace these skips with equivalent assertions on the
+// Windows-shell path. See
+// https://github.com/paultyng/testagent/issues/45.
+func skipIfNoPosixShell(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("codexhooks Runner hardcodes /bin/sh; Windows path is tracked in #45")
+	}
+}
 
 // TestRunner_FiresShellCommands writes a sentinel file from a hook's
 // shell command and asserts the runner actually executed it. Real
@@ -16,6 +29,7 @@ import (
 // real subprocess effect is the only honest test of what the runner
 // will do in production.
 func TestRunner_FiresShellCommands(t *testing.T) {
+	skipIfNoPosixShell(t)
 	t.Parallel()
 
 	tmp := t.TempDir()
@@ -119,6 +133,7 @@ func TestRunner_OnSessionEndIsNoOp(t *testing.T) {
 }
 
 func TestRunner_TimeoutHonored(t *testing.T) {
+	skipIfNoPosixShell(t)
 	t.Parallel()
 
 	// 1-second timeout; sleep 5 → must abort within ~1s.
@@ -138,6 +153,7 @@ func TestRunner_TimeoutHonored(t *testing.T) {
 }
 
 func TestRunner_DebugWriterEmitsLine(t *testing.T) {
+	skipIfNoPosixShell(t)
 	t.Parallel()
 
 	var dbg bytes.Buffer
