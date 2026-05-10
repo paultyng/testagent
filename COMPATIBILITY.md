@@ -65,8 +65,8 @@ Alphabetical by long name. Short flags shown inline. Global flags (common across
 | Command | testagent | Notes |
 |---------|-----------|-------|
 | `/add-dir <path>` | `✗ planned` | |
-| `/clear` | `✗ planned` | `/restart clear` simulates the hook side-effect |
-| `/compact` | `✗ planned` | `/restart compact` simulates the hook side-effect; full support tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
+| `/clear` | partial | Fires the hook side-effect (sugar for `/restart clear`); screen wipe not done |
+| `/compact` | partial | Fires the hook side-effect (sugar for `/restart compact`); full `PreCompact` / `PostCompact` support tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
 | `/config` | `not relevant` | No settings UI |
 | `/context` | `not relevant` | No context window |
 | `/exit` | ✓ supported | Accepts optional exit code |
@@ -194,13 +194,13 @@ All rows from the `SlashCommand` enum in `codex-rs/tui/src/slash_command.rs`. Al
 | `/agent` | `✗ planned` | Switch active agent thread |
 | `/apps` | `not relevant` | App/connector management; no connector system |
 | `/approve` | `not relevant` | Approve one auto-review denial retry; no approval system |
-| `/clear` | `✗ planned` | Clears terminal + starts new chat; `/restart clear` fires hook side-effect only |
+| `/clear` | partial | Fires hook side-effect only (sugar for `/restart clear`); screen wipe not done |
 | `/collab` | `not relevant` | Collaboration mode (experimental); requires model |
-| `/compact` | `✗ planned` | Context summarization; tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
+| `/compact` | partial | Fires hook side-effect only (sugar for `/restart compact`); full `PreCompact` / `PostCompact` tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
 | `/copy` | `not relevant` | Copy last response to clipboard; TUI-internal |
 | `/debug-config` | `not relevant` | Config layer debug view; no config system |
 | `/diff` | `not relevant` | Show git diff including untracked; TUI-internal |
-| `/exit` | `✗ planned` | Exit Codex (also `/quit`); tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
+| `/exit` | ✓ supported | Accepts optional exit code (alias `/quit`) |
 | `/experimental` | `not relevant` | Toggle experimental features; no feature system |
 | `/feedback` | `not relevant` | Send logs to maintainers; TUI-internal |
 | `/fork` | `✗ planned` | Fork current chat session |
@@ -220,7 +220,7 @@ All rows from the `SlashCommand` enum in `codex-rs/tui/src/slash_command.rs`. Al
 | `/plan` | `not relevant` | Switch to plan mode; requires model |
 | `/plugins` | `not relevant` | Browse plugin marketplace; no plugin system |
 | `/ps` | `not relevant` | List background terminals; TUI-internal |
-| `/quit` | `✗ planned` | Exit Codex (alias of `/exit`) |
+| `/quit` | ✓ supported | Alias of `/exit` |
 | `/raw` | `not relevant` | Toggle raw scrollback mode for copy-friendly selection; TUI-internal |
 | `/realtime` | `not relevant` | Toggle realtime voice mode (experimental) |
 | `/rename` | `✗ planned` | Rename the current thread |

@@ -172,6 +172,9 @@ func TestSlash_Help_Format(t *testing.T) {
 		"/think <duration>",        // duration-required /think advertised
 		"/stream <duration>",       // duration-required /stream advertised
 		"/link <url>",              // OSC 8 link helper advertised
+		"/clear",                   // codex-shape sugar for /restart clear
+		"/compact",                 // codex-shape sugar for /restart compact
+		"/quit",                    // alias of /exit (codex parity)
 		"/fake-tool ",              // renamed from /tool
 		"/fake-tool-result ",       // renamed from /result
 		"/mcp-call ",               // renamed from /mcp to avoid collision with real Claude's /mcp
@@ -470,17 +473,58 @@ func TestSlash_Result(t *testing.T) {
 func TestSlash_Exit(t *testing.T) {
 	t.Parallel()
 
-	out := &bytes.Buffer{}
-	h := newTestHandler(out)
-
-	noCode := h.Dispatch(context.Background(), "/exit")
-	if !noCode.Exit || noCode.ExitCode != 0 {
-		t.Errorf("/exit got Exit=%v Code=%d, want true/0", noCode.Exit, noCode.ExitCode)
+	cases := []struct {
+		name     string
+		line     string
+		wantCode int
+	}{
+		{name: "/exit no code", line: "/exit", wantCode: 0},
+		{name: "/exit with code", line: "/exit 7", wantCode: 7},
+		{name: "/quit no code (alias)", line: "/quit", wantCode: 0},
+		{name: "/quit with code (alias)", line: "/quit 3", wantCode: 3},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := &bytes.Buffer{}
+			h := newTestHandler(out)
+			oc := h.Dispatch(context.Background(), tc.line)
+			if !oc.Exit || oc.ExitCode != tc.wantCode {
+				t.Errorf("%s got Exit=%v Code=%d, want true/%d", tc.line, oc.Exit, oc.ExitCode, tc.wantCode)
+			}
+			if oc.Reason != "logout" {
+				t.Errorf("Reason = %q, want logout", oc.Reason)
+			}
+		})
+	}
+}
 
-	withCode := h.Dispatch(context.Background(), "/exit 7")
-	if !withCode.Exit || withCode.ExitCode != 7 {
-		t.Errorf("/exit 7 got Exit=%v Code=%d, want true/7", withCode.Exit, withCode.ExitCode)
+// TestSlash_ClearCompact asserts the codex-shape /clear and /compact
+// sugar dispatches to the same Restart outcome as /restart {clear,compact}.
+func TestSlash_ClearCompact(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		line       string
+		wantReason string
+	}{
+		{name: "/clear", line: "/clear", wantReason: "clear"},
+		{name: "/compact", line: "/compact", wantReason: "compact"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := &bytes.Buffer{}
+			h := newTestHandler(out)
+			oc := h.Dispatch(context.Background(), tc.line)
+			if !oc.Restart {
+				t.Errorf("Restart=false, want true")
+			}
+			if oc.RestartReason != tc.wantReason {
+				t.Errorf("RestartReason = %q, want %q", oc.RestartReason, tc.wantReason)
+			}
+		})
 	}
 }
 

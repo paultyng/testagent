@@ -137,7 +137,19 @@ func (h *Handler) dispatchTo(ctx context.Context, line string, out io.Writer) Ou
 		h.cmdMCP(ctx, out, rest)
 	case "restart":
 		return h.cmdRestart(out, rest)
-	case "exit":
+	case "clear":
+		// Codex `/clear` clears the terminal AND starts a new chat. testagent
+		// emits the hook side-effect (SessionEnd → SessionStart with
+		// reason="clear") and skips the screen wipe — matches the wire-level
+		// behavior orchestrators care about. Sugar over `/restart clear`.
+		return h.cmdRestart(out, "clear")
+	case "compact":
+		// Codex `/compact` triggers context summarization. Same hook-only
+		// approximation as /clear. Sugar over `/restart compact`. Full
+		// PreCompact / PostCompact event support tracked in #12.
+		return h.cmdRestart(out, "compact")
+	case "exit", "quit":
+		// Codex aliases /quit to /exit; both exit the CLI.
 		code := 0
 		if rest != "" {
 			if n, err := strconv.Atoi(rest); err == nil {
@@ -158,13 +170,16 @@ func (h *Handler) cmdHelp(out io.Writer) {
 	for _, line := range []struct {
 		usage, doc string
 	}{
-		{"/exit [code]", "exits testagent (default code 0)"},
+		{"/clear", "fires SessionEnd then SessionStart with reason=clear (sugar for /restart clear)"},
+		{"/compact", "fires SessionEnd then SessionStart with reason=compact (sugar for /restart compact)"},
+		{"/exit [code]", "exits testagent (default code 0; alias /quit)"},
 		{`/fake-tool <name> <json-args>`, "prints a fake tool-use block; pair with /fake-tool-result to fire PostToolUse"},
 		{`/fake-tool-result <json-or-text>`, "completes the pending /fake-tool and fires PostToolUse with the response"},
 		{"/help", "prints this list"},
 		{"/link <url> [text]", "prints an OSC 8 hyperlink (clickable in supporting terminals); text defaults to url"},
 		{`/mcp-call <server.tool> <json-args>`, "calls a connected MCP tool and prints its result"},
 		{"/panel <text>", "prints text in a rounded-border box"},
+		{"/quit [code]", "alias of /exit"},
 		{"/restart [clear|compact]", "fires SessionEnd then SessionStart without leaving the process (default reason: clear)"},
 		{`/stream <duration> <message>`, "prompts as if typed raw, with the per-token stream interval overridden"},
 		{`/think <duration> <message>`, "prompts as if typed raw, with the thinking-spinner duration overridden"},
