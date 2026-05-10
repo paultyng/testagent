@@ -5,6 +5,12 @@
 // satisfies, so vendor selection is just choosing which struct to
 // build at the cmd/codex layer.
 //
+// Commands run via the platform's default shell, mirroring upstream
+// codex's `default_shell_command`: $SHELL -lc <cmd> on Unix (fallback
+// /bin/sh) and %COMSPEC% /C <cmd> on Windows (fallback cmd.exe). The
+// $SHELL / %COMSPEC% env vars are honored so users get their configured
+// shell.
+//
 // MVP wires three events from #13:
 //
 //   - session_start
@@ -26,7 +32,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strconv"
 	"sync"
 	"time"
@@ -221,8 +226,9 @@ func (r *Runner) runAsync(event string, m Matcher, env []string) {
 	_ = r.runOne(context.Background(), event, m, env)
 }
 
-// runOne spawns /bin/sh -c <command>, applies the per-matcher timeout,
-// and emits a debug line if debugWriter is set.
+// runOne spawns the platform default shell via defaultShellCommand,
+// applies the per-matcher timeout, and emits a debug line if
+// debugWriter is set.
 func (r *Runner) runOne(ctx context.Context, event string, m Matcher, env []string) (err error) {
 	start := time.Now()
 	defer func() {
@@ -238,7 +244,7 @@ func (r *Runner) runOne(ctx context.Context, event string, m Matcher, env []stri
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, "/bin/sh", "-c", m.Command)
+	cmd := defaultShellCommand(runCtx, m.Command)
 	cmd.Env = env
 	cmd.Dir = r.cwd
 	cmd.Stdout = io.Discard
