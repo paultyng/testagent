@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -103,6 +104,9 @@ func jsonRPCFakeServer(t *testing.T) *httptest.Server {
 func buildTestAgent(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "testagent")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
 	cmd := exec.Command("go", "build", "-o", bin, ".")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
