@@ -1,6 +1,12 @@
 # testagent
 
-![testagent in action](demo/hero.gif)
+*Claude emulation:*
+
+![testagent claude in action](demo/claude.gif)
+
+*Codex emulation:*
+
+![testagent codex in action](demo/codex.gif)
 
 A fake CLI agent for testing orchestration tooling that wraps real coding agents (Claude Code, Codex, Gemini, GitHub Copilot CLI, etc.). It runs as an interactive PTY process and emits the same kinds of terminal artifacts and protocol traffic as a real agent — without calling any LLM.
 

@@ -1,6 +1,6 @@
-# vhs script for the README hero. Render with: vhs demo/hero.tape
+# vhs script for the claude-emulation README demo. Render with: vhs demo/claude.tape
 
-Output demo/hero.gif
+Output demo/claude.gif
 
 Set FontSize 16
 Set Width 1100
