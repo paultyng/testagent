@@ -1,0 +1,16 @@
+# Normalize line endings to LF on checkout for all text files. Without
+# this, contributors on Windows with `core.autocrlf=true` would commit
+# CRLF, which breaks byte-exact comparisons in tests against fixtures
+# (golden TUI output, captured hook payloads, TOML config samples).
+* text=auto eol=lf
+
+# Force-binary types that should never be touched by line-ending logic.
+*.gif binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+
+# Tape files for vhs are scripts but contain literal escape sequences;
+# treat as text but never normalize.
+*.tape text eol=lf
