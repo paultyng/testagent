@@ -3,6 +3,7 @@ package codexhooks
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,16 +12,27 @@ import (
 	"time"
 )
 
-// skipIfNoPosixShell skips a test when the runtime has no `/bin/sh`.
-// TODO(#45): once the runner routes through `cmd /c` (or fail-fasts)
-// on Windows, replace these skips with equivalent assertions on the
-// Windows-shell path. See
-// https://github.com/paultyng/testagent/issues/45.
-func skipIfNoPosixShell(t *testing.T) {
-	t.Helper()
+// writeTwoLineCmd returns a shell command string that writes the values
+// of two env vars (one per line) to outPath. Portable across
+// `$SHELL -lc` (Unix) and `cmd.exe /C` (Windows).
+func writeTwoLineCmd(envA, envB, outPath string) string {
 	if runtime.GOOS == "windows" {
-		t.Skip("codexhooks Runner hardcodes /bin/sh; Windows path is tracked in #45")
+		// cmd.exe: %VAR% expansion, parens to group two echos into one
+		// redirect. Quoting outPath handles spaces in tmp paths.
+		return fmt.Sprintf(`(echo %%%s%% & echo %%%s%%) > "%s"`, envA, envB, outPath)
 	}
+	return fmt.Sprintf(`printf '%%s\n%%s\n' "${%s}" "${%s}" > %q`, envA, envB, outPath)
+}
+
+// sleepCmd returns a shell command string that sleeps for at least
+// `seconds` seconds. Portable across Unix sh and Windows cmd: on
+// Windows we use `ping -n N+1 127.0.0.1` (each ping waits ~1s after
+// the previous, so N+1 pings ≈ N seconds wall time).
+func sleepCmd(seconds int) string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("ping -n %d 127.0.0.1 >NUL", seconds+1)
+	}
+	return fmt.Sprintf("sleep %d", seconds)
 }
 
 // TestRunner_FiresShellCommands writes a sentinel file from a hook's
@@ -29,7 +41,6 @@ func skipIfNoPosixShell(t *testing.T) {
 // real subprocess effect is the only honest test of what the runner
 // will do in production.
 func TestRunner_FiresShellCommands(t *testing.T) {
-	skipIfNoPosixShell(t)
 	t.Parallel()
 
 	tmp := t.TempDir()
@@ -69,7 +80,7 @@ func TestRunner_FiresShellCommands(t *testing.T) {
 			out := filepath.Join(tmp, tc.name+".out")
 			matchers := map[string][]Matcher{
 				tc.event: {{
-					Command: `printf '%s\n%s\n' "${` + tc.extraEnv + `}" "${CODEX_HOOK_SESSION_ID}" > ` + out,
+					Command: writeTwoLineCmd(tc.extraEnv, "CODEX_HOOK_SESSION_ID", out),
 					Timeout: 5,
 				}},
 			}
@@ -81,7 +92,14 @@ func TestRunner_FiresShellCommands(t *testing.T) {
 			if err != nil {
 				t.Fatalf("hook did not write sentinel %s: %v", out, err)
 			}
-			lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+			// Windows cmd `echo` appends CRLF and may include trailing
+			// spaces before the redirection; trim per-line.
+			raw := strings.TrimRight(string(b), "\r\n")
+			rawLines := strings.Split(raw, "\n")
+			lines := make([]string, 0, len(rawLines))
+			for _, ln := range rawLines {
+				lines = append(lines, strings.TrimRight(ln, " \r"))
+			}
 			if len(lines) != 2 {
 				t.Fatalf("got %d sentinel lines, want 2: %q", len(lines), string(b))
 			}
@@ -120,8 +138,10 @@ func TestRunner_OnSessionEndIsNoOp(t *testing.T) {
 	// runner must NOT fire it — codex has no such hook upstream.
 	tmp := t.TempDir()
 	out := filepath.Join(tmp, "should-not-exist.out")
+	// Portable "create file" command: `echo x > "path"` works in both
+	// `sh -lc` and `cmd /C`.
 	matchers := map[string][]Matcher{
-		"session_end": {{Command: "touch " + out, Timeout: 5}},
+		"session_end": {{Command: fmt.Sprintf(`echo x > %q`, out), Timeout: 5}},
 	}
 	r := NewRunner(matchers, "sid", tmp, "", "default", nil)
 	if err := r.OnSessionEnd(context.Background(), "logout"); err != nil {
@@ -133,12 +153,11 @@ func TestRunner_OnSessionEndIsNoOp(t *testing.T) {
 }
 
 func TestRunner_TimeoutHonored(t *testing.T) {
-	skipIfNoPosixShell(t)
 	t.Parallel()
 
-	// 1-second timeout; sleep 5 → must abort within ~1s.
+	// 1-second timeout; sleep ~5s → must abort within ~1s.
 	matchers := map[string][]Matcher{
-		EventStop: {{Command: "sleep 5", Timeout: 1}},
+		EventStop: {{Command: sleepCmd(5), Timeout: 1}},
 	}
 	r := NewRunner(matchers, "sid", "/tmp", "", "default", nil)
 	start := time.Now()
@@ -153,12 +172,11 @@ func TestRunner_TimeoutHonored(t *testing.T) {
 }
 
 func TestRunner_DebugWriterEmitsLine(t *testing.T) {
-	skipIfNoPosixShell(t)
 	t.Parallel()
 
 	var dbg bytes.Buffer
 	matchers := map[string][]Matcher{
-		EventStop: {{Command: "true", Timeout: 5}},
+		EventStop: {{Command: "exit 0", Timeout: 5}},
 	}
 	r := NewRunner(matchers, "sid", "/tmp", "", "default", &dbg)
 	if err := r.OnStop(context.Background(), "msg", false); err != nil {
