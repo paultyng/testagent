@@ -21,12 +21,14 @@ jobs:
           fetch-depth: 0
 
       - name: Validate tag is semver-2.0
-        # Reject malformed tags (v1.x, v9garbage, v1.2.3.4, etc.) before
-        # goreleaser invests build time. Pattern matches semver-2.0:
-        # major.minor.patch with optional -prerelease and +build segments.
+        # Reject malformed tags (v1.x, v9garbage, v1.2.3.4, v1.2.3-..foo,
+        # etc.) before goreleaser invests build time. Pattern matches
+        # semver-2.0: major.minor.patch with optional -prerelease and
+        # +build segments, each composed of dot-separated non-empty
+        # [0-9A-Za-z-] identifiers.
         run: |
           tag="${{ github.ref_name }}"
-          if ! printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+          if ! printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
             echo "ERROR: tag '$tag' is not a valid semver-2.0 release tag (expected vX.Y.Z[-prerelease][+build])" >&2
             exit 1
           fi

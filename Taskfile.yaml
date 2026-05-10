@@ -57,7 +57,7 @@ tasks:
           echo "ERROR: HEAD is not tagged. Run: git tag vX.Y.Z && git push origin vX.Y.Z" >&2
           exit 1
         fi
-        if ! printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+        if ! printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
           echo "ERROR: tag '$tag' is not a valid semver-2.0 release tag (expected vX.Y.Z[-prerelease][+build])" >&2
           exit 1
         fi
