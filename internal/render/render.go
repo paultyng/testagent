@@ -21,7 +21,7 @@
 // AGENTS.md and do not import this package.
 package render
 
-import "github.com/charmbracelet/lipgloss"
+import "charm.land/lipgloss/v2"
 
 // Catppuccin Mocha foreground hex values.
 // https://github.com/catppuccin/catppuccin (mocha flavor).

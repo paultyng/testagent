@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/paultyng/testagent/internal/mcp"
 	"github.com/paultyng/testagent/internal/render"
@@ -218,18 +218,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if w < 1 {
 			w = 1
 		}
-		m.input.Width = w
+		m.input.SetWidth(w)
 
-	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyCtrlD:
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "ctrl+c", "ctrl+d":
 			m.quitReason = "other"
 			return m, tea.Quit
-		case tea.KeyEsc:
+		case "esc":
 			if m.thinking || m.streaming {
 				return m, func() tea.Msg { return cancelMsg{} }
 			}
-		case tea.KeyEnter:
+		case "enter":
 			line := strings.TrimSpace(m.input.Value())
 			m.input.SetValue("")
 			if line == "" {
@@ -459,8 +459,10 @@ func (m *model) startPromptTurn(
 
 // View composes the rendered frame: history, optional spinner row, then the
 // textinput. Bubbletea handles partial-redraw / diffing; the View just
-// produces the full intended frame each tick.
-func (m model) View() string {
+// produces the full intended frame each tick. In bubbletea v2 View returns a
+// tea.View struct; AltScreen and other terminal-mode toggles live as fields
+// on this value (previously imperative tea.WithAltScreen()).
+func (m model) View() tea.View {
 	var b strings.Builder
 	for _, line := range m.history {
 		b.WriteString(line)
@@ -476,7 +478,9 @@ func (m model) View() string {
 		b.WriteString("\n")
 	}
 	b.WriteString(m.input.View())
-	return b.String()
+	v := tea.NewView(b.String())
+	v.AltScreen = true
+	return v
 }
 
 // appendHistoryCapped appends a line (with any trailing newlines stripped so
@@ -608,7 +612,9 @@ func cmdAutoExit(d time.Duration) tea.Cmd {
 // without racing with the alt-screen teardown.
 func runTUI(ctx context.Context, g Globals, d Deps, quitCh <-chan struct{}) (int, string) {
 	m := newModel(g, d)
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
+	// v2: WithAltScreen() is gone — AltScreen is now a declarative field on
+	// tea.View returned by m.View().
+	p := tea.NewProgram(m, tea.WithContext(ctx))
 
 	if quitCh != nil {
 		go func() {

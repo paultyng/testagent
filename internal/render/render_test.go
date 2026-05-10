@@ -3,22 +3,15 @@ package render
 import (
 	"strings"
 	"testing"
-
-	"github.com/charmbracelet/lipgloss"
 )
 
 // TestStyleHelpers asserts each intent-named helper preserves its visible
-// glyphs and input text, AND emits ANSI escape bytes when the lipgloss
-// color profile permits styling. We don't pin exact bytes — that's
-// terminal/lipgloss implementation detail — but a regression that makes
-// a helper accidentally return an unstyled string would still fail.
+// glyphs and input text, AND emits ANSI escape bytes for styled tokens. In
+// lipgloss v2 Style.Render() always emits full-fidelity ANSI (color
+// downsampling moved to the Writer layer), so no SetColorProfile shim is
+// needed and the test is safe to run in parallel.
 func TestStyleHelpers(t *testing.T) {
-	// Force TrueColor so styling output is deterministic regardless of the
-	// CI runner's TERM / NO_COLOR / CLICOLOR env. Cannot t.Parallel at the
-	// package level here because SetColorProfile is global.
-	prev := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(2) // termenv.TrueColor
-	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
+	t.Parallel()
 
 	cases := []struct {
 		name     string
