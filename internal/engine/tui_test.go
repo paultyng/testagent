@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/mcp"
@@ -62,10 +62,13 @@ func newTestModel(opt *testOpts) model {
 }
 
 // type-and-update feeds each rune through Update so the textinput sees them
-// the same way bubbletea would dispatch them in the running program.
+// the same way bubbletea would dispatch them in the running program. v2 keys
+// carry a Code (rune) + Text (string of the actual characters); for printable
+// runes we set both so msg.String() falls through to the default branch and
+// textinput.Update reads msg.Text via insertRunesFromUserInput.
 func typeInto(m model, s string) model {
 	for _, r := range s {
-		newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		newM, _ := m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 		m = newM.(model)
 	}
 	return m
@@ -73,7 +76,7 @@ func typeInto(m model, s string) model {
 
 // pressEnter dispatches an Enter key and returns the resulting model + cmd.
 func pressEnter(m model) (model, tea.Cmd) {
-	newM, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	newM, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	return newM.(model), cmd
 }
 
@@ -243,8 +246,8 @@ func TestModel_WindowSizeUpdatesInputWidth(t *testing.T) {
 	m := newTestModel(nil)
 	newM, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
 	m = newM.(model)
-	if m.input.Width != 38 {
-		t.Errorf("input.Width = %d, want 38", m.input.Width)
+	if m.input.Width() != 38 {
+		t.Errorf("input.Width = %d, want 38", m.input.Width())
 	}
 	if m.width != 40 || m.height != 10 {
 		t.Errorf("model size = %dx%d, want 40x10", m.width, m.height)
@@ -263,7 +266,7 @@ func TestModel_EscCancelsThinking(t *testing.T) {
 	originalTag := m.turnTag
 
 	// Esc should send cancelMsg.
-	newM, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	newM, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = newM.(model)
 	if cmd == nil {
 		t.Fatal("expected cancelMsg cmd from Esc")
@@ -394,7 +397,7 @@ func TestModel_CtrlCQuits(t *testing.T) {
 	t.Parallel()
 
 	m := newTestModel(nil)
-	newM, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	newM, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	m = newM.(model)
 	if cmd == nil {
 		t.Fatal("expected tea.Quit cmd from Ctrl+C")
