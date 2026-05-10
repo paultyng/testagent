@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -35,10 +36,33 @@ type Globals struct {
 	StatusLine  string // shown under the banner; empty = omitted
 }
 
+// HookSender is the engine's interface to vendor-specific hook delivery.
+// claude's HTTP-POST sender (internal/hooks) and codex's TOML shell-
+// command runner (internal/codexhooks) both satisfy it. Defined here at
+// the consumer site per Go conventions.
+//
+// OnToolUse is included so the slash dispatcher (which fires PostToolUse
+// when /fake-tool-result completes) can take a value of this same type
+// rather than a separate one-method interface — Go interface assignment
+// is structural, so a value held as HookSender keeps OnToolUse callable.
+type HookSender interface {
+	OnPrompt(ctx context.Context, prompt, sessionTitle string) error
+	OnToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error
+	OnStop(ctx context.Context, lastAssistantMessage string, stopHookActive bool) error
+	OnSessionStart(ctx context.Context, source string) error
+	OnSessionEnd(ctx context.Context, reason string) error
+}
+
+// Compile-time check that the canonical HTTP sender satisfies the
+// interface. internal/codexhooks.Runner has its own assertion in
+// that package (it can import internal/engine without inducing a
+// cycle; internal/hooks cannot, hence the asymmetry).
+var _ HookSender = (*hooks.Sender)(nil)
+
 // Deps are the runtime dependencies the engine drives. All fields are
 // required.
 type Deps struct {
-	Hooks *hooks.Sender
+	Hooks HookSender
 	MCP   *mcp.Client
 	Slash *slash.Handler
 }
@@ -49,16 +73,34 @@ type Deps struct {
 // The returned reason for SessionEnd mirrors Claude Code's vocabulary
 // ("logout" for /exit, "other" for SIGINT, EOF, /auto-exit, etc.).
 func Run(ctx context.Context, g Globals, d Deps) int {
+	// shutdownOnce guards the teardown sequence against double-invocation
+	// when the AutoExit goroutine races SIGINT, or when the scanner loop
+	// returns after a quit path that already called shutdown. Without
+	// this, runners would drain twice and MCP.Close would log a
+	// benign-but-noisy second error.
+	var shutdownOnce sync.Once
 	shutdown := func(reason string) {
-		// Flush any in-flight /fake-tool that never got a /fake-tool-result so its
-		// PostToolUse fires (with empty response) before SessionEnd.
-		d.Slash.FlushPendingTool(ctx)
-		if err := d.Hooks.OnSessionEnd(ctx, reason); err != nil {
-			fmt.Fprintf(os.Stderr, "testagent: hook OnSessionEnd: %v\n", err)
-		}
-		if err := d.MCP.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "testagent: mcp Close: %v\n", err)
-		}
+		shutdownOnce.Do(func() {
+			// Flush any in-flight /fake-tool that never got a /fake-tool-result
+			// so its PostToolUse fires (with empty response) before SessionEnd.
+			d.Slash.FlushPendingTool(ctx)
+			if err := d.Hooks.OnSessionEnd(ctx, reason); err != nil {
+				fmt.Fprintf(os.Stderr, "testagent: hook OnSessionEnd: %v\n", err)
+			}
+			// Drain any in-flight async hook goroutines bounded by the
+			// runner's grace period. Implementations without async work
+			// (the HTTP sender) don't satisfy this and are skipped.
+			if closer, ok := d.Hooks.(interface {
+				Close(context.Context) error
+			}); ok {
+				if err := closer.Close(ctx); err != nil {
+					fmt.Fprintf(os.Stderr, "testagent: hook Close: %v\n", err)
+				}
+			}
+			if err := d.MCP.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "testagent: mcp Close: %v\n", err)
+			}
+		})
 	}
 
 	if isatty.IsTerminal(os.Stdin.Fd()) {

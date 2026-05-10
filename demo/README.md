@@ -1,13 +1,14 @@
 # demo/
 
-Tape file for [`vhs`](https://github.com/charmbracelet/vhs) used to render the README hero.
+Tape files for [`vhs`](https://github.com/charmbracelet/vhs) used to render the README demos — one per emulated vendor.
 
 ## Render
 
 Install `vhs` and ensure the `testagent` binary is on `PATH` (or run `go install .` from the repo root).
 
 ```sh
-vhs demo/hero.tape
+vhs demo/claude.tape   # outputs demo/claude.gif
+vhs demo/codex.tape    # outputs demo/codex.gif
 ```
 
-Outputs `demo/hero.gif`, used as the README hero. Re-render whenever the tape or the binary's output changes.
+Both GIFs are embedded at the top of the root README. Re-render whenever the tape or the binary's output changes.

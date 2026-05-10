@@ -17,7 +17,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/mcp"
 	"github.com/paultyng/testagent/internal/render"
 	"github.com/paultyng/testagent/internal/slash"
@@ -546,14 +545,14 @@ func cmdSlashDispatch(handler *slash.Handler, line string) tea.Cmd {
 }
 
 // cmdHookPrompt fires UserPromptSubmit on a goroutine.
-func cmdHookPrompt(sender *hooks.Sender, prompt, name string) tea.Cmd {
+func cmdHookPrompt(sender HookSender, prompt, name string) tea.Cmd {
 	return func() tea.Msg {
 		return hookErrMsg{stage: "OnPrompt", err: sender.OnPrompt(context.Background(), prompt, name)}
 	}
 }
 
 // cmdHookStop fires Stop on a goroutine.
-func cmdHookStop(sender *hooks.Sender, last string, stopHookActive bool) tea.Cmd {
+func cmdHookStop(sender HookSender, last string, stopHookActive bool) tea.Cmd {
 	return func() tea.Msg {
 		return hookErrMsg{stage: "OnStop", err: sender.OnStop(context.Background(), last, stopHookActive)}
 	}
@@ -566,7 +565,7 @@ func cmdHookStop(sender *hooks.Sender, last string, stopHookActive bool) tea.Cmd
 // mcp.Connect → OnSessionStart ordering and prevents races between boot
 // SessionStart and user-driven hooks (e.g. /restart) submitted before the
 // boot goroutine resolves.
-func cmdBoot(client *mcp.Client, sender *hooks.Sender, source string) tea.Cmd {
+func cmdBoot(client *mcp.Client, sender HookSender, source string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		connectErr := client.Connect(ctx)
@@ -584,7 +583,7 @@ func cmdBoot(client *mcp.Client, sender *hooks.Sender, source string) tea.Cmd {
 // on the wire in that fixed order. tea.Batch would dispatch separate cmds
 // concurrently, which would race the SessionEnd/SessionStart POSTs and
 // violate the back-to-back contract documented on slash.Outcome.Restart.
-func cmdSlashRestart(handler *slash.Handler, sender *hooks.Sender, reason string) tea.Cmd {
+func cmdSlashRestart(handler *slash.Handler, sender HookSender, reason string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		handler.FlushPendingTool(ctx)

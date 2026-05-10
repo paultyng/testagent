@@ -25,9 +25,23 @@ import (
 	"github.com/paultyng/testagent/internal/render"
 )
 
+// ToolHookSender is the slash dispatcher's interface to vendor-specific
+// PostToolUse hook delivery. Defined at the consumer site per Go
+// conventions; engine.HookSender is a superset (so values held there
+// satisfy this directly), and both internal/hooks.Sender (claude HTTP)
+// and internal/codexhooks.Runner (codex shell-command) implement it.
+type ToolHookSender interface {
+	OnToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error
+}
+
+// Compile-time assertion that the canonical claude HTTP sender
+// satisfies the slash interface. internal/codexhooks.Runner has its
+// own assertion in that package.
+var _ ToolHookSender = (*hooks.Sender)(nil)
+
 // Handler dispatches slash commands and renders their output.
 type Handler struct {
-	hooks *hooks.Sender
+	hooks ToolHookSender
 	mcp   *mcp.Client
 	out   io.Writer
 
@@ -39,7 +53,7 @@ type Handler struct {
 }
 
 // New returns a Handler wired with the supplied dependencies.
-func New(sender *hooks.Sender, client *mcp.Client, out io.Writer) *Handler {
+func New(sender ToolHookSender, client *mcp.Client, out io.Writer) *Handler {
 	return &Handler{
 		hooks: sender,
 		mcp:   client,
@@ -137,7 +151,19 @@ func (h *Handler) dispatchTo(ctx context.Context, line string, out io.Writer) Ou
 		h.cmdMCP(ctx, out, rest)
 	case "restart":
 		return h.cmdRestart(out, rest)
-	case "exit":
+	case "clear":
+		// Codex `/clear` clears the terminal AND starts a new chat. testagent
+		// emits the hook side-effect (SessionEnd → SessionStart with
+		// reason="clear") and skips the screen wipe — matches the wire-level
+		// behavior orchestrators care about. Sugar over `/restart clear`.
+		return h.cmdRestart(out, "clear")
+	case "compact":
+		// Codex `/compact` triggers context summarization. Same hook-only
+		// approximation as /clear. Sugar over `/restart compact`. Full
+		// PreCompact / PostCompact event support tracked in #12.
+		return h.cmdRestart(out, "compact")
+	case "exit", "quit":
+		// Codex aliases /quit to /exit; both exit the CLI.
 		code := 0
 		if rest != "" {
 			if n, err := strconv.Atoi(rest); err == nil {
@@ -158,13 +184,16 @@ func (h *Handler) cmdHelp(out io.Writer) {
 	for _, line := range []struct {
 		usage, doc string
 	}{
-		{"/exit [code]", "exits testagent (default code 0)"},
+		{"/clear", "fires SessionEnd then SessionStart with reason=clear (sugar for /restart clear)"},
+		{"/compact", "fires SessionEnd then SessionStart with reason=compact (sugar for /restart compact)"},
+		{"/exit [code]", "exits testagent (default code 0; alias /quit)"},
 		{`/fake-tool <name> <json-args>`, "prints a fake tool-use block; pair with /fake-tool-result to fire PostToolUse"},
 		{`/fake-tool-result <json-or-text>`, "completes the pending /fake-tool and fires PostToolUse with the response"},
 		{"/help", "prints this list"},
 		{"/link <url> [text]", "prints an OSC 8 hyperlink (clickable in supporting terminals); text defaults to url"},
 		{`/mcp-call <server.tool> <json-args>`, "calls a connected MCP tool and prints its result"},
 		{"/panel <text>", "prints text in a rounded-border box"},
+		{"/quit [code]", "alias of /exit"},
 		{"/restart [clear|compact]", "fires SessionEnd then SessionStart without leaving the process (default reason: clear)"},
 		{`/stream <duration> <message>`, "prompts as if typed raw, with the per-token stream interval overridden"},
 		{`/think <duration> <message>`, "prompts as if typed raw, with the thinking-spinner duration overridden"},

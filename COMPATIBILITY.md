@@ -65,8 +65,8 @@ Alphabetical by long name. Short flags shown inline. Global flags (common across
 | Command | testagent | Notes |
 |---------|-----------|-------|
 | `/add-dir <path>` | `✗ planned` | |
-| `/clear` | `✗ planned` | `/restart clear` simulates the hook side-effect |
-| `/compact` | `✗ planned` | `/restart compact` simulates the hook side-effect; full support tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
+| `/clear` | partial | Fires the hook side-effect (sugar for `/restart clear`); screen wipe not done |
+| `/compact` | partial | Fires the hook side-effect (sugar for `/restart compact`); full `PreCompact` / `PostCompact` support tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
 | `/config` | `not relevant` | No settings UI |
 | `/context` | `not relevant` | No context window |
 | `/exit` | ✓ supported | Accepts optional exit code |
@@ -145,30 +145,40 @@ Bundled skills always land at `not relevant` — testagent has no model.
 **Upstream version researched:** codex-cli v0.130.0 (2026-05-08) — tag `rust-v0.130.0`
 **Local binary version:** `codex --version` → codex-cli 0.130.0
 
+### Subcommands
+
+| Subcommand | testagent | Notes |
+|------------|-----------|-------|
+| `codex` (no subcommand) | ✓ supported | Interactive session via the shared engine |
+| `codex resume <SESSION_ID>` | ✓ supported | Boots interactive with `Resumed=true` (codex's analog of claude `--resume`) |
+| `codex exec <prompt>` | partial | Text output only; JSON / stream-json shapes tracked in [#32](https://github.com/paultyng/testagent/issues/32) |
+| `codex login` | `✗ planned` | Tracked in [#35](https://github.com/paultyng/testagent/issues/35) |
+| `codex logout` | `✗ planned` | Tracked in [#35](https://github.com/paultyng/testagent/issues/35) |
+| `codex mcp add/list/remove` | `✗ planned` | Tracked in [#37](https://github.com/paultyng/testagent/issues/37) |
+
 ### Flags
 
 Alphabetical by long name. Short flags shown inline. These are global flags for interactive mode; subcommand-specific flags (e.g., `codex exec --ephemeral`) are not modeled in the stub.
 
 | Flag | testagent | Notes |
 |------|-----------|-------|
-| `--add-dir` | `✗ planned` | Additional writable directories; tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
-| `--ask-for-approval` / `-a` | `not relevant` | Approval policy; no execution engine |
-| `--cd` / `-C` | `✗ planned` | Working root override; tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
-| `--config` / `-c` | `not relevant` | Runtime `config.toml` key override; no config system in stub |
+| `--add-dir` | ✓ supported | Repeatable; stored, count surfaced in status line |
+| `--ask-for-approval` / `-a` | accepted | Parsed; surfaced in status line; semantics tracked in [#38](https://github.com/paultyng/testagent/issues/38) |
+| `--cd` / `-C` | ✓ supported | Honored via `os.Chdir` before any cwd-relative work |
+| `--config` / `-c` | accepted | Repeatable `KEY=VALUE`; parsed and surfaced in status line; no value-application semantics |
 | `--dangerously-bypass-approvals-and-sandbox` | `not relevant` | No sandbox in testagent |
 | `--disable` | `not relevant` | Feature flag disable; no feature system |
 | `--enable` | `not relevant` | Feature flag enable; no feature system |
 | `--image` / `-i` | `not relevant` | Image attachment; no model |
 | `--local-provider` | `not relevant` | OSS provider (lmstudio/ollama) selection; no model |
-| `--model` / `-m` | `accepted` | Parsed by stub (`cmd/codex/codex.go`); silently ignored |
+| `--model` / `-m` | accepted | Parsed; surfaced in status line; not modeled |
 | `--no-alt-screen` | `not relevant` | TUI-internal; alternate screen toggle |
 | `--oss` | `not relevant` | Use open-source provider; no model |
 | `--profile` / `-p` | `not relevant` | Config profile selection; no config system |
 | `--remote` | `not relevant` | Remote app-server websocket endpoint; not applicable |
 | `--remote-auth-token-env` | `not relevant` | Remote auth bearer token env var; not applicable |
-| `--sandbox` / `-s` | `not relevant` | Sandbox policy (`read-only`, `workspace-write`, `danger-full-access`); no execution engine |
+| `--sandbox` / `-s` | accepted | Parsed; surfaced in status line; semantics tracked in [#38](https://github.com/paultyng/testagent/issues/38) |
 | `--search` | `not relevant` | Enable web search tool; no model |
-| `--session` | `accepted` | Testagent-invented stub flag; no real codex equivalent (real resume is `codex resume [SESSION_ID]` subcommand); tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
 | `--version` / `-V` | `not relevant` | testagent uses its own `--version` |
 
 ### Slash commands
@@ -184,13 +194,13 @@ All rows from the `SlashCommand` enum in `codex-rs/tui/src/slash_command.rs`. Al
 | `/agent` | `✗ planned` | Switch active agent thread |
 | `/apps` | `not relevant` | App/connector management; no connector system |
 | `/approve` | `not relevant` | Approve one auto-review denial retry; no approval system |
-| `/clear` | `✗ planned` | Clears terminal + starts new chat; `/restart clear` fires hook side-effect only |
+| `/clear` | partial | Fires hook side-effect only (sugar for `/restart clear`); screen wipe not done |
 | `/collab` | `not relevant` | Collaboration mode (experimental); requires model |
-| `/compact` | `✗ planned` | Context summarization; tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
+| `/compact` | partial | Fires hook side-effect only (sugar for `/restart compact`); full `PreCompact` / `PostCompact` tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
 | `/copy` | `not relevant` | Copy last response to clipboard; TUI-internal |
 | `/debug-config` | `not relevant` | Config layer debug view; no config system |
 | `/diff` | `not relevant` | Show git diff including untracked; TUI-internal |
-| `/exit` | `✗ planned` | Exit Codex (also `/quit`); tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
+| `/exit` | ✓ supported | Accepts optional exit code (alias `/quit`) |
 | `/experimental` | `not relevant` | Toggle experimental features; no feature system |
 | `/feedback` | `not relevant` | Send logs to maintainers; TUI-internal |
 | `/fork` | `✗ planned` | Fork current chat session |
@@ -210,7 +220,7 @@ All rows from the `SlashCommand` enum in `codex-rs/tui/src/slash_command.rs`. Al
 | `/plan` | `not relevant` | Switch to plan mode; requires model |
 | `/plugins` | `not relevant` | Browse plugin marketplace; no plugin system |
 | `/ps` | `not relevant` | List background terminals; TUI-internal |
-| `/quit` | `✗ planned` | Exit Codex (alias of `/exit`) |
+| `/quit` | ✓ supported | Alias of `/exit` |
 | `/raw` | `not relevant` | Toggle raw scrollback mode for copy-friendly selection; TUI-internal |
 | `/realtime` | `not relevant` | Toggle realtime voice mode (experimental) |
 | `/rename` | `✗ planned` | Rename the current thread |
@@ -254,20 +264,20 @@ Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes
 
 | Event | testagent | Notes |
 |-------|-----------|-------|
-| `SessionStart` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
-| `UserPromptSubmit` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
-| `PreToolUse` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13); no Claude Code equivalent |
-| `PostToolUse` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
-| `Stop` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
-| `PreCompact` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
-| `PostCompact` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
+| `SessionStart` | ✓ supported | Fires on session boot or `codex resume`; emits `CODEX_HOOK_SOURCE=startup\|resume` |
+| `UserPromptSubmit` | ✓ supported | Fires per user input line; emits `CODEX_HOOK_PROMPT` |
+| `PreToolUse` | `✗ planned` | Tracked in [#34](https://github.com/paultyng/testagent/issues/34); no Claude Code equivalent |
+| `PostToolUse` | `✗ planned` | Tracked in [#34](https://github.com/paultyng/testagent/issues/34) |
+| `Stop` | ✓ supported | Fires after each assistant response; emits `CODEX_HOOK_LAST_ASSISTANT_MESSAGE` |
+| `PreCompact` | `✗ planned` | Tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
+| `PostCompact` | `✗ planned` | Tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
 | `PermissionRequest` | `not relevant` | Approval/permission hook; no permission system in testagent |
 
 ### Config and conventions
 
 | Feature | testagent | Notes |
 |---------|-----------|-------|
-| `~/.codex/config.toml` | `not relevant` | Codex config home (`$CODEX_HOME` overrides); testagent has no Codex config loading |
-| `AGENTS.md` project instructions | `not relevant` | Read by the model at session start; testagent has no model |
-| `[mcp_servers]` in config.toml | `not relevant` | MCP servers configured via TOML; differs from Claude's `--mcp-config` JSON file |
+| `~/.codex/config.toml` | partial | Loaded if present; `$CODEX_HOME` honored; `[hooks]` table consumed for SessionStart/UserPromptSubmit/Stop (others tracked in [#12](https://github.com/paultyng/testagent/issues/12) / [#34](https://github.com/paultyng/testagent/issues/34)); `[mcp_servers]` parsed but not yet consumed |
+| `AGENTS.md` project instructions | partial | Presence surfaced in status line; content not interpreted (testagent has no model) |
+| `[mcp_servers]` in config.toml | `✗ planned` | Parsed by config skeleton; not yet consumed by the MCP client (tracked in [#13](https://github.com/paultyng/testagent/issues/13)) |
 | `codex mcp add/remove/list` | `not relevant` | Subcommands managing `[mcp_servers]`; no config management in stub |
