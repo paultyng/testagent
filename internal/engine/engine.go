@@ -35,10 +35,32 @@ type Globals struct {
 	StatusLine  string // shown under the banner; empty = omitted
 }
 
+// HookSender is the engine's interface to vendor-specific hook delivery.
+// claude's HTTP-POST sender (internal/hooks) and codex's TOML shell-
+// command runner (internal/codexhooks) both satisfy it. Defined here at
+// the consumer site per Go conventions.
+//
+// OnToolUse is included so the slash dispatcher (which fires PostToolUse
+// when /fake-tool-result completes) can take a value of this same type
+// rather than a separate one-method interface — Go interface assignment
+// is structural, so a value held as HookSender keeps OnToolUse callable.
+type HookSender interface {
+	OnPrompt(ctx context.Context, prompt, sessionTitle string) error
+	OnToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error
+	OnStop(ctx context.Context, lastAssistantMessage string, stopHookActive bool) error
+	OnSessionStart(ctx context.Context, source string) error
+	OnSessionEnd(ctx context.Context, reason string) error
+}
+
+// Compile-time check that the canonical HTTP sender satisfies the
+// engine's interface. The codex runner has its own assertion in its
+// package.
+var _ HookSender = (*hooks.Sender)(nil)
+
 // Deps are the runtime dependencies the engine drives. All fields are
 // required.
 type Deps struct {
-	Hooks *hooks.Sender
+	Hooks HookSender
 	MCP   *mcp.Client
 	Slash *slash.Handler
 }

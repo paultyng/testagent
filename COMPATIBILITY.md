@@ -264,20 +264,20 @@ Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes
 
 | Event | testagent | Notes |
 |-------|-----------|-------|
-| `SessionStart` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
-| `UserPromptSubmit` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
-| `PreToolUse` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13); no Claude Code equivalent |
-| `PostToolUse` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
-| `Stop` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
-| `PreCompact` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
-| `PostCompact` | `✗ planned` | Tracked in [#13](https://github.com/paultyng/testagent/issues/13) |
+| `SessionStart` | ✓ supported | Fires on session boot or `codex resume`; emits `CODEX_HOOK_SOURCE=startup\|resume` |
+| `UserPromptSubmit` | ✓ supported | Fires per user input line; emits `CODEX_HOOK_PROMPT` |
+| `PreToolUse` | `✗ planned` | Tracked in [#34](https://github.com/paultyng/testagent/issues/34); no Claude Code equivalent |
+| `PostToolUse` | `✗ planned` | Tracked in [#34](https://github.com/paultyng/testagent/issues/34) |
+| `Stop` | ✓ supported | Fires after each assistant response; emits `CODEX_HOOK_LAST_ASSISTANT_MESSAGE` |
+| `PreCompact` | `✗ planned` | Tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
+| `PostCompact` | `✗ planned` | Tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
 | `PermissionRequest` | `not relevant` | Approval/permission hook; no permission system in testagent |
 
 ### Config and conventions
 
 | Feature | testagent | Notes |
 |---------|-----------|-------|
-| `~/.codex/config.toml` | partial | Loaded if present; `$CODEX_HOME` honored; only `[mcp_servers]` and `[hooks]` blocks consumed (skeleton); other keys tolerated and ignored |
+| `~/.codex/config.toml` | partial | Loaded if present; `$CODEX_HOME` honored; `[hooks]` table consumed for SessionStart/UserPromptSubmit/Stop (others tracked in [#12](https://github.com/paultyng/testagent/issues/12) / [#34](https://github.com/paultyng/testagent/issues/34)); `[mcp_servers]` parsed but not yet consumed |
 | `AGENTS.md` project instructions | partial | Presence surfaced in status line; content not interpreted (testagent has no model) |
 | `[mcp_servers]` in config.toml | `✗ planned` | Parsed by config skeleton; not yet consumed by the MCP client (tracked in [#13](https://github.com/paultyng/testagent/issues/13)) |
 | `codex mcp add/remove/list` | `not relevant` | Subcommands managing `[mcp_servers]`; no config management in stub |

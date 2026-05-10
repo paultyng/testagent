@@ -25,9 +25,23 @@ import (
 	"github.com/paultyng/testagent/internal/render"
 )
 
+// ToolHookSender is the slash dispatcher's interface to vendor-specific
+// PostToolUse hook delivery. Defined at the consumer site per Go
+// conventions; engine.HookSender is a superset (so values held there
+// satisfy this directly), and both internal/hooks.Sender (claude HTTP)
+// and internal/codexhooks.Runner (codex shell-command) implement it.
+type ToolHookSender interface {
+	OnToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error
+}
+
+// Compile-time assertion that the canonical claude HTTP sender
+// satisfies the slash interface. The codex runner has its own
+// assertion in its package.
+var _ ToolHookSender = (*hooks.Sender)(nil)
+
 // Handler dispatches slash commands and renders their output.
 type Handler struct {
-	hooks *hooks.Sender
+	hooks ToolHookSender
 	mcp   *mcp.Client
 	out   io.Writer
 
@@ -39,7 +53,7 @@ type Handler struct {
 }
 
 // New returns a Handler wired with the supplied dependencies.
-func New(sender *hooks.Sender, client *mcp.Client, out io.Writer) *Handler {
+func New(sender ToolHookSender, client *mcp.Client, out io.Writer) *Handler {
 	return &Handler{
 		hooks: sender,
 		mcp:   client,

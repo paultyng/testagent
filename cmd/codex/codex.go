@@ -14,8 +14,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/paultyng/testagent/cmd/claude"
+	"github.com/paultyng/testagent/internal/codexhooks"
 	"github.com/paultyng/testagent/internal/engine"
-	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/mcp"
 	"github.com/paultyng/testagent/internal/slash"
 )
@@ -109,16 +109,15 @@ func runInteractive(cmd *cobra.Command, rf *claude.RootFlags, cf *flags, sid str
 		debugW = os.Stderr
 	}
 	// Hooks: codex's [hooks] table is shell-command-shaped, not HTTP.
-	// MVP wires a no-op HTTP sender so engine.Deps stays satisfied;
-	// the real codex hook runner lands in commit 4.
-	hookSender := hooks.NewSender(nil, sid, cwd, transcriptPath, permissionMode, debugW)
+	// Convert the TOML matchers to the runner's per-event map and build
+	// the runner. nil cfg / empty matchers → no-op runner.
+	runner := codexhooks.NewRunner(matchersFromConfig(cfg), sid, cwd, transcriptPath, permissionMode, debugW)
 
-	// MCP server config from TOML lands later (still part of #13 — the
-	// codex matrix's [mcp_servers] row stays ✗ planned for now).
+	// MCP server config from TOML lands in a follow-up (codex matrix's
+	// [mcp_servers] row stays ✗ planned for now — tracked in #37).
 	mcpClient := mcp.NewClient(nil)
-	_ = cfg // commit 2 consumes [mcp_servers], commit 4 consumes [hooks]
 
-	slashHandler := slash.New(hookSender, mcpClient, os.Stdout)
+	slashHandler := slash.New(runner, mcpClient, os.Stdout)
 
 	g := engine.Globals{
 		Emulator:    "Codex",
@@ -133,7 +132,7 @@ func runInteractive(cmd *cobra.Command, rf *claude.RootFlags, cf *flags, sid str
 		StatusLine:  buildStatusLine(cf, agentsLine, cfg),
 	}
 	d := engine.Deps{
-		Hooks: hookSender,
+		Hooks: runner,
 		MCP:   mcpClient,
 		Slash: slashHandler,
 	}
@@ -181,4 +180,27 @@ func ctxOrBackground(cmd *cobra.Command) context.Context {
 		return c
 	}
 	return context.Background()
+}
+
+// matchersFromConfig flattens the cmd/codex.Config's HooksTable into
+// the codexhooks.Runner's per-event matcher map. Returns nil when no
+// hooks are configured (the runner is a no-op in that case).
+func matchersFromConfig(cfg *Config) map[string][]codexhooks.Matcher {
+	if cfg == nil || len(cfg.Hooks) == 0 {
+		return nil
+	}
+	out := make(map[string][]codexhooks.Matcher, len(cfg.Hooks))
+	for event, matchers := range cfg.Hooks {
+		conv := make([]codexhooks.Matcher, len(matchers))
+		for i, m := range matchers {
+			conv[i] = codexhooks.Matcher{
+				Command:       m.Command,
+				Async:         m.Async,
+				Timeout:       m.Timeout,
+				StatusMessage: m.StatusMessage,
+			}
+		}
+		out[event] = conv
+	}
+	return out
 }
