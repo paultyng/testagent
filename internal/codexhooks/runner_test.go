@@ -165,7 +165,12 @@ func TestRunner_TimeoutHonored(t *testing.T) {
 	matchers := map[string][]Matcher{
 		EventStop: {{Command: sleepCmd(5), Timeout: 1}},
 	}
-	r := NewRunner(matchers, "sid", t.TempDir(), "", "default", nil)
+	// Use os.TempDir (stable parent) rather than t.TempDir on Windows:
+	// the timeout test's ping grandchild keeps cwd open after cmd.exe is
+	// killed, which blocks t.TempDir's RemoveAll cleanup with EBUSY.
+	// Proper fix (Job-object based process-tree termination in the
+	// runner) is tracked separately.
+	r := NewRunner(matchers, "sid", os.TempDir(), "", "default", nil)
 	start := time.Now()
 	err := r.OnStop(context.Background(), "msg", false)
 	elapsed := time.Since(start)
