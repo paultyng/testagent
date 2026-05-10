@@ -29,9 +29,11 @@ func runScanner(ctx context.Context, g Globals, d Deps, shutdown func(string)) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 
-	// Handle SIGWINCH (terminal resize).
+	// Handle terminal resize. Unix delivers SIGWINCH; Windows has no
+	// equivalent signal, so notifyResize is a no-op there and the
+	// resize-echo goroutine below sees an idle channel.
 	winchCh := make(chan os.Signal, 1)
-	signal.Notify(winchCh, syscall.SIGWINCH)
+	notifyResize(winchCh)
 
 	// Banner via lipgloss: rounded border auto-sizes to widest line and
 	// handles wide / multi-byte characters correctly.

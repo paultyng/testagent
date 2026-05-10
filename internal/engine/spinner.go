@@ -6,9 +6,10 @@ package engine
 import (
 	"fmt"
 	"io"
-	"syscall"
+	"os"
 	"time"
-	"unsafe"
+
+	"golang.org/x/term"
 
 	"github.com/paultyng/testagent/internal/render"
 )
@@ -66,13 +67,15 @@ func showThinking(out io.Writer, total time.Duration) {
 	fmt.Fprintln(out, render.ThoughtMarker(fmt.Sprintf("Thought for %s", elapsed)))
 }
 
-// getTermSize returns the current terminal dimensions via TIOCGWINSZ.
+// getTermSize returns the current terminal dimensions. Uses
+// golang.org/x/term so the call is portable across Unix and Windows
+// (TIOCGWINSZ on Unix, GetConsoleScreenBufferInfo on Windows). Returns
+// (0, 0) when stdout is not attached to a terminal — callers must
+// tolerate that without dividing by zero or panicking.
 func getTermSize() (rows, cols int) {
-	type winsize struct {
-		Row, Col, Xpixel, Ypixel uint16
+	cols, rows, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil {
+		return 0, 0
 	}
-	var ws winsize
-	_, _, _ = syscall.Syscall(syscall.SYS_IOCTL, uintptr(syscall.Stdout),
-		uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws)))
-	return int(ws.Row), int(ws.Col)
+	return rows, cols
 }
