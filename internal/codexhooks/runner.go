@@ -56,6 +56,8 @@ const (
 	EventSessionStart     = "session_start"
 	EventUserPromptSubmit = "user_prompt_submit"
 	EventStop             = "stop"
+	EventPreCompact       = "pre_compact"
+	EventPostCompact      = "post_compact"
 )
 
 // defaultTimeout caps a synchronous matcher's wall-clock when the TOML
@@ -182,12 +184,30 @@ func (r *Runner) OnSessionStart(ctx context.Context, source string) error {
 }
 
 // OnSessionEnd is a no-op — codex's HooksTable has no session_end
-// event. Engine still calls it on shutdown (and on /restart's
-// "soft end") for parity with the claude path; the runner's
-// terminal-teardown work happens in Close, so /restart can fire
-// OnSessionEnd → OnSessionStart without invalidating the runner.
+// event. Engine still calls it on shutdown and on the /clear or
+// /compact lifecycle for parity with the claude path; the runner's
+// terminal-teardown work happens in Close, so the back-to-back
+// OnSessionEnd → OnSessionStart pair never invalidates the runner.
 func (r *Runner) OnSessionEnd(ctx context.Context, reason string) error {
 	return nil
+}
+
+// OnPreCompact fires pre_compact before context-summarization runs.
+// trigger is "manual" (user typed /compact) or "auto" (auto-compact
+// lifecycle); it lands in CODEX_HOOK_TRIGGER so a config matcher on
+// `trigger = "manual"` or `trigger = "auto"` can branch.
+func (r *Runner) OnPreCompact(ctx context.Context, trigger string) error {
+	return r.fire(ctx, EventPreCompact, map[string]string{
+		"CODEX_HOOK_TRIGGER": trigger,
+	})
+}
+
+// OnPostCompact fires post_compact after the SessionStart that follows
+// compaction. trigger matches the PreCompact value.
+func (r *Runner) OnPostCompact(ctx context.Context, trigger string) error {
+	return r.fire(ctx, EventPostCompact, map[string]string{
+		"CODEX_HOOK_TRIGGER": trigger,
+	})
 }
 
 // fire runs every matcher registered for event. Synchronous matchers

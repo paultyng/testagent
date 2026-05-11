@@ -295,6 +295,59 @@ func TestSender_OnSessionEnd_Payload(t *testing.T) {
 	}
 }
 
+func TestSender_OnPreCompact_Payload(t *testing.T) {
+	t.Parallel()
+	srv, recs, mu := captureServer(t)
+	sender := newTestSender(t, matchersFor(PreCompact, nil, srv.URL+"/hooks/pre-compact"))
+
+	if err := sender.OnPreCompact(context.Background(), "manual"); err != nil {
+		t.Fatalf("OnPreCompact: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(*recs) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(*recs))
+	}
+	rec := (*recs)[0]
+	wantFields := map[string]any{
+		"cwd":             "/tmp/cwd",
+		"hook_event_name": "PreCompact",
+		"trigger":         "manual",
+		"session_id":      "session-xyz",
+		"transcript_path": "/tmp/transcript.jsonl",
+	}
+	for k, want := range wantFields {
+		if got := rec.body[k]; got != want {
+			t.Errorf("body[%s] = %v, want %v", k, got, want)
+		}
+	}
+}
+
+func TestSender_OnPostCompact_Payload(t *testing.T) {
+	t.Parallel()
+	srv, recs, mu := captureServer(t)
+	sender := newTestSender(t, matchersFor(PostCompact, nil, srv.URL+"/hooks/post-compact"))
+
+	if err := sender.OnPostCompact(context.Background(), "auto"); err != nil {
+		t.Fatalf("OnPostCompact: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(*recs) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(*recs))
+	}
+	rec := (*recs)[0]
+	wantFields := map[string]any{
+		"hook_event_name": "PostCompact",
+		"trigger":         "auto",
+	}
+	for k, want := range wantFields {
+		if got := rec.body[k]; got != want {
+			t.Errorf("body[%s] = %v, want %v", k, got, want)
+		}
+	}
+}
+
 func TestSender_MultipleHooksFire(t *testing.T) {
 	t.Parallel()
 	srv, recs, mu := captureServer(t)

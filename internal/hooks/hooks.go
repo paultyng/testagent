@@ -26,6 +26,8 @@ const (
 	Stop             = "Stop"
 	SessionStart     = "SessionStart"
 	SessionEnd       = "SessionEnd"
+	PreCompact       = "PreCompact"
+	PostCompact      = "PostCompact"
 )
 
 // defaultTimeout is used when a Hook in settings does not specify Timeout.
@@ -137,6 +139,17 @@ type sessionEndBody struct {
 	TranscriptPath string `json:"transcript_path"`
 }
 
+// compactBody is the JSON body for PreCompact and PostCompact — both events
+// share the same shape. Trigger is "manual" (user typed /compact) or "auto"
+// (testagent's /fake-auto-compact simulating Claude's context-fill trigger).
+type compactBody struct {
+	CWD            string `json:"cwd"`
+	HookEventName  string `json:"hook_event_name"`
+	SessionID      string `json:"session_id"`
+	TranscriptPath string `json:"transcript_path"`
+	Trigger        string `json:"trigger"`
+}
+
 // OnPrompt fires UserPromptSubmit. sessionTitle is the human-facing label.
 func (s *Sender) OnPrompt(ctx context.Context, prompt, sessionTitle string) error {
 	body := userPromptSubmitBody{
@@ -205,6 +218,32 @@ func (s *Sender) OnSessionEnd(ctx context.Context, reason string) error {
 		TranscriptPath: s.transcriptPath,
 	}
 	return s.fire(ctx, SessionEnd, body)
+}
+
+// OnPreCompact fires PreCompact before context-summarization runs. trigger
+// is "manual" (user typed /compact) or "auto" (auto-compact lifecycle).
+func (s *Sender) OnPreCompact(ctx context.Context, trigger string) error {
+	body := compactBody{
+		CWD:            s.cwd,
+		HookEventName:  PreCompact,
+		SessionID:      s.sessionID,
+		TranscriptPath: s.transcriptPath,
+		Trigger:        trigger,
+	}
+	return s.fire(ctx, PreCompact, body)
+}
+
+// OnPostCompact fires PostCompact after the SessionStart that follows
+// compaction. trigger matches the PreCompact value.
+func (s *Sender) OnPostCompact(ctx context.Context, trigger string) error {
+	body := compactBody{
+		CWD:            s.cwd,
+		HookEventName:  PostCompact,
+		SessionID:      s.sessionID,
+		TranscriptPath: s.transcriptPath,
+		Trigger:        trigger,
+	}
+	return s.fire(ctx, PostCompact, body)
 }
 
 // fire iterates every Matcher registered for event and dispatches each
