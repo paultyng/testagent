@@ -202,6 +202,7 @@ All rows from the `SlashCommand` enum in `codex-rs/tui/src/slash_command.rs`. Al
 | `/diff` | `not relevant` | Show git diff including untracked; TUI-internal |
 | `/exit` | ✓ supported | Accepts optional exit code (alias `/quit`) |
 | `/experimental` | `not relevant` | Toggle experimental features; no feature system |
+| `/fast` | `not relevant` | Toggle "fast" reasoning-effort tier; requires model |
 | `/feedback` | `not relevant` | Send logs to maintainers; TUI-internal |
 | `/fork` | `✗ planned` | Fork current chat session |
 | `/goal` | `not relevant` | Set/view long-running task goal; requires model |
