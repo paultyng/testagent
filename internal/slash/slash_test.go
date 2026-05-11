@@ -169,19 +169,19 @@ func TestSlash_Help_Format(t *testing.T) {
 	body := out.String()
 
 	wantPhrases := []string{
-		"/think <duration>",        // duration-required /think advertised
-		"/stream <duration>",       // duration-required /stream advertised
-		"/link <url>",              // OSC 8 link helper advertised
-		"/clear",                   // codex-shape sugar for /restart clear
-		"/compact",                 // codex-shape sugar for /restart compact
-		"/quit",                    // alias of /exit (codex parity)
-		"/fake-tool ",              // renamed from /tool
-		"/fake-tool-result ",       // renamed from /result
-		"/mcp-call ",               // renamed from /mcp to avoid collision with real Claude's /mcp
-		"/restart [clear|compact]", // /restart command shape
-		"connected MCP tool",       // /mcp-call's distinguishing phrasing
-		"exits testagent",          // verb-led /exit description
-		"prints this list",         // verb-led /help description
+		"/think <duration>",  // duration-required /think advertised
+		"/stream <duration>", // duration-required /stream advertised
+		"/link <url>",        // OSC 8 link helper advertised
+		"/clear",             // upstream-shape clear command
+		"/compact",           // upstream-shape compact command
+		"/fake-auto-compact", // emulation-only auto-compact trigger
+		"/quit",              // alias of /exit (codex parity)
+		"/fake-tool ",        // renamed from /tool
+		"/fake-tool-result ", // renamed from /result
+		"/mcp-call ",         // renamed from /mcp to avoid collision with real Claude's /mcp
+		"connected MCP tool", // /mcp-call's distinguishing phrasing
+		"exits testagent",    // verb-led /exit description
+		"prints this list",   // verb-led /help description
 	}
 	for _, p := range wantPhrases {
 		if !strings.Contains(body, p) {
@@ -499,46 +499,20 @@ func TestSlash_Exit(t *testing.T) {
 	}
 }
 
-// TestSlash_ClearCompact asserts the codex-shape /clear and /compact
-// sugar dispatches to the same Restart outcome as /restart {clear,compact}.
-func TestSlash_ClearCompact(t *testing.T) {
+// TestSlash_LifecycleCommands asserts /clear, /compact, and
+// /fake-auto-compact dispatch to the right Outcome.
+func TestSlash_LifecycleCommands(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name       string
-		line       string
-		wantReason string
+		name        string
+		line        string
+		wantReason  string
+		wantTrigger string
 	}{
-		{name: "/clear", line: "/clear", wantReason: "clear"},
-		{name: "/compact", line: "/compact", wantReason: "compact"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			out := &bytes.Buffer{}
-			h := newTestHandler(out)
-			oc := h.Dispatch(context.Background(), tc.line)
-			if !oc.Restart {
-				t.Errorf("Restart=false, want true")
-			}
-			if oc.RestartReason != tc.wantReason {
-				t.Errorf("RestartReason = %q, want %q", oc.RestartReason, tc.wantReason)
-			}
-		})
-	}
-}
-
-func TestSlash_Restart(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name       string
-		line       string
-		wantReason string
-	}{
-		{name: "default reason", line: "/restart", wantReason: "clear"},
-		{name: "explicit clear", line: "/restart clear", wantReason: "clear"},
-		{name: "explicit compact", line: "/restart compact", wantReason: "compact"},
+		{name: "/clear", line: "/clear", wantReason: "clear", wantTrigger: ""},
+		{name: "/compact", line: "/compact", wantReason: "compact", wantTrigger: "manual"},
+		{name: "/fake-auto-compact", line: "/fake-auto-compact", wantReason: "compact", wantTrigger: "auto"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -547,15 +521,35 @@ func TestSlash_Restart(t *testing.T) {
 			h := newTestHandler(out)
 			oc := h.Dispatch(context.Background(), tc.line)
 			if !oc.Handled || !oc.Restart {
-				t.Fatalf("got Handled=%v Restart=%v, want both true", oc.Handled, oc.Restart)
+				t.Fatalf("Handled=%v Restart=%v, want both true", oc.Handled, oc.Restart)
 			}
 			if oc.RestartReason != tc.wantReason {
 				t.Errorf("RestartReason = %q, want %q", oc.RestartReason, tc.wantReason)
 			}
+			if oc.CompactTrigger != tc.wantTrigger {
+				t.Errorf("CompactTrigger = %q, want %q", oc.CompactTrigger, tc.wantTrigger)
+			}
 			if oc.Exit {
-				t.Errorf("Exit = true, want false (/restart should not exit)")
+				t.Errorf("Exit = true, want false")
 			}
 		})
+	}
+}
+
+// TestSlash_RestartRemoved asserts /restart is no longer a recognized
+// command — it falls through to the unknown-command path (Handled=true,
+// no Restart outcome).
+func TestSlash_RestartRemoved(t *testing.T) {
+	t.Parallel()
+
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	oc := h.Dispatch(context.Background(), "/restart compact")
+	if !oc.Handled {
+		t.Errorf("Handled = false, want true (unknown slash still consumed)")
+	}
+	if oc.Restart {
+		t.Errorf("Restart = true, want false (/restart should no longer dispatch lifecycle)")
 	}
 }
 

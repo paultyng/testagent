@@ -85,8 +85,8 @@ Alphabetical by long name. Short flags shown inline. Global flags (common across
 | Command | testagent | Notes |
 |---------|-----------|-------|
 | `/add-dir <path>` | `✗ planned` | |
-| `/clear` | partial | Fires the hook side-effect (sugar for `/restart clear`); screen wipe not done |
-| `/compact` | partial | Fires the hook side-effect (sugar for `/restart compact`); full `PreCompact` / `PostCompact` support tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
+| `/clear` | partial | Fires `SessionEnd(reason=clear)` → `SessionStart(source=clear)`; screen wipe not done |
+| `/compact` | ✓ supported | Fires `PreCompact(trigger=manual)` → `SessionEnd(reason=compact)` → `SessionStart(source=compact)` → `PostCompact(trigger=manual)` |
 | `/config` | `not relevant` | No settings UI |
 | `/context` | `not relevant` | No context window |
 | `/exit` | ✓ supported | Accepts optional exit code |
@@ -112,14 +112,16 @@ Bundled skills always land at `not relevant` — testagent has no model.
 
 #### Testagent-only (no upstream equivalent)
 
+The `/fake-*` namespace is reserved for emulation-only commands — slash commands that drive lifecycles the real CLI fires internally (never as a user command). Documented here as a distinct category, not as parity-matrix entries.
+
 | Command | Purpose |
 |---------|---------|
+| `/fake-auto-compact` | Drives the compact lifecycle with `trigger=auto` (emulates upstream's internal context-fill compaction trigger) |
 | `/fake-tool <name> <json-args>` | Renders a fake tool-use block; pair with `/fake-tool-result` to fire `PostToolUse` |
 | `/fake-tool-result <json-or-text>` | Completes a pending `/fake-tool`; fires `PostToolUse` hook |
 | `/link <url> [text]` | Renders an OSC 8 hyperlink (clickable in supporting terminals); text defaults to URL |
 | `/mcp-call <server.tool> <json-args>` | Calls a connected MCP tool; named to avoid `/mcp` collision |
 | `/panel <text>` | Renders text in a rounded-border box |
-| `/restart [clear\|compact]` | Fires `SessionEnd` then `SessionStart`; simulates `/clear` or `/compact` hook behavior |
 | `/stream <duration> <message>` | Routes message through prompt path with per-token interval overridden |
 | `/think <duration> <message>` | Routes message through prompt path with thinking-spinner duration overridden |
 
@@ -160,13 +162,13 @@ Unknown `type` values decode cleanly and are silently skipped at dispatch.
 
 | Event | testagent | Notes |
 |-------|-----------|-------|
-| `SessionStart` | ✓ supported | Fired at boot (`source=startup`) or resume (`source=resume`); `/restart` fires with `source=<reason>` |
-| `SessionEnd` | ✓ supported | Fired on exit; `/restart` fires before the next `SessionStart` |
+| `SessionStart` | ✓ supported | Fired at boot (`source=startup`) or resume (`source=resume`); `/clear` and `/compact` fire with `source=clear` or `source=compact` |
+| `SessionEnd` | ✓ supported | Fired on exit; `/clear` and `/compact` fire before the next `SessionStart` |
 | `UserPromptSubmit` | ✓ supported | Fired per user input line and `/think` |
 | `PostToolUse` | ✓ supported | Fired when `/fake-tool-result` completes a `/fake-tool` block |
 | `Stop` | ✓ supported | Fired after each assistant response; `stop_hook_active=true` on `Esc` cancel |
-| `PreCompact` | `✗ planned` | Tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
-| `PostCompact` | `✗ planned` | Tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
+| `PreCompact` | ✓ supported | Fired before the SessionEnd → SessionStart pair for `/compact` (`trigger=manual`) and `/fake-auto-compact` (`trigger=auto`) |
+| `PostCompact` | ✓ supported | Fired after the SessionEnd → SessionStart pair for `/compact` and `/fake-auto-compact`; trigger matches the PreCompact value |
 | `Setup` | `✗ planned` | |
 
 ---
@@ -227,7 +229,7 @@ Alphabetical by long name. Short flags shown inline. **These are global flags fo
 
 ### Slash commands
 
-> **Naming collision:** Codex's `/mcp` lists configured MCP tools (use `/mcp verbose` for details). testagent uses `/mcp-call` for tool dispatch to avoid colliding with this. Codex's `/exit` and `/quit` both exit the CLI; testagent's `/exit [code]` maps to either. Codex's `/clear` clears the terminal and starts a new chat; testagent's `/restart clear` simulates the hook side-effect only. Codex's `/status` shows session config and token usage; testagent has no equivalent.
+> **Naming collision:** Codex's `/mcp` lists configured MCP tools (use `/mcp verbose` for details). testagent uses `/mcp-call` for tool dispatch to avoid colliding with this. Codex's `/exit` and `/quit` both exit the CLI; testagent's `/exit [code]` maps to either. Codex's `/clear` clears the terminal and starts a new chat; testagent's `/clear` simulates the hook side-effect only (no screen wipe). Codex's `/status` shows session config and token usage; testagent has no equivalent.
 
 #### Built-in
 
@@ -238,9 +240,9 @@ Visible release commands from the `SlashCommand` enum in `codex-rs/tui/src/slash
 | `/agent` | `✗ planned` | Switch active agent thread |
 | `/apps` | `not relevant` | App/connector management; no connector system |
 | `/approve` | `not relevant` | Approve one auto-review denial retry; no approval system |
-| `/clear` | partial | Fires hook side-effect only (sugar for `/restart clear`); screen wipe not done |
+| `/clear` | partial | Fires `session_end(reason=clear)` → `session_start(source=clear)`; screen wipe not done |
 | `/collab` | `not relevant` | Collaboration mode (experimental); requires model |
-| `/compact` | partial | Fires hook side-effect only (sugar for `/restart compact`); full `PreCompact` / `PostCompact` tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
+| `/compact` | ✓ supported | Fires `pre_compact(trigger=manual)` → `session_end(reason=compact)` → `session_start(source=compact)` → `post_compact(trigger=manual)` |
 | `/copy` | `not relevant` | Copy last response to clipboard; TUI-internal |
 | `/debug-config` | `not relevant` | Config layer debug view; no config system |
 | `/diff` | `not relevant` | Show git diff including untracked; TUI-internal |
@@ -314,15 +316,15 @@ Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes
 | `PreToolUse` | `✗ planned` | Tracked in [#34](https://github.com/paultyng/testagent/issues/34); no Claude Code equivalent |
 | `PostToolUse` | `✗ planned` | Tracked in [#34](https://github.com/paultyng/testagent/issues/34) |
 | `Stop` | ✓ supported | Fires after each assistant response; emits `CODEX_HOOK_LAST_ASSISTANT_MESSAGE` |
-| `PreCompact` | `✗ planned` | Tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
-| `PostCompact` | `✗ planned` | Tracked in [#12](https://github.com/paultyng/testagent/issues/12) |
+| `PreCompact` | ✓ supported | Fires before SessionEnd → SessionStart on `/compact` and `/fake-auto-compact`; emits `CODEX_HOOK_TRIGGER=manual\|auto` |
+| `PostCompact` | ✓ supported | Fires after SessionEnd → SessionStart on `/compact` and `/fake-auto-compact`; emits `CODEX_HOOK_TRIGGER=manual\|auto` |
 | `PermissionRequest` | `not relevant` | Approval/permission hook; no permission system in testagent |
 
 ### Config and conventions
 
 | Feature | testagent | Notes |
 |---------|-----------|-------|
-| `~/.codex/config.toml` | partial | Loaded if present; `$CODEX_HOME` honored; `[hooks]` table consumed for SessionStart/UserPromptSubmit/Stop (others tracked in [#12](https://github.com/paultyng/testagent/issues/12) / [#34](https://github.com/paultyng/testagent/issues/34)); `[mcp_servers]` parsed but not yet consumed |
+| `~/.codex/config.toml` | partial | Loaded if present; `$CODEX_HOME` honored; `[hooks]` table consumed for SessionStart/UserPromptSubmit/Stop/PreCompact/PostCompact (PreToolUse/PostToolUse tracked in [#33](https://github.com/paultyng/testagent/issues/33)); `[mcp_servers]` parsed but not yet consumed |
 | `AGENTS.md` project instructions | partial | Presence surfaced in status line; content not interpreted (testagent has no model) |
 | `[mcp_servers]` in config.toml | `✗ planned` | Parsed by config skeleton; not yet consumed by the MCP client (tracked in [#13](https://github.com/paultyng/testagent/issues/13)) |
 | `codex mcp add/remove/list` | `not relevant` | Subcommands managing `[mcp_servers]`; no config management in stub |

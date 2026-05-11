@@ -11,18 +11,19 @@
 // $SHELL / %COMSPEC% env vars are honored so users get their configured
 // shell.
 //
-// MVP wires three events from #13:
+// Wires five events:
 //
 //   - session_start
 //   - user_prompt_submit
 //   - stop
+//   - pre_compact (trigger=manual|auto via CODEX_HOOK_TRIGGER)
+//   - post_compact (same trigger)
 //
 // Codex's HooksTable has no session_end; OnSessionEnd is a no-op
 // (the engine still calls it for parity with the claude path).
 // Final-process teardown drains async matchers via Runner.Close —
 // see its doc for the lifecycle distinction.
-// pre_tool_use / post_tool_use / pre_compact / post_compact are
-// deferred (#34, #12).
+// pre_tool_use / post_tool_use deferred (#33).
 package codexhooks
 
 import (
