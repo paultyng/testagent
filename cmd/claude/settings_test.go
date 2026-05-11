@@ -13,12 +13,13 @@ func TestLoadSettings(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		body        string
-		wantNil     bool
-		wantHooks   []string
-		wantAllow   []string
-		wantErrFrag string
+		name            string
+		body            string
+		wantNil         bool
+		wantHooks       []string
+		wantAllow       []string
+		wantStopCommand string // expected Command field on the first Stop hook (when set)
+		wantErrFrag     string
 	}{
 		{
 			name:    "empty path returns nil",
@@ -37,6 +38,23 @@ func TestLoadSettings(t *testing.T) {
 			}`,
 			wantHooks: []string{"PostToolUse", "SessionEnd", "Stop"},
 			wantAllow: []string{"mcp__demo__.*"},
+		},
+		{
+			// Issue #47 acceptance: a settings.json with both http and command
+			// hooks loads without error and populates the Command field on the
+			// command-type entry.
+			name: "mixed http and command hooks",
+			body: `{
+				"hooks": {
+					"Stop": [{"hooks": [
+						{"type": "http", "url": "http://x/stop", "timeout": 5},
+						{"type": "command", "command": "echo stop", "timeout": 5}
+					]}],
+					"PreCompact": [{"hooks": [{"type": "command", "command": "echo compacting"}]}]
+				}
+			}`,
+			wantHooks:       []string{"PreCompact", "Stop"},
+			wantStopCommand: "echo stop",
 		},
 		{
 			name:        "invalid json",
@@ -75,11 +93,26 @@ func TestLoadSettings(t *testing.T) {
 					t.Errorf("missing hook event %q", h)
 				}
 			}
-			if s.Permissions == nil {
-				t.Fatal("permissions nil, want allow list")
+			if tt.wantAllow != nil {
+				if s.Permissions == nil {
+					t.Fatal("permissions nil, want allow list")
+				}
+				if !equalStrings(s.Permissions.Allow, tt.wantAllow) {
+					t.Errorf("allow=%v, want %v", s.Permissions.Allow, tt.wantAllow)
+				}
 			}
-			if !equalStrings(s.Permissions.Allow, tt.wantAllow) {
-				t.Errorf("allow=%v, want %v", s.Permissions.Allow, tt.wantAllow)
+			if tt.wantStopCommand != "" {
+				stop := s.Hooks["Stop"]
+				if len(stop) == 0 || len(stop[0].Hooks) < 2 {
+					t.Fatalf("Stop hooks shape = %+v, want at least 2 entries", stop)
+				}
+				got := stop[0].Hooks[1].Command
+				if got != tt.wantStopCommand {
+					t.Errorf("Stop[0].Hooks[1].Command = %q, want %q", got, tt.wantStopCommand)
+				}
+				if stop[0].Hooks[1].Type != "command" {
+					t.Errorf("Stop[0].Hooks[1].Type = %q, want %q", stop[0].Hooks[1].Type, "command")
+				}
 			}
 		})
 	}

@@ -164,7 +164,7 @@ func (r *Runner) OnPrompt(ctx context.Context, prompt, sessionTitle string) erro
 }
 
 // OnToolUse is a no-op for MVP. pre_tool_use / post_tool_use wiring
-// is tracked in #34.
+// is tracked in #33.
 func (r *Runner) OnToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error {
 	return nil
 }

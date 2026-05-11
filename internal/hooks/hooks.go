@@ -121,7 +121,8 @@ type stopBody struct {
 
 // sessionStartBody is the JSON body for SessionStart. source is one of
 // "startup", "resume", "clear", "compact" — matches Claude Code's matcher
-// vocabulary so orchestrators can distinguish a fresh boot from a /restart.
+// vocabulary so orchestrators can distinguish a fresh boot from /clear
+// or /compact.
 type sessionStartBody struct {
 	CWD            string `json:"cwd"`
 	HookEventName  string `json:"hook_event_name"`
