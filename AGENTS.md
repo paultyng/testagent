@@ -35,8 +35,9 @@ main.go                     # cobra root + bare-invocation default-to-claude
 cmd/claude/                 # claude subcommand: vendor flags, Settings/MCPConfig, runPrint
 cmd/codex/                  # codex subcommand: TOML config + AGENTS.md surfacing + lifecycle slash + hooks wiring
 internal/engine/            # Globals + Deps + Run; TUI + scanner + spinner + token-stream helper; HookSender interface
-internal/hooks/             # Sender (HTTP hook POSTs — claude-shaped)
+internal/hooks/             # Sender (HTTP + command hooks — claude-shaped)
 internal/codexhooks/        # Runner (TOML shell-command hooks — codex-shaped)
+internal/shellrun/          # DefaultShellCommand + process-tree teardown (shared by hooks/codexhooks)
 internal/mcp/               # Client (MCP HTTP handshake + tools/call)
 internal/slash/             # Handler (slash-command grammar)
 internal/render/            # lipgloss style tokens + intent helpers

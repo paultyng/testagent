@@ -105,7 +105,7 @@ type hookErrMsg struct {
 // SessionStart lands on the wire even if the user quits before this message
 // is delivered to Update. Note: this serializes Connect→SessionStart within
 // the boot goroutine but does NOT serialize against user-driven hook cmds
-// (e.g. /restart) running on their own goroutines; in practice mcp.Connect
+// (e.g. /clear, /compact) running on their own goroutines; in practice mcp.Connect
 // is fast enough that no realistic user input beats it, but a paranoid
 // orchestrator should not depend on strict ordering between boot
 // SessionStart and the very first user-submitted hook.
@@ -567,7 +567,7 @@ func cmdHookStop(sender HookSender, last string, stopHookActive bool) tea.Cmd {
 // regardless of whether the bubbletea program is still around to process
 // the resulting mcpConnectMsg. This mirrors the scanner path's synchronous
 // mcp.Connect → OnSessionStart ordering and prevents races between boot
-// SessionStart and user-driven hooks (e.g. /restart) submitted before the
+// SessionStart and user-driven hooks (e.g. /clear, /compact) submitted before the
 // boot goroutine resolves.
 func cmdBoot(client *mcp.Client, sender HookSender, source string) tea.Cmd {
 	return func() tea.Msg {

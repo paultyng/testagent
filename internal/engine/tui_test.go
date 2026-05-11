@@ -327,9 +327,10 @@ func TestModel_HistoryCapEvictsOldest(t *testing.T) {
 }
 
 // TestCmdSlashRestart_FiresHooksInOrder pins the wire-order contract for
-// /restart in the TUI path: a pending /fake-tool's PostToolUse must precede
-// SessionEnd, and SessionEnd must precede SessionStart. Earlier wiring used
-// tea.Batch which dispatched the two hook cmds concurrently and could race.
+// the /clear and /compact lifecycle in the TUI path: a pending /fake-tool's
+// PostToolUse must precede SessionEnd, and SessionEnd must precede
+// SessionStart. Earlier wiring used tea.Batch which dispatched the two
+// hook cmds concurrently and could race.
 func TestCmdSlashRestart_FiresHooksInOrder(t *testing.T) {
 	t.Parallel()
 

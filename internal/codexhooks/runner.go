@@ -127,9 +127,9 @@ func NewRunner(matchers map[string][]Matcher, sessionID, cwd, transcriptPath, pe
 // Close drains any in-flight async matcher goroutines and prevents
 // new ones from being spawned. Intended to be called once during
 // final process teardown (engine.Run's shutdown closure), NOT on
-// /restart — async hooks should outlive a restart cycle and continue
-// to the natural per-matcher timeout. After Close, fire becomes a
-// no-op for async matchers (synchronous matchers still run).
+// /clear or /compact — async hooks should outlive a soft-reset cycle
+// and continue to the natural per-matcher timeout. After Close, fire
+// becomes a no-op for async matchers (synchronous matchers still run).
 //
 // Returns when in-flight goroutines have finished, the supplied ctx
 // is cancelled, or shutdownGracePeriod has elapsed — whichever comes
