@@ -73,6 +73,14 @@ func newTestSender(t *testing.T, matchers map[string][]Matcher) *Sender {
 	return NewSender(matchers, "session-xyz", "/tmp/cwd", "/tmp/transcript.jsonl", "auto", nil)
 }
 
+// newCmdTestSender is the command-hook analog of newTestSender. Command
+// hooks chdir into the configured cwd before spawning the shell, so the
+// path must actually exist — t.TempDir gives each test a fresh real dir.
+func newCmdTestSender(t *testing.T, matchers map[string][]Matcher) *Sender {
+	t.Helper()
+	return NewSender(matchers, "session-xyz", t.TempDir(), "/tmp/transcript.jsonl", "auto", nil)
+}
+
 func TestSender_NilMatchers_NoOp(t *testing.T) {
 	t.Parallel()
 	sender := newTestSender(t, nil)
@@ -628,7 +636,7 @@ func TestSender_CommandHook_StdinReceivesPayload(t *testing.T) {
 			},
 		},
 	}
-	sender := newTestSender(t, matchers)
+	sender := newCmdTestSender(t, matchers)
 	if err := sender.OnStop(context.Background(), "hello", true); err != nil {
 		t.Fatalf("OnStop: %v", err)
 	}
@@ -651,6 +659,31 @@ func TestSender_CommandHook_StdinReceivesPayload(t *testing.T) {
 	}
 }
 
+func TestSender_CommandHook_CwdHonored(t *testing.T) {
+	t.Parallel()
+	// Use a relative output path; the shell only resolves it correctly if
+	// the hook is spawned with cmd.Dir == s.cwd. Regression guard for the
+	// missing-cwd bug surfaced in PR #65 review.
+	dir := t.TempDir()
+	matchers := map[string][]Matcher{
+		Stop: {
+			{
+				Matcher: "*",
+				Hooks: []Hook{
+					{Type: "command", Command: stdinToFileCmd("stop.json"), Timeout: hookCmdTimeout},
+				},
+			},
+		},
+	}
+	sender := NewSender(matchers, "session-xyz", dir, "/tmp/t.jsonl", "auto", nil)
+	if err := sender.OnStop(context.Background(), "msg", false); err != nil {
+		t.Fatalf("OnStop: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "stop.json")); err != nil {
+		t.Errorf("sentinel missing at sender cwd: %v", err)
+	}
+}
+
 func TestSender_MixedHTTPAndCommand(t *testing.T) {
 	t.Parallel()
 	srv, recs, mu := captureServer(t)
@@ -666,7 +699,7 @@ func TestSender_MixedHTTPAndCommand(t *testing.T) {
 			},
 		},
 	}
-	sender := newTestSender(t, matchers)
+	sender := newCmdTestSender(t, matchers)
 	if err := sender.OnPrompt(context.Background(), "hi", "title"); err != nil {
 		t.Fatalf("OnPrompt: %v", err)
 	}
@@ -701,7 +734,7 @@ func TestSender_CommandHook_TimeoutHonored(t *testing.T) {
 			},
 		},
 	}
-	sender := newTestSender(t, matchers)
+	sender := newCmdTestSender(t, matchers)
 	start := time.Now()
 	err := sender.OnStop(context.Background(), "msg", false)
 	elapsed := time.Since(start)
@@ -727,7 +760,7 @@ func TestSender_CommandHook_DebugLine(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	sender := NewSender(matchers, "sid", "/tmp/cwd", "/tmp/t.jsonl", "auto", &buf)
+	sender := NewSender(matchers, "sid", t.TempDir(), "/tmp/t.jsonl", "auto", &buf)
 	if err := sender.OnSessionStart(context.Background(), "startup"); err != nil {
 		t.Fatalf("OnSessionStart: %v", err)
 	}

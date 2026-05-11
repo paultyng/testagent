@@ -304,6 +304,7 @@ func (s *Sender) runCommand(ctx context.Context, event string, hook Hook, payloa
 	defer cancel()
 
 	cmd := shellrun.DefaultShellCommand(runCtx, hook.Command)
+	cmd.Dir = s.cwd
 	cmd.Stdin = bytes.NewReader(payload)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
