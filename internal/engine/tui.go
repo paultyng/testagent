@@ -358,7 +358,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// the ordering is sequential. tea.Batch would run them
 			// concurrently and lose the back-to-back contract on the wire.
 			// History/scrollback is not cleared — that's a future UI primitive.
-			cmds = append(cmds, cmdSlashRestart(m.d.Slash, m.d.Hooks, msg.outcome.RestartReason))
+			cmds = append(cmds, cmdSlashRestart(m.d.Slash, m.d.Hooks, msg.outcome.RestartReason, msg.outcome.CompactTrigger))
 			break
 		}
 		// /think or /stream — run the message through the regular prompt
@@ -582,18 +582,29 @@ func cmdBoot(client *mcp.Client, sender HookSender, source string) tea.Cmd {
 	}
 }
 
-// cmdSlashRestart performs the /restart sequence in one goroutine so
-// PostToolUse (for any pending /fake-tool), SessionEnd, and SessionStart land
-// on the wire in that fixed order. tea.Batch would dispatch separate cmds
-// concurrently, which would race the SessionEnd/SessionStart POSTs and
-// violate the back-to-back contract documented on slash.Outcome.Restart.
-func cmdSlashRestart(handler *slash.Handler, sender HookSender, reason string) tea.Cmd {
+// cmdSlashRestart performs the /clear or /compact lifecycle in one
+// goroutine so PostToolUse (for any pending /fake-tool), the optional
+// PreCompact, SessionEnd, SessionStart, and the optional PostCompact land
+// on the wire in that fixed order. tea.Batch would dispatch separate
+// cmds concurrently, which would race the POSTs and violate the
+// back-to-back contract documented on slash.Outcome.Restart.
+//
+// compactTrigger is empty for /clear (no Pre/PostCompact emission) and
+// "manual" or "auto" for /compact or /fake-auto-compact.
+func cmdSlashRestart(handler *slash.Handler, sender HookSender, reason, compactTrigger string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		handler.FlushPendingTool(ctx)
+		var preErr, postErr error
+		if compactTrigger != "" {
+			preErr = sender.OnPreCompact(ctx, compactTrigger)
+		}
 		endErr := sender.OnSessionEnd(ctx, reason)
 		startErr := sender.OnSessionStart(ctx, reason)
-		if err := errors.Join(endErr, startErr); err != nil {
+		if compactTrigger != "" {
+			postErr = sender.OnPostCompact(ctx, compactTrigger)
+		}
+		if err := errors.Join(preErr, endErr, startErr, postErr); err != nil {
 			return hookErrMsg{stage: "OnRestart", err: err}
 		}
 		return nil

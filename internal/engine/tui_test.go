@@ -366,7 +366,7 @@ func TestCmdSlashRestart_FiresHooksInOrder(t *testing.T) {
 	// before SessionEnd.
 	handler.Dispatch(context.Background(), `/fake-tool read_file {"path":"foo.go"}`)
 
-	cmd := cmdSlashRestart(handler, hookSender, "compact")
+	cmd := cmdSlashRestart(handler, hookSender, "compact", "")
 	if cmd == nil {
 		t.Fatal("cmdSlashRestart returned nil cmd")
 	}
@@ -390,6 +390,104 @@ func TestCmdSlashRestart_FiresHooksInOrder(t *testing.T) {
 	}
 	if start == nil || start["source"] != "compact" {
 		t.Errorf("SessionStart body = %v, want source=compact", start)
+	}
+}
+
+// TestCmdSlashRestart_CompactLifecycle pins the PreCompact → SessionEnd
+// → SessionStart → PostCompact ordering for /compact and /fake-auto-compact
+// in the TUI path, and asserts the trigger field is plumbed through.
+func TestCmdSlashRestart_CompactLifecycle(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu       sync.Mutex
+		paths    []string
+		preBody  map[string]any
+		postBody map[string]any
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/pre":
+			preBody = body
+		case "/post":
+			postBody = body
+		}
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	hookSender := hooks.NewSender(map[string][]hooks.Matcher{
+		hooks.PreCompact:   {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pre", Timeout: 1}}}},
+		hooks.SessionEnd:   {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/end", Timeout: 1}}}},
+		hooks.SessionStart: {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/start", Timeout: 1}}}},
+		hooks.PostCompact:  {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/post", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
+	handler := slash.New(hookSender, mcp.NewClient(nil), io.Discard)
+
+	cmd := cmdSlashRestart(handler, hookSender, "compact", "auto")
+	if msg := cmd(); msg != nil {
+		t.Errorf("expected nil tea.Msg on success, got %T %v", msg, msg)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	wantOrder := []string{"/pre", "/end", "/start", "/post"}
+	if len(paths) != len(wantOrder) {
+		t.Fatalf("paths = %v, want %v", paths, wantOrder)
+	}
+	for i, want := range wantOrder {
+		if paths[i] != want {
+			t.Errorf("paths[%d] = %q, want %q (full sequence: %v)", i, paths[i], want, paths)
+		}
+	}
+	if preBody["trigger"] != "auto" || postBody["trigger"] != "auto" {
+		t.Errorf("trigger: pre=%v post=%v, want auto/auto", preBody["trigger"], postBody["trigger"])
+	}
+}
+
+// TestCmdSlashRestart_ClearSkipsCompactEvents asserts /clear (no
+// compactTrigger) does NOT emit PreCompact/PostCompact.
+func TestCmdSlashRestart_ClearSkipsCompactEvents(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu    sync.Mutex
+		paths []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	hookSender := hooks.NewSender(map[string][]hooks.Matcher{
+		hooks.PreCompact:   {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pre", Timeout: 1}}}},
+		hooks.SessionEnd:   {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/end", Timeout: 1}}}},
+		hooks.SessionStart: {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/start", Timeout: 1}}}},
+		hooks.PostCompact:  {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/post", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
+	handler := slash.New(hookSender, mcp.NewClient(nil), io.Discard)
+
+	cmd := cmdSlashRestart(handler, hookSender, "clear", "")
+	cmd()
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"/end", "/start"}
+	if len(paths) != len(want) {
+		t.Fatalf("paths = %v, want %v (no Pre/PostCompact on /clear)", paths, want)
+	}
+	for i, w := range want {
+		if paths[i] != w {
+			t.Errorf("paths[%d] = %q, want %q", i, paths[i], w)
+		}
 	}
 }
 

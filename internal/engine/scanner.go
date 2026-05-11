@@ -193,15 +193,26 @@ func runScanner(ctx context.Context, g Globals, d Deps, stdin io.Reader) (int, s
 				// Simulate a Claude /clear or /compact reset on the wire:
 				// flush any pending /fake-tool so its PostToolUse fires
 				// before SessionEnd (same invariant the shutdown closure
-				// documents), then SessionEnd then SessionStart with the
-				// same matcher value. The process keeps running — no
-				// scrollback wipe (that's a future UI feature).
+				// documents). For /compact and /fake-auto-compact, the
+				// SessionEnd/SessionStart pair is bracketed by PreCompact
+				// and PostCompact carrying outcome.CompactTrigger. No
+				// scrollback wipe — that's a future UI primitive.
 				d.Slash.FlushPendingTool(ctx)
+				if outcome.CompactTrigger != "" {
+					if err := d.Hooks.OnPreCompact(ctx, outcome.CompactTrigger); err != nil {
+						fmt.Fprintf(os.Stderr, "testagent: hook OnPreCompact: %v\n", err)
+					}
+				}
 				if err := d.Hooks.OnSessionEnd(ctx, outcome.RestartReason); err != nil {
 					fmt.Fprintf(os.Stderr, "testagent: hook OnSessionEnd: %v\n", err)
 				}
 				if err := d.Hooks.OnSessionStart(ctx, outcome.RestartReason); err != nil {
 					fmt.Fprintf(os.Stderr, "testagent: hook OnSessionStart: %v\n", err)
+				}
+				if outcome.CompactTrigger != "" {
+					if err := d.Hooks.OnPostCompact(ctx, outcome.CompactTrigger); err != nil {
+						fmt.Fprintf(os.Stderr, "testagent: hook OnPostCompact: %v\n", err)
+					}
 				}
 				fmt.Print(render.Prompt())
 				continue

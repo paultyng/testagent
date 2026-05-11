@@ -80,12 +80,17 @@ type Outcome struct {
 	Reason   string
 
 	// Restart, when true, signals the caller to fire SessionEnd then
-	// SessionStart back-to-back without leaving the process. Set by /restart.
-	// RestartReason is the matcher value passed through to both events
-	// (SessionEnd reason / SessionStart source) — typically "clear" or
-	// "compact" so an orchestrator can simulate either reset flavor.
-	Restart       bool
-	RestartReason string
+	// SessionStart back-to-back without leaving the process. Set by
+	// /clear and /compact (and /fake-auto-compact). RestartReason is
+	// the matcher value passed through to both events (SessionEnd
+	// reason / SessionStart source) — "clear" or "compact". When
+	// CompactTrigger is non-empty, the lifecycle additionally wraps
+	// SessionEnd/SessionStart with PreCompact and PostCompact events
+	// carrying that trigger value ("manual" for /compact, "auto" for
+	// /fake-auto-compact).
+	Restart        bool
+	RestartReason  string
+	CompactTrigger string
 
 	// Prompt, when non-empty, signals the caller to run this slash command
 	// through the regular prompt-handling path (UserPromptSubmit hook →
