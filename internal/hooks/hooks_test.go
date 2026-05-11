@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -324,7 +328,7 @@ func TestSender_MultipleHooksFire(t *testing.T) {
 	}
 }
 
-func TestSender_NonHTTPHookSkipped(t *testing.T) {
+func TestSender_UnknownHookTypeSkipped(t *testing.T) {
 	t.Parallel()
 	srv, recs, mu := captureServer(t)
 	matchers := map[string][]Matcher{
@@ -332,7 +336,7 @@ func TestSender_NonHTTPHookSkipped(t *testing.T) {
 			{
 				Matcher: "*",
 				Hooks: []Hook{
-					{Type: "command", URL: "shouldnotfire"},
+					{Type: "webhook", URL: "shouldnotfire"},
 					{Type: "http", URL: srv.URL + "/hooks/stop"},
 				},
 			},
@@ -590,6 +594,148 @@ func TestSender_Verbose_DisabledByDefault(t *testing.T) {
 	h := NewSender(matchers, "sid", "/tmp", "", "default", nil)
 	if err := h.OnStop(context.Background(), "msg", false); err != nil {
 		t.Fatalf("OnStop: %v", err)
+	}
+}
+
+// stdinToFileCmd returns a shell command string that writes stdin to
+// outPath. Portable across `$SHELL -lc` (Unix: `cat`) and `cmd.exe /C`
+// (Windows: `findstr "."` — reads stdin, matches every non-empty line,
+// writes to the redirect target). t.TempDir paths on Windows are
+// space-free so the unquoted form is safe — see codexhooks's
+// writeTwoLineCmd note.
+func stdinToFileCmd(outPath string) string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf(`findstr "." > %s`, outPath)
+	}
+	return fmt.Sprintf("cat > %q", outPath)
+}
+
+// hookCmdTimeout is the per-hook Timeout (seconds) used by command-hook
+// tests that assert side effects. Generous to absorb $SHELL -lc init
+// slack on slow CI runners — see codexhooks's hookTestTimeout note.
+const hookCmdTimeout = 30
+
+func TestSender_CommandHook_StdinReceivesPayload(t *testing.T) {
+	t.Parallel()
+	out := filepath.Join(t.TempDir(), "stop.json")
+	matchers := map[string][]Matcher{
+		Stop: {
+			{
+				Matcher: "*",
+				Hooks: []Hook{
+					{Type: "command", Command: stdinToFileCmd(out), Timeout: hookCmdTimeout},
+				},
+			},
+		},
+	}
+	sender := newTestSender(t, matchers)
+	if err := sender.OnStop(context.Background(), "hello", true); err != nil {
+		t.Fatalf("OnStop: %v", err)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read sentinel: %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &body); err != nil {
+		t.Fatalf("unmarshal sentinel (raw=%q): %v", raw, err)
+	}
+	if got := body["hook_event_name"]; got != Stop {
+		t.Errorf("hook_event_name = %v, want %q", got, Stop)
+	}
+	if got := body["last_assistant_message"]; got != "hello" {
+		t.Errorf("last_assistant_message = %v, want %q", got, "hello")
+	}
+	if got := body["stop_hook_active"]; got != true {
+		t.Errorf("stop_hook_active = %v, want true", got)
+	}
+}
+
+func TestSender_MixedHTTPAndCommand(t *testing.T) {
+	t.Parallel()
+	srv, recs, mu := captureServer(t)
+	out := filepath.Join(t.TempDir(), "prompt.json")
+	matchers := map[string][]Matcher{
+		UserPromptSubmit: {
+			{
+				Matcher: "*",
+				Hooks: []Hook{
+					{Type: "http", URL: srv.URL + "/hooks/prompt"},
+					{Type: "command", Command: stdinToFileCmd(out), Timeout: hookCmdTimeout},
+				},
+			},
+		},
+	}
+	sender := newTestSender(t, matchers)
+	if err := sender.OnPrompt(context.Background(), "hi", "title"); err != nil {
+		t.Fatalf("OnPrompt: %v", err)
+	}
+	mu.Lock()
+	httpCount := len(*recs)
+	mu.Unlock()
+	if httpCount != 1 {
+		t.Errorf("http hits = %d, want 1", httpCount)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Errorf("command-hook sentinel missing: %v", err)
+	}
+}
+
+func TestSender_CommandHook_TimeoutHonored(t *testing.T) {
+	t.Parallel()
+	// Hook command sleeps well past its 1s Timeout. Assert the call
+	// returns an error within a few seconds (not the full sleep wall-clock).
+	var sleepCmd string
+	if runtime.GOOS == "windows" {
+		sleepCmd = "ping -n 10 127.0.0.1 >NUL"
+	} else {
+		sleepCmd = "sleep 10"
+	}
+	matchers := map[string][]Matcher{
+		Stop: {
+			{
+				Matcher: "*",
+				Hooks: []Hook{
+					{Type: "command", Command: sleepCmd, Timeout: 1},
+				},
+			},
+		},
+	}
+	sender := newTestSender(t, matchers)
+	start := time.Now()
+	err := sender.OnStop(context.Background(), "msg", false)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("elapsed = %s, want < 5s (timeout cancel path)", elapsed)
+	}
+}
+
+func TestSender_CommandHook_DebugLine(t *testing.T) {
+	t.Parallel()
+	out := filepath.Join(t.TempDir(), "out.json")
+	matchers := map[string][]Matcher{
+		SessionStart: {
+			{
+				Matcher: "*",
+				Hooks: []Hook{
+					{Type: "command", Command: stdinToFileCmd(out), Timeout: hookCmdTimeout},
+				},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	sender := NewSender(matchers, "sid", "/tmp/cwd", "/tmp/t.jsonl", "auto", &buf)
+	if err := sender.OnSessionStart(context.Background(), "startup"); err != nil {
+		t.Fatalf("OnSessionStart: %v", err)
+	}
+	line := buf.String()
+	for _, want := range []string{"hook SessionStart CMD", "OK"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("debug line missing %q\nfull line: %s", want, line)
+		}
 	}
 }
 

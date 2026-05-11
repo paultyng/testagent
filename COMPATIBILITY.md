@@ -22,11 +22,11 @@ testagent's CI matrix runs on linux, macOS, and Windows on both amd64 and arm64 
 **Cross-platform (works everywhere):**
 - Interactive TUI and `--print` mode rendering
 - All slash commands and MCP dispatch
-- Claude HTTP hooks
+- Claude HTTP and command (shell) hooks
 - Flag parsing, settings/config loading, session-id handling
 
 **Unix-only at runtime (Windows is degraded):**
-- Codex shell-runner hooks invoke a POSIX-style shell. On Unix that's `$SHELL -lc <command>`; on Windows the runner routes through `%COMSPEC% /C <command>` so the hook will fire, but the user's command string must be valid `cmd.exe` syntax — typical bash one-liners (`&&`, `||`, `$VAR`, redirection nuance) will NOT work. Robust per-hook process-tree cleanup on Windows is tracked in [#52](https://github.com/paultyng/testagent/issues/52); without it, long-running grandchildren may outlive a hook's timeout.
+- Shell-runner hooks (Codex `command`-type hooks and Claude `Type="command"` hooks) invoke a POSIX-style shell. On Unix that's `$SHELL -lc <command>`; on Windows the runner routes through `%COMSPEC% /C <command>` so the hook will fire, but the user's command string must be valid `cmd.exe` syntax — typical bash one-liners (`&&`, `||`, `$VAR`, redirection nuance) will NOT work.
 - SIGWINCH-driven resize echoes in scanner mode are Unix-only (Windows has no equivalent signal; the resize message is silently disabled).
 - The OSC 11 PTY regression test (`pty_e2e_test.go`) is gated to Unix because `creack/pty` isn't usable on Windows. The bug it covers only manifests under PTY anyway.
 
@@ -144,6 +144,17 @@ Bundled skills always land at `not relevant` — testagent has no model.
 | Concurrent input during thinking | ✓ supported | bubbletea TUI accepts input while spinner runs; lines queue |
 | Scrollback cap | ✓ supported | `--history-cap N` (default 1000; 0 = unlimited) |
 | Vim editor mode | `not relevant` | TUI-internal |
+
+### Hook handler types
+
+Each hook entry in `settings.json` under `hooks.<event>[].hooks[]` carries a `type` discriminator plus type-specific fields. Claude Code's real handler shapes:
+
+| Type | testagent | Notes |
+|------|-----------|-------|
+| `http` | ✓ supported | POSTs the event JSON body to `url`; `headers` applied; per-hook `timeout` (seconds) honored |
+| `command` | ✓ supported | Pipes the event JSON body to `command`'s stdin via `$SHELL -lc` (Unix) / `%COMSPEC% /C` (Windows); per-hook `timeout` honored; stdout/stderr discarded |
+
+Unknown `type` values decode cleanly and are silently skipped at dispatch.
 
 ### Hook events
 

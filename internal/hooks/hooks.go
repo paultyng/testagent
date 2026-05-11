@@ -1,7 +1,8 @@
-// Package hooks posts Claude-Code-shaped hook events to URLs declared by
-// the caller. Sender accepts a flat map of matchers keyed by event name —
-// callers (e.g. cmd/claude) own the on-disk Settings struct that wraps
-// this map.
+// Package hooks fires Claude-Code-shaped hook events. Two hook types
+// are supported: Type="http" posts the JSON event body to a URL, and
+// Type="command" pipes the JSON event body to a shell command's stdin.
+// Sender accepts a flat map of matchers keyed by event name — callers
+// (e.g. cmd/claude) own the on-disk Settings struct that wraps this map.
 package hooks
 
 import (
@@ -13,6 +14,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/paultyng/testagent/internal/shellrun"
 )
 
 // Claude Code hook event names, exported so callers can build matcher maps
@@ -35,10 +38,14 @@ type Matcher struct {
 	Hooks   []Hook `json:"hooks"`
 }
 
-// Hook is a single hook target. Only Type="http" is implemented.
+// Hook is a single hook target. Type="http" POSTs the event body to URL
+// with Headers applied; Type="command" pipes the event body to Command's
+// stdin via the platform's default shell. Timeout (seconds) bounds the
+// per-hook wall-clock for either type; 0 → defaultTimeout.
 type Hook struct {
 	Type    string            `json:"type"`
-	URL     string            `json:"url"`
+	URL     string            `json:"url,omitempty"`
+	Command string            `json:"command,omitempty"`
 	Timeout int               `json:"timeout"`
 	Headers map[string]string `json:"headers,omitempty"`
 }
@@ -200,9 +207,11 @@ func (s *Sender) OnSessionEnd(ctx context.Context, reason string) error {
 	return s.fire(ctx, SessionEnd, body)
 }
 
-// fire iterates every Matcher registered for event and POSTs body to each
-// matcher's HTTP hooks. Per-hook errors are aggregated via errors.Join; a
-// failing hook does not prevent the rest from firing.
+// fire iterates every Matcher registered for event and dispatches each
+// hook to the runner for its Type ("http" or "command"). Per-hook errors
+// are aggregated via errors.Join; a failing hook does not prevent the
+// rest from firing. Unknown Types are silently skipped (forward-compat
+// with hooks-config readers that downgrade to a no-op rather than fail).
 func (s *Sender) fire(ctx context.Context, event string, body any) error {
 	if len(s.matchers) == 0 {
 		return nil
@@ -218,11 +227,15 @@ func (s *Sender) fire(ctx context.Context, event string, body any) error {
 	var errs []error
 	for _, m := range matchers {
 		for _, hook := range m.Hooks {
-			if hook.Type != "http" {
-				continue
-			}
-			if err := s.post(ctx, event, hook, payload); err != nil {
-				errs = append(errs, fmt.Errorf("%s hook %s: %w", event, hook.URL, err))
+			switch hook.Type {
+			case "http":
+				if err := s.post(ctx, event, hook, payload); err != nil {
+					errs = append(errs, fmt.Errorf("%s hook %s: %w", event, hook.URL, err))
+				}
+			case "command":
+				if err := s.runCommand(ctx, event, hook, payload); err != nil {
+					errs = append(errs, fmt.Errorf("%s hook %s: %w", event, hook.Command, err))
+				}
 			}
 		}
 	}
@@ -267,6 +280,66 @@ func (s *Sender) post(ctx context.Context, event string, hook Hook, payload []by
 		return fmt.Errorf("status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// runCommand spawns hook.Command via the platform default shell and
+// pipes payload to its stdin. hook.Timeout (or defaultTimeout) bounds
+// the wall-clock; on context cancel or timeout the shell + any
+// grandchildren are killed via shellrun's process-group / Job-object
+// machinery. stdout/stderr are discarded — the hook's effect is its
+// stdin-driven side effects, not its console output.
+func (s *Sender) runCommand(ctx context.Context, event string, hook Hook, payload []byte) (err error) {
+	start := time.Now()
+	defer func() {
+		if s.debugWriter != nil {
+			s.writeCmdDebug(event, hook.Command, time.Since(start), len(payload), err)
+		}
+	}()
+
+	timeout := time.Duration(hook.Timeout) * time.Second
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := shellrun.DefaultShellCommand(runCtx, hook.Command)
+	cmd.Stdin = bytes.NewReader(payload)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	shellrun.SetProcessGroup(cmd)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting: %w", err)
+	}
+	cleanup := shellrun.AfterStart(cmd)
+	defer cleanup()
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("running: %w", err)
+	}
+	return nil
+}
+
+// writeCmdDebug emits the command-hook analog of writeDebug:
+//
+//	hook <event> CMD <command-summary> <status|ERR> <elapsed> <bodysize> [err="..."]
+//
+// command-summary truncates to 80 chars so a multi-line shell pipeline
+// doesn't bloat the trace line. Plain text, no ANSI.
+func (s *Sender) writeCmdDebug(event, command string, elapsed time.Duration, bodySize int, runErr error) {
+	cmd := command
+	if len(cmd) > 80 {
+		cmd = cmd[:77] + "..."
+	}
+	status := "OK"
+	if runErr != nil {
+		status = "ERR"
+	}
+	line := fmt.Sprintf("hook %s CMD %q %s %s %s",
+		event, cmd, status, elapsed.Truncate(time.Millisecond), formatBytes(bodySize))
+	if runErr != nil {
+		line += fmt.Sprintf(" err=%q", runErr.Error())
+	}
+	fmt.Fprintln(s.debugWriter, line)
 }
 
 // writeDebug emits one line to debugWriter:
