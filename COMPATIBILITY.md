@@ -167,18 +167,31 @@ Bundled skills always land at `not relevant` — testagent has no model.
 
 ### Subcommands
 
+Codex's user-facing surface is divided across multiple subcommands; orchestrators typically invoke a specific one (`codex exec`, `codex resume`, etc.) rather than the bare interactive form. This section tracks subcommand coverage first, then global flags (used in interactive mode), then per-subcommand flag tables for the subcommands with non-trivial flag surfaces.
+
 | Subcommand | testagent | Notes |
 |------------|-----------|-------|
 | `codex` (no subcommand) | ✓ supported | Interactive session via the shared engine |
 | `codex resume <SESSION_ID>` | ✓ supported | Boots interactive with `Resumed=true` (codex's analog of claude `--resume`) |
-| `codex exec <prompt>` | partial | Text output only; JSON / stream-json shapes tracked in [#32](https://github.com/paultyng/testagent/issues/32) |
+| `codex exec <prompt>` | partial | Text output only; see [#### codex exec](#codex-exec) below for the flag surface and tracking |
+| `codex fork` | `✗ planned` | Fork current chat session; tracked in [#34](https://github.com/paultyng/testagent/issues/34) |
+| `codex review` | `✗ planned` | Code review of changes; requires model — out of scope unless a fake review-output mode is added |
 | `codex login` | `✗ planned` | Tracked in [#35](https://github.com/paultyng/testagent/issues/35) |
 | `codex logout` | `✗ planned` | Tracked in [#35](https://github.com/paultyng/testagent/issues/35) |
 | `codex mcp add/list/remove` | `✗ planned` | Tracked in [#37](https://github.com/paultyng/testagent/issues/37) |
 
-### Flags
+#### codex exec
 
-Alphabetical by long name. Short flags shown inline. These are global flags for interactive mode; subcommand-specific flags (e.g., `codex exec --ephemeral`) are not modeled in the stub.
+`codex exec <prompt>` is codex's non-interactive one-shot — the analog of `claude --print`. testagent emits text only today; structured output formats and full flag parity are tracked in [#32](https://github.com/paultyng/testagent/issues/32).
+
+| Flag | testagent | Notes |
+|------|-----------|-------|
+| `--output-format text\|json\|stream-json` | partial | Only `text` (default) is emitted; `json` and `stream-json` shapes tracked in [#32](https://github.com/paultyng/testagent/issues/32) |
+| `--ephemeral` | `✗ planned` | Run without persisting the session; tracked in [#32](https://github.com/paultyng/testagent/issues/32) |
+
+### Flags (global / interactive)
+
+Alphabetical by long name. Short flags shown inline. **These are global flags for the bare interactive `testagent codex` invocation.** Subcommand-specific flags (e.g., `codex exec --ephemeral`) live under the relevant subcommand's sub-section above, not here.
 
 | Flag | testagent | Notes |
 |------|-----------|-------|
