@@ -11,18 +11,19 @@
 // $SHELL / %COMSPEC% env vars are honored so users get their configured
 // shell.
 //
-// MVP wires three events from #13:
+// Wires five events:
 //
 //   - session_start
 //   - user_prompt_submit
 //   - stop
+//   - pre_compact (trigger=manual|auto via CODEX_HOOK_TRIGGER)
+//   - post_compact (same trigger)
 //
 // Codex's HooksTable has no session_end; OnSessionEnd is a no-op
 // (the engine still calls it for parity with the claude path).
 // Final-process teardown drains async matchers via Runner.Close —
 // see its doc for the lifecycle distinction.
-// pre_tool_use / post_tool_use / pre_compact / post_compact are
-// deferred (#34, #12).
+// pre_tool_use / post_tool_use deferred (#33).
 package codexhooks
 
 import (
@@ -37,6 +38,7 @@ import (
 	"time"
 
 	"github.com/paultyng/testagent/internal/engine"
+	"github.com/paultyng/testagent/internal/shellrun"
 	"github.com/paultyng/testagent/internal/slash"
 )
 
@@ -55,6 +57,8 @@ const (
 	EventSessionStart     = "session_start"
 	EventUserPromptSubmit = "user_prompt_submit"
 	EventStop             = "stop"
+	EventPreCompact       = "pre_compact"
+	EventPostCompact      = "post_compact"
 )
 
 // defaultTimeout caps a synchronous matcher's wall-clock when the TOML
@@ -123,9 +127,9 @@ func NewRunner(matchers map[string][]Matcher, sessionID, cwd, transcriptPath, pe
 // Close drains any in-flight async matcher goroutines and prevents
 // new ones from being spawned. Intended to be called once during
 // final process teardown (engine.Run's shutdown closure), NOT on
-// /restart — async hooks should outlive a restart cycle and continue
-// to the natural per-matcher timeout. After Close, fire becomes a
-// no-op for async matchers (synchronous matchers still run).
+// /clear or /compact — async hooks should outlive a soft-reset cycle
+// and continue to the natural per-matcher timeout. After Close, fire
+// becomes a no-op for async matchers (synchronous matchers still run).
 //
 // Returns when in-flight goroutines have finished, the supplied ctx
 // is cancelled, or shutdownGracePeriod has elapsed — whichever comes
@@ -160,7 +164,7 @@ func (r *Runner) OnPrompt(ctx context.Context, prompt, sessionTitle string) erro
 }
 
 // OnToolUse is a no-op for MVP. pre_tool_use / post_tool_use wiring
-// is tracked in #34.
+// is tracked in #33.
 func (r *Runner) OnToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error {
 	return nil
 }
@@ -181,12 +185,30 @@ func (r *Runner) OnSessionStart(ctx context.Context, source string) error {
 }
 
 // OnSessionEnd is a no-op — codex's HooksTable has no session_end
-// event. Engine still calls it on shutdown (and on /restart's
-// "soft end") for parity with the claude path; the runner's
-// terminal-teardown work happens in Close, so /restart can fire
-// OnSessionEnd → OnSessionStart without invalidating the runner.
+// event. Engine still calls it on shutdown and on the /clear or
+// /compact lifecycle for parity with the claude path; the runner's
+// terminal-teardown work happens in Close, so the back-to-back
+// OnSessionEnd → OnSessionStart pair never invalidates the runner.
 func (r *Runner) OnSessionEnd(ctx context.Context, reason string) error {
 	return nil
+}
+
+// OnPreCompact fires pre_compact before context-summarization runs.
+// trigger is "manual" (user typed /compact) or "auto" (auto-compact
+// lifecycle); it lands in CODEX_HOOK_TRIGGER so a config matcher on
+// `trigger = "manual"` or `trigger = "auto"` can branch.
+func (r *Runner) OnPreCompact(ctx context.Context, trigger string) error {
+	return r.fire(ctx, EventPreCompact, map[string]string{
+		"CODEX_HOOK_TRIGGER": trigger,
+	})
+}
+
+// OnPostCompact fires post_compact after the SessionStart that follows
+// compaction. trigger matches the PreCompact value.
+func (r *Runner) OnPostCompact(ctx context.Context, trigger string) error {
+	return r.fire(ctx, EventPostCompact, map[string]string{
+		"CODEX_HOOK_TRIGGER": trigger,
+	})
 }
 
 // fire runs every matcher registered for event. Synchronous matchers
@@ -245,23 +267,16 @@ func (r *Runner) runOne(ctx context.Context, event string, m Matcher, env []stri
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := defaultShellCommand(runCtx, m.Command)
+	cmd := shellrun.DefaultShellCommand(runCtx, m.Command)
 	cmd.Env = env
 	cmd.Dir = r.cwd
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
-	setProcessGroup(cmd)
+	shellrun.SetProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	// afterStart attaches platform-specific lifecycle plumbing that
-	// requires the spawned process to exist. On Windows it assigns
-	// cmd.Process to a Job object with KILL_ON_JOB_CLOSE so closing
-	// the handle in cleanup terminates the entire process tree
-	// (including grandchildren that inherit pipes). On Unix it is
-	// a no-op — the pre-Start Setpgid + group-kill in cmd.Cancel
-	// already covers the tree.
-	cleanup := afterStart(cmd)
+	cleanup := shellrun.AfterStart(cmd)
 	defer cleanup()
 	return cmd.Wait()
 }

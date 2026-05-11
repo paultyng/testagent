@@ -51,6 +51,8 @@ type HookSender interface {
 	OnStop(ctx context.Context, lastAssistantMessage string, stopHookActive bool) error
 	OnSessionStart(ctx context.Context, source string) error
 	OnSessionEnd(ctx context.Context, reason string) error
+	OnPreCompact(ctx context.Context, trigger string) error
+	OnPostCompact(ctx context.Context, trigger string) error
 }
 
 // Compile-time check that the canonical HTTP sender satisfies the

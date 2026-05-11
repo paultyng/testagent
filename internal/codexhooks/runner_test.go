@@ -88,6 +88,20 @@ func TestRunner_FiresShellCommands(t *testing.T) {
 			extraEnv: "CODEX_HOOK_LAST_ASSISTANT_MESSAGE",
 			extraVal: "[Codex] hi",
 		},
+		{
+			name:     "pre_compact_manual",
+			event:    EventPreCompact,
+			fire:     func(r *Runner) error { return r.OnPreCompact(context.Background(), "manual") },
+			extraEnv: "CODEX_HOOK_TRIGGER",
+			extraVal: "manual",
+		},
+		{
+			name:     "post_compact_auto",
+			event:    EventPostCompact,
+			fire:     func(r *Runner) error { return r.OnPostCompact(context.Background(), "auto") },
+			extraEnv: "CODEX_HOOK_TRIGGER",
+			extraVal: "auto",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

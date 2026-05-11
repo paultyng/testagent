@@ -166,7 +166,7 @@ func TestE2E_SlashFlow(t *testing.T) {
 		`/fake-tool read_file {"path":"foo.go"}`,
 		`/fake-tool-result {"contents":"package foo"}`,
 		`/mcp-call fake.ping {}`,
-		`/restart compact`, // fires SessionEnd{compact} + SessionStart{compact}
+		`/compact`, // fires PreCompact + SessionEnd{compact} + SessionStart{compact} + PostCompact
 		`/exit`,
 	}, "\n") + "\n"
 
@@ -245,9 +245,9 @@ func TestE2E_SlashFlow(t *testing.T) {
 	}
 
 	// SessionStart fires on boot (source=startup, since --resume was not set)
-	// and once more on /restart (source=compact).
+	// and once more on /compact (source=compact).
 	if got := hr.get("/hooks/start"); len(got) != 2 {
-		t.Errorf("SessionStart count = %d, want 2 (boot + /restart)", len(got))
+		t.Errorf("SessionStart count = %d, want 2 (boot + /compact)", len(got))
 	} else {
 		if got[0]["source"] != "startup" {
 			t.Errorf("first SessionStart source = %v, want startup", got[0]["source"])
@@ -257,9 +257,9 @@ func TestE2E_SlashFlow(t *testing.T) {
 		}
 	}
 
-	// SessionEnd fires on /restart (reason=compact) and on /exit (reason=logout).
+	// SessionEnd fires on /compact (reason=compact) and on /exit (reason=logout).
 	if got := hr.get("/hooks/end"); len(got) != 2 {
-		t.Errorf("SessionEnd count = %d, want 2 (/restart + /exit)", len(got))
+		t.Errorf("SessionEnd count = %d, want 2 (/compact + /exit)", len(got))
 	} else {
 		if got[0]["reason"] != "compact" {
 			t.Errorf("first SessionEnd reason = %v, want compact", got[0]["reason"])

@@ -8,7 +8,7 @@ A fake CLI agent for testing orchestration tooling that drives real coding agent
 
 The product framing is **deterministic output for tests**, not "no LLM" as a virtue. Wiring a local LLM into a test harness is a valid choice for some workflows; testagent is explicitly not that. Every assertion-relevant byte (slash dispatch, hook payloads, MCP frames, stream-json shapes) is scripted by the user, not generated, so tests stay stable across runs.
 
-v1 ships a drop-in fake for Claude Code: argv compatibility for the flags orchestrators commonly emit, HTTP hooks (`UserPromptSubmit` / `PostToolUse` / `Stop` / `SessionStart` / `SessionEnd`), an MCP HTTP client that handshakes and dispatches `tools/call`, `--print --output-format stream-json` for non-interactive callers, a slash-command grammar for driving UI primitives interactively (including `/restart` which simulates `/clear`- or `/compact`-style hook resets), and lipgloss-rendered plausible-shape output.
+v1 ships a drop-in fake for Claude Code: argv compatibility for the flags orchestrators commonly emit, HTTP hooks (`UserPromptSubmit` / `PostToolUse` / `Stop` / `SessionStart` / `SessionEnd`), an MCP HTTP client that handshakes and dispatches `tools/call`, `--print --output-format stream-json` for non-interactive callers, a slash-command grammar for driving UI primitives interactively (including `/clear` and `/compact` which fire the corresponding hook lifecycles without restarting the process), and lipgloss-rendered plausible-shape output.
 
 ## Future phases
 
@@ -35,8 +35,9 @@ main.go                     # cobra root + bare-invocation default-to-claude
 cmd/claude/                 # claude subcommand: vendor flags, Settings/MCPConfig, runPrint
 cmd/codex/                  # codex subcommand: TOML config + AGENTS.md surfacing + lifecycle slash + hooks wiring
 internal/engine/            # Globals + Deps + Run; TUI + scanner + spinner + token-stream helper; HookSender interface
-internal/hooks/             # Sender (HTTP hook POSTs — claude-shaped)
+internal/hooks/             # Sender (HTTP + command hooks — claude-shaped)
 internal/codexhooks/        # Runner (TOML shell-command hooks — codex-shaped)
+internal/shellrun/          # DefaultShellCommand + process-tree teardown (shared by hooks/codexhooks)
 internal/mcp/               # Client (MCP HTTP handshake + tools/call)
 internal/slash/             # Handler (slash-command grammar)
 internal/render/            # lipgloss style tokens + intent helpers

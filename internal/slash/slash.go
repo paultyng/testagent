@@ -80,12 +80,17 @@ type Outcome struct {
 	Reason   string
 
 	// Restart, when true, signals the caller to fire SessionEnd then
-	// SessionStart back-to-back without leaving the process. Set by /restart.
-	// RestartReason is the matcher value passed through to both events
-	// (SessionEnd reason / SessionStart source) — typically "clear" or
-	// "compact" so an orchestrator can simulate either reset flavor.
-	Restart       bool
-	RestartReason string
+	// SessionStart back-to-back without leaving the process. Set by
+	// /clear and /compact (and /fake-auto-compact). RestartReason is
+	// the matcher value passed through to both events (SessionEnd
+	// reason / SessionStart source) — "clear" or "compact". When
+	// CompactTrigger is non-empty, the lifecycle additionally wraps
+	// SessionEnd/SessionStart with PreCompact and PostCompact events
+	// carrying that trigger value ("manual" for /compact, "auto" for
+	// /fake-auto-compact).
+	Restart        bool
+	RestartReason  string
+	CompactTrigger string
 
 	// Prompt, when non-empty, signals the caller to run this slash command
 	// through the regular prompt-handling path (UserPromptSubmit hook →
@@ -149,19 +154,23 @@ func (h *Handler) dispatchTo(ctx context.Context, line string, out io.Writer) Ou
 		h.cmdFakeToolResult(ctx, out, rest)
 	case "mcp-call":
 		h.cmdMCP(ctx, out, rest)
-	case "restart":
-		return h.cmdRestart(out, rest)
 	case "clear":
-		// Codex `/clear` clears the terminal AND starts a new chat. testagent
-		// emits the hook side-effect (SessionEnd → SessionStart with
-		// reason="clear") and skips the screen wipe — matches the wire-level
-		// behavior orchestrators care about. Sugar over `/restart clear`.
-		return h.cmdRestart(out, "clear")
+		// Real Claude/Codex `/clear` clears the terminal AND starts a new
+		// chat. testagent emits the wire-level hook side-effect (SessionEnd
+		// → SessionStart with reason="clear") and skips the screen wipe.
+		return h.cmdClear(out)
 	case "compact":
-		// Codex `/compact` triggers context summarization. Same hook-only
-		// approximation as /clear. Sugar over `/restart compact`. Full
-		// PreCompact / PostCompact event support tracked in #12.
-		return h.cmdRestart(out, "compact")
+		// Real Claude/Codex `/compact` triggers context summarization.
+		// testagent wraps SessionEnd → SessionStart with PreCompact and
+		// PostCompact carrying trigger="manual".
+		return h.cmdCompact(out, "manual")
+	case "fake-auto-compact":
+		// Emulation-only command (no upstream equivalent): drives the
+		// compact lifecycle with trigger="auto" so orchestrators can
+		// exercise the auto-compact path that real Claude/Codex fires
+		// internally on context fill. The `/fake-*` prefix flags this as
+		// not a real-user command.
+		return h.cmdCompact(out, "auto")
 	case "exit", "quit":
 		// Codex aliases /quit to /exit; both exit the CLI.
 		code := 0
@@ -184,9 +193,10 @@ func (h *Handler) cmdHelp(out io.Writer) {
 	for _, line := range []struct {
 		usage, doc string
 	}{
-		{"/clear", "fires SessionEnd then SessionStart with reason=clear (sugar for /restart clear)"},
-		{"/compact", "fires SessionEnd then SessionStart with reason=compact (sugar for /restart compact)"},
+		{"/clear", "fires SessionEnd then SessionStart with reason=clear"},
+		{"/compact", "fires PreCompact, SessionEnd, SessionStart, PostCompact with trigger=manual"},
 		{"/exit [code]", "exits testagent (default code 0; alias /quit)"},
+		{"/fake-auto-compact", "same lifecycle as /compact but with trigger=auto (emulates upstream's internal context-fill trigger)"},
 		{`/fake-tool <name> <json-args>`, "prints a fake tool-use block; pair with /fake-tool-result to fire PostToolUse"},
 		{`/fake-tool-result <json-or-text>`, "completes the pending /fake-tool and fires PostToolUse with the response"},
 		{"/help", "prints this list"},
@@ -194,7 +204,6 @@ func (h *Handler) cmdHelp(out io.Writer) {
 		{`/mcp-call <server.tool> <json-args>`, "calls a connected MCP tool and prints its result"},
 		{"/panel <text>", "prints text in a rounded-border box"},
 		{"/quit [code]", "alias of /exit"},
-		{"/restart [clear|compact]", "fires SessionEnd then SessionStart without leaving the process (default reason: clear)"},
 		{`/stream <duration> <message>`, "prompts as if typed raw, with the per-token stream interval overridden"},
 		{`/think <duration> <message>`, "prompts as if typed raw, with the thinking-spinner duration overridden"},
 	} {
@@ -424,19 +433,25 @@ func (h *Handler) cmdMCP(ctx context.Context, out io.Writer, rest string) {
 	}
 }
 
-// /restart [clear|compact] — emit SessionEnd + SessionStart without leaving
-// the process. The shared matcher value (default "clear") is passed as
-// SessionEnd.reason and SessionStart.source so an orchestrator can simulate
-// either Claude reset flavor — `/clear`-style ("clear") or `/compact`-style
-// ("compact"). The runtime owns the actual hook firing via the Outcome
-// (parallel to /exit's outcome-driven shutdown).
-func (h *Handler) cmdRestart(out io.Writer, rest string) Outcome {
-	reason := strings.TrimSpace(rest)
-	if reason == "" {
-		reason = "clear"
+// /clear — fire SessionEnd(reason=clear) → SessionStart(source=clear).
+// The runtime owns the actual hook firing via the Outcome (parallel to
+// /exit's outcome-driven shutdown).
+func (h *Handler) cmdClear(out io.Writer) Outcome {
+	fmt.Fprintln(out, render.Lifecycle("clear"))
+	return Outcome{Handled: true, Restart: true, RestartReason: "clear"}
+}
+
+// /compact (trigger="manual") and /fake-auto-compact (trigger="auto") —
+// fire PreCompact(trigger) → SessionEnd(compact) → SessionStart(compact)
+// → PostCompact(trigger). Wiring lives in the engine; this just emits
+// the outcome.
+func (h *Handler) cmdCompact(out io.Writer, trigger string) Outcome {
+	label := "compact"
+	if trigger == "auto" {
+		label = "compact (auto)"
 	}
-	fmt.Fprintln(out, render.Lifecycle("restart: "+reason))
-	return Outcome{Handled: true, Restart: true, RestartReason: reason}
+	fmt.Fprintln(out, render.Lifecycle(label))
+	return Outcome{Handled: true, Restart: true, RestartReason: "compact", CompactTrigger: trigger}
 }
 
 // splitFirstWord splits on the first whitespace, returning (head, tail).

@@ -62,7 +62,7 @@ testagent claude --session-id sid-x --settings ./s.json   # same thing, explicit
 **Claude subcommand flags** (argv-compatible with Claude Code):
 
 - `--session-id <uuid>` / `--resume <uuid>` — session identity
-- `--settings <path>` — Claude-shaped settings JSON; URLs receive HTTP hook POSTs
+- `--settings <path>` — Claude-shaped settings JSON; declares hook handlers (`Type="http"` POST URLs and `Type="command"` shell commands)
 - `--mcp-config <path>` — MCP server config JSON; testagent connects, handshakes, and dispatches `tools/call`
 - `--append-system-prompt <text>` — accepted, displayed in the loaded-status line
 - `--add-dir <path>` — repeatable
@@ -74,12 +74,14 @@ testagent claude --session-id sid-x --settings ./s.json   # same thing, explicit
 
 In interactive mode, lines starting with `/` are slash commands that synthesize specific UI primitives. Type `/help` for the list:
 
+- `/clear` — fires `SessionEnd(reason=clear)` then `SessionStart(source=clear)` without leaving the process
+- `/compact` — fires `PreCompact(trigger=manual)` → `SessionEnd(reason=compact)` → `SessionStart(source=compact)` → `PostCompact(trigger=manual)`
 - `/exit [code]`
+- `/fake-auto-compact` — same lifecycle as `/compact` but with `trigger=auto` (emulates upstream's internal context-fill trigger)
 - `/fake-tool <name> <json-args>`
 - `/fake-tool-result <json-or-text>`
 - `/mcp-call <server.tool> <json-args>` — named to avoid colliding with real Claude Code's `/mcp` (server-management UI)
 - `/panel <text>`
-- `/restart [clear|compact]` — fires `SessionEnd` then `SessionStart` without leaving the process; pass `clear` (default) or `compact` to choose the matcher value Claude would emit on `/clear` vs `/compact`
 - `/stream <text>`
 - `/think [<duration>] <text>`
 
@@ -98,7 +100,7 @@ When stdin is **not** a TTY (piped input, `--print`), testagent falls back to a 
 
 ## Hooks
 
-When `--settings` declares hook URLs, testagent POSTs Claude-Code-shaped event bodies on the appropriate lifecycle moments: `SessionStart` at boot (`source=startup`, or `source=resume` when `--resume` is set), `UserPromptSubmit` per user input (raw input AND `/think`), `Stop` after each assistant response, `PostToolUse` when a `/fake-tool` block is closed by `/fake-tool-result` (with the captured `tool_input`, the supplied `tool_response`, and measured `duration_ms`), and `SessionEnd` on shutdown. `/restart [reason]` fires `SessionEnd` then `SessionStart` back-to-back with the same matcher value (`clear` or `compact`), simulating a Claude `/clear` or `/compact` reset on the wire.
+When `--settings` declares hooks, testagent fires Claude-Code-shaped event bodies on the appropriate lifecycle moments: `SessionStart` at boot (`source=startup`, or `source=resume` when `--resume` is set), `UserPromptSubmit` per user input (raw input AND `/think`), `Stop` after each assistant response, `PostToolUse` when a `/fake-tool` block is closed by `/fake-tool-result` (with the captured `tool_input`, the supplied `tool_response`, and measured `duration_ms`), and `SessionEnd` on shutdown. `/clear` fires `SessionEnd → SessionStart` back-to-back with `reason=clear`/`source=clear`; `/compact` brackets that pair with `PreCompact` and `PostCompact` (`trigger=manual`); `/fake-auto-compact` is the same as `/compact` but with `trigger=auto`. Hook types are `Type="http"` (event JSON POSTed to a URL) and `Type="command"` (event JSON piped to a shell command's stdin via `$SHELL -lc` / `cmd.exe /C`).
 
 ## MCP
 
