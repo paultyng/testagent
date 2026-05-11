@@ -187,7 +187,7 @@ Alphabetical by long name. Short flags shown inline. These are global flags for 
 
 #### Built-in
 
-All rows from the `SlashCommand` enum in `codex-rs/tui/src/slash_command.rs`. Alphabetical. All `✗ planned` rows tracked in [#13](https://github.com/paultyng/testagent/issues/13) unless noted.
+Visible release commands from the `SlashCommand` enum in `codex-rs/tui/src/slash_command.rs`. Alphabetical. Debug-only / hidden commands (currently `/rollout` and `/test-approval`) are intentionally omitted — they aren't user-facing in a normal codex install. All `✗ planned` rows tracked in [#13](https://github.com/paultyng/testagent/issues/13) unless noted.
 
 | Command | testagent | Notes |
 |---------|-----------|-------|
