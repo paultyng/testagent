@@ -251,7 +251,19 @@ func (r *Runner) runOne(ctx context.Context, event string, m Matcher, env []stri
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	setProcessGroup(cmd)
-	return cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// afterStart attaches platform-specific lifecycle plumbing that
+	// requires the spawned process to exist. On Windows it assigns
+	// cmd.Process to a Job object with KILL_ON_JOB_CLOSE so closing
+	// the handle in cleanup terminates the entire process tree
+	// (including grandchildren that inherit pipes). On Unix it is
+	// a no-op — the pre-Start Setpgid + group-kill in cmd.Cancel
+	// already covers the tree.
+	cleanup := afterStart(cmd)
+	defer cleanup()
+	return cmd.Wait()
 }
 
 // envFor returns the shell environment for a hook invocation: the

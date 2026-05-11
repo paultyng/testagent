@@ -49,3 +49,12 @@ func setProcessGroup(cmd *exec.Cmd) {
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
 }
+
+// afterStart is a no-op on Unix — Setpgid + group-kill in
+// setProcessGroup's cmd.Cancel already covers grandchildren. The
+// Windows sibling uses this hook to assign cmd.Process to a Job
+// object for equivalent kill-the-whole-tree semantics.
+func afterStart(cmd *exec.Cmd) func() {
+	_ = cmd
+	return func() {}
+}
