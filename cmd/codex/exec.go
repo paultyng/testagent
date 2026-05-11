@@ -20,7 +20,7 @@ import (
 // not fired here in MVP — once exec grows real work this will mirror
 // claude/print.go's SessionStart → UserPromptSubmit → Stop → SessionEnd
 // sequence against codexhooks.Runner.
-func newExecCommand(rf *rootflags.RootFlags, cf *flags) *cobra.Command {
+func newExecCommand(rf *rootflags.Flags, cf *flags) *cobra.Command {
 	return &cobra.Command{
 		Use:          "exec [prompt]",
 		Short:        "Run Codex non-interactively (one-shot)",

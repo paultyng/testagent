@@ -10,7 +10,7 @@ import (
 // Boots an interactive session keyed to the supplied session ID, with
 // `engine.Globals.Resumed=true` so SessionStart fires with
 // `source="resume"` against the codex hook runner.
-func newResumeCommand(rf *rootflags.RootFlags, cf *flags) *cobra.Command {
+func newResumeCommand(rf *rootflags.Flags, cf *flags) *cobra.Command {
 	return &cobra.Command{
 		Use:          "resume <SESSION_ID>",
 		Short:        "Resume a saved Codex session",

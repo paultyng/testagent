@@ -46,7 +46,7 @@ func (s *stringSlice) Type() string       { return "stringSlice" }
 // flags. The bare `testagent codex` invocation drops into an interactive
 // session; `codex resume <SESSION_ID>` and `codex exec <prompt>` are
 // child subcommands.
-func NewCommand(rf *rootflags.RootFlags) *cobra.Command {
+func NewCommand(rf *rootflags.Flags) *cobra.Command {
 	cf := &flags{}
 
 	cmd := &cobra.Command{
@@ -82,7 +82,7 @@ Subcommands:
 // and resumed are zero/false for fresh sessions; populated by `codex
 // resume <id>`. Returns a *claude.ExitError when the engine exits
 // non-zero so cobra surfaces the code at root.
-func runInteractive(cmd *cobra.Command, rf *rootflags.RootFlags, cf *flags, sid string, resumed bool) error {
+func runInteractive(cmd *cobra.Command, rf *rootflags.Flags, cf *flags, sid string, resumed bool) error {
 	if cf.CD != "" {
 		if err := os.Chdir(cf.CD); err != nil {
 			return fmt.Errorf("--cd %s: %w", cf.CD, err)

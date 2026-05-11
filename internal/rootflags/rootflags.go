@@ -10,10 +10,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// RootFlags are the testagent-wide persistent flags. None are vendor-
+// Flags are the testagent-wide persistent flags. None are vendor-
 // specific; both the claude and codex subcommands borrow the same
 // pointer and propagate the values into engine.Globals at RunE time.
-type RootFlags struct {
+type Flags struct {
 	HistoryCap  int
 	Verbose     bool
 	AutoExit    time.Duration
@@ -23,10 +23,10 @@ type RootFlags struct {
 }
 
 // Bind wires the persistent flags onto cmd and returns a pointer to
-// the populated RootFlags. Cobra fills in values during Execute before
+// the populated Flags. Cobra fills in values during Execute before
 // any subcommand's RunE runs.
-func Bind(cmd *cobra.Command) *RootFlags {
-	rf := &RootFlags{}
+func Bind(cmd *cobra.Command) *Flags {
+	rf := &Flags{}
 	pf := cmd.PersistentFlags()
 	pf.IntVar(&rf.HistoryCap, "history-cap", 1000, "TUI history cap (0 = unlimited)")
 	// --verbose intentionally has no short form: cobra reserves `-v` for

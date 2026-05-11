@@ -30,7 +30,7 @@ func (s *stringSlice) Type() string       { return "stringSlice" }
 // NewCommand returns the "claude" subcommand wired against the given root
 // flags. RunE constructs hooks/mcp/slash deps and dispatches to either
 // runPrint (--print/-p) or engine.Run.
-func NewCommand(rf *rootflags.RootFlags) *cobra.Command {
+func NewCommand(rf *rootflags.Flags) *cobra.Command {
 	var (
 		addDirs      stringSlice
 		name         string
