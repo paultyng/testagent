@@ -67,13 +67,14 @@ const defaultTimeout = 10 * time.Second
 // exit bounded even if a misbehaving hook ignores its SIGKILL'd shell.
 const shutdownGracePeriod = 5 * time.Second
 
-// Matcher is one entry under a [hooks.<event>] array in the codex TOML.
-// Mirrors the codex source's HookMatcher shape.
+// Matcher is one runnable command-type hook entry, post-flattening
+// from cmd/codex.Config's MatcherGroup + hooks[] schema. Only the
+// fields the Runner consumes appear here (the on-disk schema has
+// more — see cmd/codex/config.go).
 type Matcher struct {
-	Command       string
-	Async         bool
-	Timeout       int // seconds; 0 → defaultTimeout
-	StatusMessage string
+	Command string
+	Async   bool
+	Timeout int // seconds; 0 → defaultTimeout
 }
 
 // Runner fires shell-command hooks for codex events.

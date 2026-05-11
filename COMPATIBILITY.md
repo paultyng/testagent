@@ -260,7 +260,7 @@ All rows from the `SlashCommand` enum in `codex-rs/tui/src/slash_command.rs`. Al
 
 ### Hook events
 
-Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes an array of `MatcherGroup` objects; each group specifies a `command` (shell string) with optional `async`, `timeout`, and `statusMessage` fields. Note: hook handler shape differs from Claude Code (shell command vs HTTP POST). Commands run via `$SHELL -lc <cmd>` on Unix and `%COMSPEC% /C <cmd>` on Windows, mirroring upstream codex's `default_shell_command`.
+Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes an array of `MatcherGroup` objects: `{matcher: string, hooks: []Hook}`. Each `Hook` carries a `type` discriminator — `command`, `prompt`, or `agent` — plus type-specific fields (`command`, `timeout`, `async` for the command type). testagent currently fires the `command` type only; `prompt` and `agent` entries decode cleanly but are silently skipped at dispatch time. Hook handler shape differs from Claude Code (shell command vs HTTP POST). Commands run via `$SHELL -lc <cmd>` on Unix and `%COMSPEC% /C <cmd>` on Windows, mirroring upstream codex's `default_shell_command`.
 
 | Event | testagent | Notes |
 |-------|-----------|-------|

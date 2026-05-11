@@ -183,24 +183,37 @@ func ctxOrBackground(cmd *cobra.Command) context.Context {
 }
 
 // matchersFromConfig flattens the cmd/codex.Config's HooksTable into
-// the codexhooks.Runner's per-event matcher map. Returns nil when no
-// hooks are configured (the runner is a no-op in that case).
+// the codexhooks.Runner's per-event matcher list. Walks each
+// MatcherGroup's hooks[] and selects only `type = "command"` entries
+// (the only handler kind the runner currently fires). `prompt` and
+// `agent` types are accepted by the TOML decoder for forward compat
+// but silently skipped at this layer. Returns nil when no command
+// hooks are configured.
 func matchersFromConfig(cfg *Config) map[string][]codexhooks.Matcher {
 	if cfg == nil || len(cfg.Hooks) == 0 {
 		return nil
 	}
 	out := make(map[string][]codexhooks.Matcher, len(cfg.Hooks))
-	for event, matchers := range cfg.Hooks {
-		conv := make([]codexhooks.Matcher, len(matchers))
-		for i, m := range matchers {
-			conv[i] = codexhooks.Matcher{
-				Command:       m.Command,
-				Async:         m.Async,
-				Timeout:       m.Timeout,
-				StatusMessage: m.StatusMessage,
+	for event, groups := range cfg.Hooks {
+		var conv []codexhooks.Matcher
+		for _, g := range groups {
+			for _, h := range g.Hooks {
+				if h.Type != "command" {
+					continue
+				}
+				conv = append(conv, codexhooks.Matcher{
+					Command: h.Command,
+					Async:   h.Async,
+					Timeout: h.Timeout,
+				})
 			}
 		}
-		out[event] = conv
+		if len(conv) > 0 {
+			out[event] = conv
+		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
