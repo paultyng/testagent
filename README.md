@@ -62,7 +62,7 @@ testagent claude --session-id sid-x --settings ./s.json   # same thing, explicit
 **Claude subcommand flags** (argv-compatible with Claude Code):
 
 - `--session-id <uuid>` / `--resume <uuid>` — session identity
-- `--settings <path>` — Claude-shaped settings JSON; URLs receive HTTP hook POSTs
+- `--settings <path>` — Claude-shaped settings JSON; declares hook handlers (`Type="http"` POST URLs and `Type="command"` shell commands)
 - `--mcp-config <path>` — MCP server config JSON; testagent connects, handshakes, and dispatches `tools/call`
 - `--append-system-prompt <text>` — accepted, displayed in the loaded-status line
 - `--add-dir <path>` — repeatable
