@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/paultyng/testagent/internal/engine"
+	"github.com/paultyng/testagent/internal/shellrun"
 	"github.com/paultyng/testagent/internal/slash"
 )
 
@@ -245,23 +246,16 @@ func (r *Runner) runOne(ctx context.Context, event string, m Matcher, env []stri
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := defaultShellCommand(runCtx, m.Command)
+	cmd := shellrun.DefaultShellCommand(runCtx, m.Command)
 	cmd.Env = env
 	cmd.Dir = r.cwd
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
-	setProcessGroup(cmd)
+	shellrun.SetProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	// afterStart attaches platform-specific lifecycle plumbing that
-	// requires the spawned process to exist. On Windows it assigns
-	// cmd.Process to a Job object with KILL_ON_JOB_CLOSE so closing
-	// the handle in cleanup terminates the entire process tree
-	// (including grandchildren that inherit pipes). On Unix it is
-	// a no-op — the pre-Start Setpgid + group-kill in cmd.Cancel
-	// already covers the tree.
-	cleanup := afterStart(cmd)
+	cleanup := shellrun.AfterStart(cmd)
 	defer cleanup()
 	return cmd.Wait()
 }
