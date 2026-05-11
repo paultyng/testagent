@@ -26,31 +26,39 @@ go get -tool github.com/paultyng/testagent@latest
 go tool testagent claude --help
 ```
 
-## Examples
+## Example
 
-### Local — validate a hook handler
+Declare a `Type="command"` hook in `settings.json`. It pipes the event JSON to a shell command's stdin — here, a one-liner that captures the payload to disk:
+
+```json
+{"hooks":{"PostToolUse":[{"hooks":[{"type":"command","command":"jq . > tool-use.json"}]}]}}
+```
+
+Run testagent with a scripted tool-use cycle:
 
 ```sh
-testagent claude --settings hooks.json <<'EOF'
+testagent claude --settings settings.json <<'EOF'
 /fake-tool read_file {"path":"main.go"}
 /fake-tool-result {"content":"package main"}
-/compact
 /exit
 EOF
 ```
 
-Fires `PostToolUse`, `PreCompact`, `SessionEnd`, `SessionStart`, `PostCompact` in order. Your hook handler receives every payload. A `Type="command"` hook receives the JSON on stdin; a `Type="http"` hook receives it as the POST body.
-
-### CI — parse the stream-json frames
+Inspect what your hook handler received:
 
 ```sh
-testagent claude --print --output-format stream-json "hello" | jq -c .
-# {"type":"system","subtype":"init",...}
-# {"type":"assistant",...}
-# {"type":"result",...}
+jq . tool-use.json
+# {
+#   "hook_event_name": "PostToolUse",
+#   "session_id": "...",
+#   "tool_name": "read_file",
+#   "tool_input": {"path": "main.go"},
+#   "tool_response": {"content": "package main"},
+#   ...
+# }
 ```
 
-Same frame shape as real Claude Code's `--output-format stream-json`. Pipe it into your assertions.
+Same shape Claude Code fires. Sub-second feedback. No model, no network, no API key.
 
 ## What it covers
 
