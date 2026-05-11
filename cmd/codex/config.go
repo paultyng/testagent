@@ -29,18 +29,46 @@ type MCPServer struct {
 	Headers map[string]string `toml:"headers"`
 }
 
-// HooksTable maps a codex hook event name (e.g. "session_start") to a
-// list of matcher groups. Each group has a shell `command` invoked when
-// the event fires. Wired through codexhooks.Runner in
+// HooksTable maps a codex hook event name (e.g. "SessionStart") to a
+// list of MatcherGroups. Each group filters by `matcher` (currently
+// unused — accepted for forward compatibility) and contains a list of
+// concrete hook entries. Wired through codexhooks.Runner in
 // cmd/codex.runInteractive via matchersFromConfig.
-type HooksTable map[string][]HookMatcher
+//
+// Mirrors upstream codex's schema:
+//
+//	[[hooks.SessionStart]]
+//	matcher = "..."
+//	[[hooks.SessionStart.hooks]]
+//	type = "command"
+//	command = "..."
+type HooksTable map[string][]MatcherGroup
 
-// HookMatcher is one entry in a codex hook event's matcher array.
-type HookMatcher struct {
-	Command       string `toml:"command"`
-	Async         bool   `toml:"async"`
-	Timeout       int    `toml:"timeout"`
-	StatusMessage string `toml:"statusMessage"`
+// MatcherGroup is one entry under a `[hooks.<event>]` array. The
+// matcher pattern (when codex eventually wires it) selects which
+// events the contained hooks respond to; for the MVP we run every
+// hook unconditionally.
+type MatcherGroup struct {
+	Matcher string      `toml:"matcher"`
+	Hooks   []HookEntry `toml:"hooks"`
+}
+
+// HookEntry is one concrete hook handler under a MatcherGroup.
+// Type discriminates between codex's three handler shapes:
+//
+//   - "command": run a shell command (the only type testagent fires today)
+//   - "prompt":  inject a prompt (accepted-but-ignored; tracked in a follow-up)
+//   - "agent":   delegate to a sub-agent (accepted-but-ignored)
+//
+// All type-specific fields live on this struct as omitempty; the
+// runner reads only the ones relevant to Type.
+type HookEntry struct {
+	Type    string `toml:"type"`
+	Command string `toml:"command,omitempty"`
+	Prompt  string `toml:"prompt,omitempty"`
+	Agent   string `toml:"agent,omitempty"`
+	Timeout int    `toml:"timeout,omitempty"`
+	Async   bool   `toml:"async,omitempty"`
 }
 
 // loadConfig reads `$CODEX_HOME/config.toml` (or `~/.codex/config.toml`

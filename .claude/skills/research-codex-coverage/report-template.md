@@ -119,7 +119,7 @@ Alphabetical. All `✗ planned` rows tracked in [#13](https://github.com/paultyn
 
 ### Hook events
 
-Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes an array of `MatcherGroup` objects; each group specifies a `command` (shell string) with optional `async`, `timeout`, and `statusMessage` fields.
+Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes an array of `MatcherGroup` objects: `{matcher: string, hooks: []Hook}`. Each `Hook` carries a `type` discriminator (`command`, `prompt`, or `agent`) plus type-specific fields.
 
 | Event | testagent | Notes |
 |-------|-----------|-------|

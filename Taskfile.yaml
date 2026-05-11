@@ -33,6 +33,12 @@ tasks:
       - mkdir -p compat
       - go run . claude --help > compat/claude.cli.txt
 
+  dumpcli:codex:
+    desc: Capture the codex subcommand's --help for compat-matrix drift detection.
+    cmds:
+      - mkdir -p compat
+      - go run . codex --help > compat/codex.cli.txt
+
   dumpcli:root:
     desc: Capture the root --help for compat tracking.
     cmds:

@@ -15,6 +15,26 @@ testagent emulates real CLI agents. This matrix tracks which upstream features a
 | `not relevant` | not applicable to a fake agent |
 | `✗ planned` | not yet implemented; tracked in issue |
 
+## Platform support
+
+testagent's CI matrix runs on linux, macOS, and Windows on both amd64 and arm64 — release binaries are published for all six combinations on every tagged release.
+
+**Cross-platform (works everywhere):**
+- Interactive TUI and `--print` mode rendering
+- All slash commands and MCP dispatch
+- Claude HTTP hooks
+- Flag parsing, settings/config loading, session-id handling
+
+**Unix-only at runtime (Windows is degraded):**
+- Codex shell-runner hooks invoke a POSIX-style shell. On Unix that's `$SHELL -lc <command>`; on Windows the runner routes through `%COMSPEC% /C <command>` so the hook will fire, but the user's command string must be valid `cmd.exe` syntax — typical bash one-liners (`&&`, `||`, `$VAR`, redirection nuance) will NOT work. Robust per-hook process-tree cleanup on Windows is tracked in [#52](https://github.com/paultyng/testagent/issues/52); without it, long-running grandchildren may outlive a hook's timeout.
+- SIGWINCH-driven resize echoes in scanner mode are Unix-only (Windows has no equivalent signal; the resize message is silently disabled).
+- The OSC 11 PTY regression test (`pty_e2e_test.go`) is gated to Unix because `creack/pty` isn't usable on Windows. The bug it covers only manifests under PTY anyway.
+
+**Windows caveats:**
+- ANSI/styled output requires a recent Windows 10/11 or Windows Server 2022+ runner so VT processing is available. Older Windows configurations may render raw escape codes.
+- File-mode permission bits (`os.Chmod 0o600` and friends) are no-ops on Windows. Any future testagent feature that asserts file permissions will need a Unix-only test gate.
+- Symlinks require Developer Mode or admin elevation. None of testagent's current paths use them, but future expansion should keep this in mind.
+
 ---
 
 ## Claude
@@ -187,7 +207,7 @@ Alphabetical by long name. Short flags shown inline. These are global flags for 
 
 #### Built-in
 
-All rows from the `SlashCommand` enum in `codex-rs/tui/src/slash_command.rs`. Alphabetical. All `✗ planned` rows tracked in [#13](https://github.com/paultyng/testagent/issues/13) unless noted.
+Visible release commands from the `SlashCommand` enum in `codex-rs/tui/src/slash_command.rs`. Alphabetical. Debug-only / hidden commands (currently `/rollout` and `/test-approval`) are intentionally omitted — they aren't user-facing in a normal codex install. All `✗ planned` rows tracked in [#13](https://github.com/paultyng/testagent/issues/13) unless noted.
 
 | Command | testagent | Notes |
 |---------|-----------|-------|
@@ -202,6 +222,7 @@ All rows from the `SlashCommand` enum in `codex-rs/tui/src/slash_command.rs`. Al
 | `/diff` | `not relevant` | Show git diff including untracked; TUI-internal |
 | `/exit` | ✓ supported | Accepts optional exit code (alias `/quit`) |
 | `/experimental` | `not relevant` | Toggle experimental features; no feature system |
+| `/fast` | `not relevant` | Toggle "fast" reasoning-effort tier; requires model |
 | `/feedback` | `not relevant` | Send logs to maintainers; TUI-internal |
 | `/fork` | `✗ planned` | Fork current chat session |
 | `/goal` | `not relevant` | Set/view long-running task goal; requires model |
@@ -260,7 +281,7 @@ All rows from the `SlashCommand` enum in `codex-rs/tui/src/slash_command.rs`. Al
 
 ### Hook events
 
-Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes an array of `MatcherGroup` objects; each group specifies a `command` (shell string) with optional `async`, `timeout`, and `statusMessage` fields. Note: hook handler shape differs from Claude Code (shell command vs HTTP POST). Commands run via `$SHELL -lc <cmd>` on Unix and `%COMSPEC% /C <cmd>` on Windows, mirroring upstream codex's `default_shell_command`.
+Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes an array of `MatcherGroup` objects: `{matcher: string, hooks: []Hook}`. Each `Hook` carries a `type` discriminator — `command`, `prompt`, or `agent` — plus type-specific fields (`command`, `timeout`, `async` for the command type). testagent currently fires the `command` type only; `prompt` and `agent` entries decode cleanly but are silently skipped at dispatch time. Hook handler shape differs from Claude Code (shell command vs HTTP POST). Commands run via `$SHELL -lc <cmd>` on Unix and `%COMSPEC% /C <cmd>` on Windows, mirroring upstream codex's `default_shell_command`.
 
 | Event | testagent | Notes |
 |-------|-----------|-------|

@@ -23,24 +23,28 @@ codex apply --help
 
 ## gh API recipes
 
+**Pin every `gh api contents/...` recipe to a release tag** so the snapshot matches the version cited at the top of `COMPATIBILITY.md`. Default for this matrix revision: `rust-v0.130.0`. When refreshing for a new release, bump `REF` AND the version cite at the top of COMPATIBILITY.md in the same commit — drift between the two is what #55 fixed.
+
 ```sh
-# Latest stable release tag
+REF=rust-v0.130.0
+
+# Latest stable release tags (no ref pin — this IS the picker)
 gh api "repos/openai/codex/releases?per_page=5" | jq '[.[] | {tag_name, published_at, name}]'
 
 # Slash-command source of truth (authoritative enum)
-gh api "repos/openai/codex/contents/codex-rs/tui/src/slash_command.rs" | jq -r '.content' | base64 -d
+gh api "repos/openai/codex/contents/codex-rs/tui/src/slash_command.rs?ref=$REF" | jq -r '.content' | base64 -d
 
 # Hook event list + config schema
-gh api "repos/openai/codex/contents/codex-rs/core/config.schema.json" | jq -r '.content' | base64 -d | jq '.definitions.HooksToml'
+gh api "repos/openai/codex/contents/codex-rs/core/config.schema.json?ref=$REF" | jq -r '.content' | base64 -d | jq '.definitions.HooksToml'
 
 # Full config.toml key inventory
-gh api "repos/openai/codex/contents/codex-rs/core/config.schema.json" | jq -r '.content' | base64 -d | jq '.properties | keys'
+gh api "repos/openai/codex/contents/codex-rs/core/config.schema.json?ref=$REF" | jq -r '.content' | base64 -d | jq '.properties | keys'
 
 # Example config.toml from the repo's own CI environment
-gh api "repos/openai/codex/contents/.github/codex/home/config.toml" | jq -r '.content' | base64 -d
+gh api "repos/openai/codex/contents/.github/codex/home/config.toml?ref=$REF" | jq -r '.content' | base64 -d
 
 # Keymap actions (REPL behaviors)
-gh api "repos/openai/codex/contents/codex-rs/tui/src/keymap_setup/actions.rs" | jq -r '.content' | base64 -d
+gh api "repos/openai/codex/contents/codex-rs/tui/src/keymap_setup/actions.rs?ref=$REF" | jq -r '.content' | base64 -d
 ```
 
 ## Upstream doc URLs
