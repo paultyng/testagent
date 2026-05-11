@@ -12,6 +12,15 @@ import (
 	"time"
 )
 
+// hookTestTimeout is the per-matcher timeout used by tests that
+// assert the runner's *outcome* (file present, debug line emitted)
+// rather than the timeout itself. Sized generously to absorb
+// $SHELL -lc login-shell init under parallel test load on ubuntu
+// CI — a 5s ceiling was flaky there on at least one run (see #61).
+// The TimeoutHonored test has its own short value to actually
+// exercise the cancel path.
+const hookTestTimeout = 30
+
 // writeTwoLineCmd returns a shell command string that writes the values
 // of two env vars (one per line) to outPath. Portable across
 // `$SHELL -lc` (Unix) and `cmd.exe /C` (Windows).
@@ -87,7 +96,7 @@ func TestRunner_FiresShellCommands(t *testing.T) {
 			matchers := map[string][]Matcher{
 				tc.event: {{
 					Command: writeTwoLineCmd(tc.extraEnv, "CODEX_HOOK_SESSION_ID", out),
-					Timeout: 5,
+					Timeout: hookTestTimeout,
 				}},
 			}
 			r := NewRunner(matchers, "sid-test", tmp, "/tmp/transcript.jsonl", "default", nil)
@@ -147,7 +156,7 @@ func TestRunner_OnSessionEndIsNoOp(t *testing.T) {
 	// Portable "create file" command: `echo x > "path"` works in both
 	// `sh -lc` and `cmd /C`.
 	matchers := map[string][]Matcher{
-		"session_end": {{Command: fmt.Sprintf(`echo x > %q`, out), Timeout: 5}},
+		"session_end": {{Command: fmt.Sprintf(`echo x > %q`, out), Timeout: hookTestTimeout}},
 	}
 	r := NewRunner(matchers, "sid", tmp, "", "default", nil)
 	if err := r.OnSessionEnd(context.Background(), "logout"); err != nil {
@@ -187,7 +196,7 @@ func TestRunner_DebugWriterEmitsLine(t *testing.T) {
 
 	var dbg bytes.Buffer
 	matchers := map[string][]Matcher{
-		EventStop: {{Command: "exit 0", Timeout: 5}},
+		EventStop: {{Command: "exit 0", Timeout: hookTestTimeout}},
 	}
 	r := NewRunner(matchers, "sid", t.TempDir(), "", "default", &dbg)
 	if err := r.OnStop(context.Background(), "msg", false); err != nil {
