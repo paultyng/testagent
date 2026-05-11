@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"syscall"
 	"time"
 	"unsafe"
 
@@ -38,23 +37,23 @@ func shellOrDefault(envVar, fallback string) string {
 	return fallback
 }
 
-// setProcessGroup configures pre-Start Windows kill semantics. Two
-// pieces matter: (1) CREATE_BREAKAWAY_FROM_JOB lets afterStart assign
-// the spawned cmd.exe to our own Job object even when the test
-// runner / parent process is already in a Job (e.g. under
-// `go test` itself, which is sometimes nested in one); (2)
+// setProcessGroup configures pre-Start Windows kill semantics:
 // WaitDelay gives stderr/stdout pipe drain a brief window after the
 // Job-object close kills the tree, so Wait returns promptly.
 //
 // Process-tree termination on context-cancel happens via Job object
 // (see afterStart) — not via cmd.Cancel — because Cancel runs on the
 // parent process only and Windows has no process-group concept.
+//
+// No CREATE_BREAKAWAY_FROM_JOB flag here: on GitHub Actions Windows
+// runners the parent `go test` is itself inside a sandboxing Job that
+// denies breakaway, so setting the flag fails CreateProcess up front
+// with ERROR_ACCESS_DENIED. Windows 8+ supports nested Jobs natively,
+// so afterStart's AssignProcessToJobObject still works — cmd.exe just
+// joins the parent Job AND our sub-Job. KILL_ON_JOB_CLOSE on the
+// sub-Job is enough to terminate the tree.
 func setProcessGroup(cmd *exec.Cmd) {
 	cmd.WaitDelay = waitDelay
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.SysProcAttr.CreationFlags |= windows.CREATE_BREAKAWAY_FROM_JOB
 }
 
 // afterStart assigns cmd.Process to a new Job object with the
