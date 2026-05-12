@@ -67,7 +67,7 @@ See [COMPATIBILITY.md](COMPATIBILITY.md) for the per-vendor matrix of flags, sla
 ## What it doesn't cover
 
 - **No model.** Output is scripted: prompt echoes, `/fake-tool` blocks you supply, fixed stream-json frames. testagent doesn't generate text.
-- **Not every Claude hook event yet.** Currently fires `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PostToolUse`, `Stop`, `PreCompact`, `PostCompact`. `PreToolUse`, `Notification`, `SubagentStop` aren't modeled.
+- **Not every Claude hook event yet.** Currently fires `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `PreCompact`, `PostCompact`. `Notification` and `SubagentStop` aren't modeled.
 - **Not every Claude hook handler type.** `Type="http"` and `Type="command"` ship. `Type="agent"` requires a model and is out of scope.
 - **No MCP server fake.** testagent is an MCP client — it connects to a real server and dispatches `tools/call`. It doesn't fake the server side.
 

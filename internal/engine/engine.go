@@ -41,13 +41,15 @@ type Globals struct {
 // command runner (internal/codexhooks) both satisfy it. Defined here at
 // the consumer site per Go conventions.
 //
-// OnToolUse is included so the slash dispatcher (which fires PostToolUse
-// when /fake-tool-result completes) can take a value of this same type
-// rather than a separate one-method interface — Go interface assignment
-// is structural, so a value held as HookSender keeps OnToolUse callable.
+// OnPreToolUse and OnPostToolUse are included so the slash dispatcher
+// (which fires both during a /fake-tool + /fake-tool-result cycle) can
+// take a value of this same type rather than a separate narrower
+// interface — Go interface assignment is structural, so a value held
+// as HookSender keeps both tool-use methods callable.
 type HookSender interface {
 	OnPrompt(ctx context.Context, prompt, sessionTitle string) error
-	OnToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error
+	OnPreToolUse(ctx context.Context, toolUseID, toolName string, toolInput any) error
+	OnPostToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error
 	OnStop(ctx context.Context, lastAssistantMessage string, stopHookActive bool) error
 	OnSessionStart(ctx context.Context, source string) error
 	OnSessionEnd(ctx context.Context, reason string) error

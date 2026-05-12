@@ -89,6 +89,24 @@ func TestRunner_FiresShellCommands(t *testing.T) {
 			extraVal: "[Codex] hi",
 		},
 		{
+			name:  "pre_tool_use",
+			event: EventPreToolUse,
+			fire: func(r *Runner) error {
+				return r.OnPreToolUse(context.Background(), "tu_1", "read_file", map[string]any{"path": "foo.go"})
+			},
+			extraEnv: "CODEX_HOOK_TOOL_NAME",
+			extraVal: "read_file",
+		},
+		{
+			name:  "post_tool_use",
+			event: EventPostToolUse,
+			fire: func(r *Runner) error {
+				return r.OnPostToolUse(context.Background(), "tu_2", "apply_patch", map[string]any{"path": "x"}, map[string]any{"ok": true}, 42)
+			},
+			extraEnv: "CODEX_HOOK_TOOL_NAME",
+			extraVal: "apply_patch",
+		},
+		{
 			name:     "pre_compact_manual",
 			event:    EventPreCompact,
 			fire:     func(r *Runner) error { return r.OnPreCompact(context.Background(), "manual") },
@@ -152,7 +170,7 @@ func TestRunner_NilMatchers_NoOp(t *testing.T) {
 		func() error { return r.OnPrompt(ctx, "hi", "title") },
 		func() error { return r.OnStop(ctx, "msg", false) },
 		func() error { return r.OnSessionEnd(ctx, "logout") },
-		func() error { return r.OnToolUse(ctx, "id", "Tool", nil, nil, 0) },
+		func() error { return r.OnPostToolUse(ctx, "id", "Tool", nil, nil, 0) },
 	} {
 		if err := fn(); err != nil {
 			t.Errorf("nil matchers should be no-op, got %v", err)
