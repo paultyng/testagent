@@ -117,8 +117,8 @@ The `/fake-*` namespace is reserved for emulation-only commands — slash comman
 | Command | Purpose |
 |---------|---------|
 | `/fake-auto-compact` | Drives the compact lifecycle with `trigger=auto` (emulates upstream's internal context-fill compaction trigger) |
-| `/fake-tool <name> <json-args>` | Renders a fake tool-use block; pair with `/fake-tool-result` to fire `PostToolUse` |
-| `/fake-tool-result <json-or-text>` | Completes a pending `/fake-tool`; fires `PostToolUse` hook |
+| `/fake-tool <name> <json-args>` | Renders a fake tool-use block and fires `PreToolUse`; pair with `/fake-tool-result` to fire `PostToolUse` |
+| `/fake-tool-result <json-or-text>` | Completes a pending `/fake-tool`; fires `PostToolUse` hook with the captured input + supplied response + measured duration |
 | `/link <url> [text]` | Renders an OSC 8 hyperlink (clickable in supporting terminals); text defaults to URL |
 | `/mcp-call <server.tool> <json-args>` | Calls a connected MCP tool; named to avoid `/mcp` collision |
 | `/panel <text>` | Renders text in a rounded-border box |
