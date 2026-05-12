@@ -146,6 +146,7 @@ func TestE2E_SlashFlow(t *testing.T) {
 	settingsPath := writeJSONFile(t, dir, "settings.json", map[string]any{
 		"hooks": map[string]any{
 			"UserPromptSubmit": []map[string]any{{"hooks": []map[string]any{{"type": "http", "url": hookSrv.URL + "/hooks/prompt", "timeout": 5}}}},
+			"PreToolUse":       []map[string]any{{"hooks": []map[string]any{{"type": "http", "url": hookSrv.URL + "/hooks/pre-tool-use", "timeout": 5}}}},
 			"PostToolUse":      []map[string]any{{"hooks": []map[string]any{{"type": "http", "url": hookSrv.URL + "/hooks/tool-use", "timeout": 5}}}},
 			"Stop":             []map[string]any{{"hooks": []map[string]any{{"type": "http", "url": hookSrv.URL + "/hooks/stop", "timeout": 5}}}},
 			"SessionStart":     []map[string]any{{"hooks": []map[string]any{{"type": "http", "url": hookSrv.URL + "/hooks/start", "timeout": 5}}}},
@@ -214,7 +215,7 @@ func TestE2E_SlashFlow(t *testing.T) {
 	// - "hi there" raw input fires UserPromptSubmit + Stop
 	// - "/think 1ms quick thought" routes through the prompt path → another
 	//   UserPromptSubmit + Stop pair (proves the prompt-passthrough wiring)
-	// - /fake-tool + /fake-tool-result fires PostToolUse
+	// - /fake-tool fires PreToolUse, /fake-tool-result fires PostToolUse
 	// - /exit fires SessionEnd
 	prompts := hr.get("/hooks/prompt")
 	if len(prompts) != 2 {
@@ -225,6 +226,19 @@ func TestE2E_SlashFlow(t *testing.T) {
 		}
 		if prompts[1]["prompt"] != "quick thought" {
 			t.Errorf("second prompt (from /think) = %v, want \"quick thought\"", prompts[1]["prompt"])
+		}
+	}
+	if got := hr.get("/hooks/pre-tool-use"); len(got) != 1 {
+		t.Errorf("PreToolUse count = %d, want 1", len(got))
+	} else {
+		if got[0]["tool_name"] != "read_file" {
+			t.Errorf("PreToolUse tool_name = %v, want read_file", got[0]["tool_name"])
+		}
+		if _, ok := got[0]["tool_response"]; ok {
+			t.Errorf("PreToolUse body must not include tool_response")
+		}
+		if _, ok := got[0]["duration_ms"]; ok {
+			t.Errorf("PreToolUse body must not include duration_ms")
 		}
 	}
 	if got := hr.get("/hooks/tool-use"); len(got) != 1 {
