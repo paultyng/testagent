@@ -47,7 +47,8 @@ type Globals struct {
 // is structural, so a value held as HookSender keeps OnToolUse callable.
 type HookSender interface {
 	OnPrompt(ctx context.Context, prompt, sessionTitle string) error
-	OnToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error
+	OnPreToolUse(ctx context.Context, toolUseID, toolName string, toolInput any) error
+	OnPostToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error
 	OnStop(ctx context.Context, lastAssistantMessage string, stopHookActive bool) error
 	OnSessionStart(ctx context.Context, source string) error
 	OnSessionEnd(ctx context.Context, reason string) error

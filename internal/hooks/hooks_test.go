@@ -88,7 +88,7 @@ func TestSender_NilMatchers_NoOp(t *testing.T) {
 	if err := sender.OnPrompt(ctx, "hi", "title"); err != nil {
 		t.Errorf("OnPrompt: %v", err)
 	}
-	if err := sender.OnToolUse(ctx, "tu_1", "Bash", map[string]any{"cmd": "ls"}, "ok", 5); err != nil {
+	if err := sender.OnPostToolUse(ctx, "tu_1", "Bash", map[string]any{"cmd": "ls"}, "ok", 5); err != nil {
 		t.Errorf("OnToolUse: %v", err)
 	}
 	if err := sender.OnStop(ctx, "bye", false); err != nil {
@@ -155,6 +155,44 @@ func TestSender_OnPrompt_PayloadAndHeaders(t *testing.T) {
 	}
 }
 
+func TestSender_OnPreToolUse_Payload(t *testing.T) {
+	t.Parallel()
+	srv, recs, mu := captureServer(t)
+	sender := newTestSender(t, matchersFor(PreToolUse, nil, srv.URL+"/hooks/pre-tool-use"))
+
+	toolInput := map[string]any{"path": "main.go"}
+	if err := sender.OnPreToolUse(context.Background(), "tu_pre", "read_file", toolInput); err != nil {
+		t.Fatalf("OnPreToolUse: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(*recs) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(*recs))
+	}
+	rec := (*recs)[0]
+	if got := rec.body["hook_event_name"]; got != "PreToolUse" {
+		t.Errorf("hook_event_name = %v, want PreToolUse", got)
+	}
+	if got := rec.body["tool_name"]; got != "read_file" {
+		t.Errorf("tool_name = %v, want read_file", got)
+	}
+	if got := rec.body["tool_use_id"]; got != "tu_pre" {
+		t.Errorf("tool_use_id = %v, want tu_pre", got)
+	}
+	gotInput, ok := rec.body["tool_input"].(map[string]any)
+	if !ok || gotInput["path"] != "main.go" {
+		t.Errorf("tool_input = %v, want {path:main.go}", rec.body["tool_input"])
+	}
+	// Pre body must not carry tool_response or duration_ms.
+	if _, ok := rec.body["tool_response"]; ok {
+		t.Errorf("PreToolUse body must not include tool_response, got %v", rec.body["tool_response"])
+	}
+	if _, ok := rec.body["duration_ms"]; ok {
+		t.Errorf("PreToolUse body must not include duration_ms, got %v", rec.body["duration_ms"])
+	}
+}
+
 func TestSender_OnToolUse_PayloadAndHeaders(t *testing.T) {
 	t.Parallel()
 	srv, recs, mu := captureServer(t)
@@ -162,7 +200,7 @@ func TestSender_OnToolUse_PayloadAndHeaders(t *testing.T) {
 
 	toolInput := map[string]any{"command": "ls -la"}
 	toolResponse := map[string]any{"stdout": "file1\nfile2", "exit_code": float64(0)}
-	if err := sender.OnToolUse(context.Background(), "tu_42", "Bash", toolInput, toolResponse, 1234); err != nil {
+	if err := sender.OnPostToolUse(context.Background(), "tu_42", "Bash", toolInput, toolResponse, 1234); err != nil {
 		t.Fatalf("OnToolUse: %v", err)
 	}
 
@@ -539,7 +577,7 @@ func TestSender_PostToolUseTableDriven(t *testing.T) {
 			t.Parallel()
 			srv, recs, mu := captureServer(t)
 			sender := newTestSender(t, matchersFor(PostToolUse, nil, srv.URL+"/hooks/tool-use"))
-			if err := sender.OnToolUse(context.Background(), "tu", tc.toolName, tc.toolInput, tc.toolResponse, tc.duration); err != nil {
+			if err := sender.OnPostToolUse(context.Background(), "tu", tc.toolName, tc.toolInput, tc.toolResponse, tc.duration); err != nil {
 				t.Fatalf("OnToolUse: %v", err)
 			}
 			mu.Lock()

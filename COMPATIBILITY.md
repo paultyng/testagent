@@ -165,6 +165,7 @@ Unknown `type` values decode cleanly and are silently skipped at dispatch.
 | `SessionStart` | ✓ supported | Fired at boot (`source=startup`) or resume (`source=resume`); `/clear` and `/compact` fire with `source=clear` or `source=compact` |
 | `SessionEnd` | ✓ supported | Fired on exit; `/clear` and `/compact` fire before the next `SessionStart` |
 | `UserPromptSubmit` | ✓ supported | Fired per user input line and `/think` |
+| `PreToolUse` | ✓ supported | Fired when `/fake-tool` opens a tool-use block (before `/fake-tool-result`); body carries `tool_input` but no `tool_response` or `duration_ms` |
 | `PostToolUse` | ✓ supported | Fired when `/fake-tool-result` completes a `/fake-tool` block |
 | `Stop` | ✓ supported | Fired after each assistant response; `stop_hook_active=true` on `Esc` cancel |
 | `PreCompact` | ✓ supported | Fired before the SessionEnd → SessionStart pair for `/compact` (`trigger=manual`) and `/fake-auto-compact` (`trigger=auto`) |
@@ -313,8 +314,8 @@ Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes
 |-------|-----------|-------|
 | `SessionStart` | ✓ supported | Fires on session boot or `codex resume`; emits `CODEX_HOOK_SOURCE=startup\|resume` |
 | `UserPromptSubmit` | ✓ supported | Fires per user input line; emits `CODEX_HOOK_PROMPT` |
-| `PreToolUse` | `✗ planned` | Tracked in [#34](https://github.com/paultyng/testagent/issues/34); no Claude Code equivalent |
-| `PostToolUse` | `✗ planned` | Tracked in [#34](https://github.com/paultyng/testagent/issues/34) |
+| `PreToolUse` | ✓ supported | Fired when `/fake-tool` opens a tool-use block; emits `CODEX_HOOK_TOOL_NAME`, `CODEX_HOOK_TOOL_INPUT` (JSON), `CODEX_HOOK_TOOL_USE_ID` |
+| `PostToolUse` | ✓ supported | Fired when `/fake-tool-result` completes a `/fake-tool` block; emits `CODEX_HOOK_TOOL_RESPONSE` (JSON) and `CODEX_HOOK_DURATION_MS` in addition to the pre fields |
 | `Stop` | ✓ supported | Fires after each assistant response; emits `CODEX_HOOK_LAST_ASSISTANT_MESSAGE` |
 | `PreCompact` | ✓ supported | Fires before SessionEnd → SessionStart on `/compact` and `/fake-auto-compact`; emits `CODEX_HOOK_TRIGGER=manual\|auto` |
 | `PostCompact` | ✓ supported | Fires after SessionEnd → SessionStart on `/compact` and `/fake-auto-compact`; emits `CODEX_HOOK_TRIGGER=manual\|auto` |
@@ -324,7 +325,7 @@ Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes
 
 | Feature | testagent | Notes |
 |---------|-----------|-------|
-| `~/.codex/config.toml` | partial | Loaded if present; `$CODEX_HOME` honored; `[hooks]` table consumed for SessionStart/UserPromptSubmit/Stop/PreCompact/PostCompact (PreToolUse/PostToolUse tracked in [#33](https://github.com/paultyng/testagent/issues/33)); `[mcp_servers]` parsed but not yet consumed |
+| `~/.codex/config.toml` | partial | Loaded if present; `$CODEX_HOME` honored; `[hooks]` table consumed for SessionStart/UserPromptSubmit/PreToolUse/PostToolUse/Stop/PreCompact/PostCompact; `[mcp_servers]` parsed but not yet consumed |
 | `AGENTS.md` project instructions | partial | Presence surfaced in status line; content not interpreted (testagent has no model) |
 | `[mcp_servers]` in config.toml | `✗ planned` | Parsed by config skeleton; not yet consumed by the MCP client (tracked in [#13](https://github.com/paultyng/testagent/issues/13)) |
 | `codex mcp add/remove/list` | `not relevant` | Subcommands managing `[mcp_servers]`; no config management in stub |

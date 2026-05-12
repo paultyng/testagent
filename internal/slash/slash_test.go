@@ -268,12 +268,19 @@ func TestSlash_Link(t *testing.T) {
 	}
 }
 
-func TestSlash_FakeToolAlone_NoHookYet(t *testing.T) {
+func TestSlash_FakeToolAlone_FiresPreOnly(t *testing.T) {
 	t.Parallel()
 
-	var hits int32
+	var (
+		mu  sync.Mutex
+		hit []map[string]any
+	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&hits, 1)
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		hit = append(hit, body)
+		mu.Unlock()
 		w.WriteHeader(200)
 	}))
 	defer srv.Close()
@@ -281,7 +288,8 @@ func TestSlash_FakeToolAlone_NoHookYet(t *testing.T) {
 	out := &bytes.Buffer{}
 	h := newTestHandler(out)
 	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
-		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
+		"PreToolUse":  {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pre", Timeout: 1}}}},
+		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/post", Timeout: 1}}}},
 	}, "sid-test", "/tmp", "", "default", nil)
 
 	h.Dispatch(context.Background(), `/fake-tool read_file {"path":"foo.go"}`)
@@ -289,8 +297,23 @@ func TestSlash_FakeToolAlone_NoHookYet(t *testing.T) {
 	if !strings.Contains(out.String(), "read_file") {
 		t.Errorf("output missing tool name: %q", out.String())
 	}
-	if got := atomic.LoadInt32(&hits); got != 0 {
-		t.Errorf("/fake-tool alone fired %d hook(s); want 0 (paired with /fake-tool-result)", got)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hit) != 1 {
+		t.Fatalf("got %d hook calls, want 1 (PreToolUse only)", len(hit))
+	}
+	if got := hit[0]["hook_event_name"]; got != "PreToolUse" {
+		t.Errorf("hook_event_name = %v, want PreToolUse", got)
+	}
+	if got := hit[0]["tool_name"]; got != "read_file" {
+		t.Errorf("tool_name = %v, want read_file", got)
+	}
+	// Pre body must NOT carry tool_response or duration_ms.
+	if _, ok := hit[0]["tool_response"]; ok {
+		t.Errorf("PreToolUse body must not include tool_response, got %v", hit[0]["tool_response"])
+	}
+	if _, ok := hit[0]["duration_ms"]; ok {
+		t.Errorf("PreToolUse body must not include duration_ms, got %v", hit[0]["duration_ms"])
 	}
 }
 

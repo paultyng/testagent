@@ -22,6 +22,7 @@ import (
 // without stringly-typed event keys.
 const (
 	UserPromptSubmit = "UserPromptSubmit"
+	PreToolUse       = "PreToolUse"
 	PostToolUse      = "PostToolUse"
 	Stop             = "Stop"
 	SessionStart     = "SessionStart"
@@ -91,6 +92,19 @@ type userPromptSubmitBody struct {
 	Prompt         string `json:"prompt"`
 	SessionID      string `json:"session_id"`
 	SessionTitle   string `json:"session_title"`
+	TranscriptPath string `json:"transcript_path"`
+}
+
+// preToolUseBody is the JSON body for PreToolUse. Fires before the tool
+// runs; no tool_response or duration yet.
+type preToolUseBody struct {
+	CWD            string `json:"cwd"`
+	HookEventName  string `json:"hook_event_name"`
+	PermissionMode string `json:"permission_mode"`
+	SessionID      string `json:"session_id"`
+	ToolInput      any    `json:"tool_input"`
+	ToolName       string `json:"tool_name"`
+	ToolUseID      string `json:"tool_use_id"`
 	TranscriptPath string `json:"transcript_path"`
 }
 
@@ -165,8 +179,23 @@ func (s *Sender) OnPrompt(ctx context.Context, prompt, sessionTitle string) erro
 	return s.fire(ctx, UserPromptSubmit, body)
 }
 
-// OnToolUse fires PostToolUse.
-func (s *Sender) OnToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error {
+// OnPreToolUse fires PreToolUse before the tool runs.
+func (s *Sender) OnPreToolUse(ctx context.Context, toolUseID, toolName string, toolInput any) error {
+	body := preToolUseBody{
+		CWD:            s.cwd,
+		HookEventName:  PreToolUse,
+		PermissionMode: s.permissionMode,
+		SessionID:      s.sessionID,
+		ToolInput:      toolInput,
+		ToolName:       toolName,
+		ToolUseID:      toolUseID,
+		TranscriptPath: s.transcriptPath,
+	}
+	return s.fire(ctx, PreToolUse, body)
+}
+
+// OnPostToolUse fires PostToolUse after the tool completes.
+func (s *Sender) OnPostToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error {
 	body := postToolUseBody{
 		CWD:            s.cwd,
 		DurationMs:     durationMs,

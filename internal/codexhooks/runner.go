@@ -11,10 +11,12 @@
 // $SHELL / %COMSPEC% env vars are honored so users get their configured
 // shell.
 //
-// Wires five events:
+// Wires seven events:
 //
 //   - session_start
 //   - user_prompt_submit
+//   - pre_tool_use (CODEX_HOOK_TOOL_NAME / TOOL_INPUT / TOOL_USE_ID)
+//   - post_tool_use (also CODEX_HOOK_TOOL_RESPONSE / DURATION_MS)
 //   - stop
 //   - pre_compact (trigger=manual|auto via CODEX_HOOK_TRIGGER)
 //   - post_compact (same trigger)
@@ -23,12 +25,12 @@
 // (the engine still calls it for parity with the claude path).
 // Final-process teardown drains async matchers via Runner.Close —
 // see its doc for the lifecycle distinction.
-// pre_tool_use / post_tool_use deferred (#33).
 package codexhooks
 
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -56,6 +58,8 @@ var (
 const (
 	EventSessionStart     = "session_start"
 	EventUserPromptSubmit = "user_prompt_submit"
+	EventPreToolUse       = "pre_tool_use"
+	EventPostToolUse      = "post_tool_use"
 	EventStop             = "stop"
 	EventPreCompact       = "pre_compact"
 	EventPostCompact      = "post_compact"
@@ -163,10 +167,26 @@ func (r *Runner) OnPrompt(ctx context.Context, prompt, sessionTitle string) erro
 	})
 }
 
-// OnToolUse is a no-op for MVP. pre_tool_use / post_tool_use wiring
-// is tracked in #33.
-func (r *Runner) OnToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error {
-	return nil
+// OnPreToolUse fires pre_tool_use before the tool runs. Tool input lands
+// as a JSON string in CODEX_HOOK_TOOL_INPUT so matcher configs can branch
+// on it via standard jq-style processing inside the hook script.
+func (r *Runner) OnPreToolUse(ctx context.Context, toolUseID, toolName string, toolInput any) error {
+	return r.fire(ctx, EventPreToolUse, map[string]string{
+		"CODEX_HOOK_TOOL_USE_ID": toolUseID,
+		"CODEX_HOOK_TOOL_NAME":   toolName,
+		"CODEX_HOOK_TOOL_INPUT":  jsonEncodeOrEmpty(toolInput),
+	})
+}
+
+// OnPostToolUse fires post_tool_use after the tool completes.
+func (r *Runner) OnPostToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error {
+	return r.fire(ctx, EventPostToolUse, map[string]string{
+		"CODEX_HOOK_TOOL_USE_ID":   toolUseID,
+		"CODEX_HOOK_TOOL_NAME":     toolName,
+		"CODEX_HOOK_TOOL_INPUT":    jsonEncodeOrEmpty(toolInput),
+		"CODEX_HOOK_TOOL_RESPONSE": jsonEncodeOrEmpty(toolResponse),
+		"CODEX_HOOK_DURATION_MS":   strconv.FormatInt(durationMs, 10),
+	})
 }
 
 // OnStop fires stop hooks.
@@ -319,3 +339,17 @@ func (r *Runner) writeDebug(event, command string, elapsed time.Duration, runErr
 }
 
 func boolToString(b bool) string { return strconv.FormatBool(b) }
+
+// jsonEncodeOrEmpty returns v marshaled to JSON, or "" when v is nil or
+// marshal fails. Used so a missing tool input/response lands as an empty
+// CODEX_HOOK_* env value instead of the literal Go string "<nil>".
+func jsonEncodeOrEmpty(v any) string {
+	if v == nil {
+		return ""
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}

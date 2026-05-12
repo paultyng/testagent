@@ -26,12 +26,13 @@ import (
 )
 
 // ToolHookSender is the slash dispatcher's interface to vendor-specific
-// PostToolUse hook delivery. Defined at the consumer site per Go
-// conventions; engine.HookSender is a superset (so values held there
+// PreToolUse / PostToolUse hook delivery. Defined at the consumer site per
+// Go conventions; engine.HookSender is a superset (so values held there
 // satisfy this directly), and both internal/hooks.Sender (claude HTTP)
 // and internal/codexhooks.Runner (codex shell-command) implement it.
 type ToolHookSender interface {
-	OnToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error
+	OnPreToolUse(ctx context.Context, toolUseID, toolName string, toolInput any) error
+	OnPostToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error
 }
 
 // Compile-time assertion that the canonical claude HTTP sender
@@ -332,12 +333,16 @@ func (h *Handler) cmdFakeTool(ctx context.Context, out io.Writer, rest string) {
 		fmt.Fprintf(os.Stderr, "testagent: /fake-tool replaced pending %q without /fake-tool-result\n", prior.name)
 		h.firePendingHook(ctx, prior, nil)
 	}
+	toolUseID := "toolu_" + randomHex(12)
 	h.setPending(&pendingToolCall{
-		toolUseID: "toolu_" + randomHex(12),
+		toolUseID: toolUseID,
 		name:      name,
 		input:     args,
 		startedAt: time.Now(),
 	})
+	if err := h.hooks.OnPreToolUse(ctx, toolUseID, name, args); err != nil {
+		fmt.Fprintf(os.Stderr, "testagent: hook OnPreToolUse: %v\n", err)
+	}
 }
 
 // /fake-tool-result <json-or-text> — render the matching fake-tool result with a checkmark
@@ -397,8 +402,8 @@ func (h *Handler) takePending() *pendingToolCall {
 // dangling /fake-tool. Errors are logged to stderr and do not abort the session.
 func (h *Handler) firePendingHook(ctx context.Context, p *pendingToolCall, response any) {
 	dur := time.Since(p.startedAt).Milliseconds()
-	if err := h.hooks.OnToolUse(ctx, p.toolUseID, p.name, p.input, response, dur); err != nil {
-		fmt.Fprintf(os.Stderr, "testagent: hook OnToolUse: %v\n", err)
+	if err := h.hooks.OnPostToolUse(ctx, p.toolUseID, p.name, p.input, response, dur); err != nil {
+		fmt.Fprintf(os.Stderr, "testagent: hook OnPostToolUse: %v\n", err)
 	}
 }
 
