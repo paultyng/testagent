@@ -213,19 +213,19 @@ Alphabetical by long name. Short flags shown inline. **These are global flags fo
 | `--ask-for-approval` / `-a` | accepted | Parsed; surfaced in status line; semantics tracked in [#38](https://github.com/paultyng/testagent/issues/38) |
 | `--cd` / `-C` | ✓ supported | Honored via `os.Chdir` before any cwd-relative work |
 | `--config` / `-c` | accepted | Repeatable `KEY=VALUE`; parsed and surfaced in status line; no value-application semantics |
-| `--dangerously-bypass-approvals-and-sandbox` | `not relevant` | No sandbox in testagent |
-| `--disable` | `not relevant` | Feature flag disable; no feature system |
-| `--enable` | `not relevant` | Feature flag enable; no feature system |
-| `--image` / `-i` | `not relevant` | Image attachment; no model |
-| `--local-provider` | `not relevant` | OSS provider (lmstudio/ollama) selection; no model |
+| `--dangerously-bypass-approvals-and-sandbox` | accepted | Parsed; no behavior (no sandbox in testagent) |
+| `--disable` | accepted | Repeatable; parsed; no behavior (no feature system) |
+| `--enable` | accepted | Repeatable; parsed; no behavior (no feature system) |
+| `--image` / `-i` | accepted | Repeatable; parsed; no behavior (no model) |
+| `--local-provider` | accepted | Parsed; no behavior (no model) |
 | `--model` / `-m` | accepted | Parsed; surfaced in status line; not modeled |
-| `--no-alt-screen` | `not relevant` | TUI-internal; alternate screen toggle |
-| `--oss` | `not relevant` | Use open-source provider; no model |
-| `--profile` / `-p` | `not relevant` | Config profile selection; no config system |
+| `--no-alt-screen` | accepted | Parsed; no behavior (testagent always uses alt screen) |
+| `--oss` | accepted | Parsed; no behavior (no model) |
+| `--profile` / `-p` | accepted | Parsed; no behavior (no config-profile system) |
 | `--remote` | `not relevant` | Remote app-server websocket endpoint; not applicable |
 | `--remote-auth-token-env` | `not relevant` | Remote auth bearer token env var; not applicable |
 | `--sandbox` / `-s` | accepted | Parsed; surfaced in status line; semantics tracked in [#38](https://github.com/paultyng/testagent/issues/38) |
-| `--search` | `not relevant` | Enable web search tool; no model |
+| `--search` | accepted | Parsed; no behavior (no model) |
 | `--version` / `-V` | `not relevant` | testagent uses its own `--version` |
 
 ### Slash commands

@@ -25,13 +25,27 @@ import (
 // the same pointer for the parent and all child subcommands (via
 // PersistentFlags), so resume / exec read the same values as the bare
 // interactive form.
+//
+// Fields tagged "argv-only" are parsed for upstream-argv compatibility
+// (orchestrators that pipe real-codex flags to testagent shouldn't get
+// unknown-flag errors) but have no behavioral effect; they require a
+// model, sandbox, or other subsystem testagent doesn't model.
 type flags struct {
-	AddDirs        stringSlice
-	AskForApproval string
-	CD             string
-	ConfigOverride stringSlice
-	Model          string
-	Sandbox        string
+	AddDirs           stringSlice
+	AskForApproval    string
+	CD                string
+	ConfigOverride    stringSlice
+	DangerouslyBypass bool        // argv-only
+	Disable           stringSlice // argv-only
+	Enable            stringSlice // argv-only
+	Image             stringSlice // argv-only
+	LocalProvider     string      // argv-only
+	Model             string
+	NoAltScreen       bool   // argv-only
+	OSS               bool   // argv-only
+	Profile           string // argv-only
+	Sandbox           string
+	Search            bool // argv-only
 }
 
 // stringSlice implements pflag.Value for repeatable string flags
@@ -70,8 +84,17 @@ Subcommands:
 	pf.StringVarP(&cf.AskForApproval, "ask-for-approval", "a", "", "approval policy (parsed; not modeled)")
 	pf.StringVarP(&cf.CD, "cd", "C", "", "change working directory before launch")
 	pf.VarP(&cf.ConfigOverride, "config", "c", "config.toml key override KEY=VALUE (parsed; not modeled, repeatable)")
+	pf.BoolVar(&cf.DangerouslyBypass, "dangerously-bypass-approvals-and-sandbox", false, "bypass approvals and sandbox (parsed; not modeled — no sandbox in testagent)")
+	pf.Var(&cf.Disable, "disable", "disable a feature flag (parsed; not modeled, repeatable)")
+	pf.Var(&cf.Enable, "enable", "enable a feature flag (parsed; not modeled, repeatable)")
+	pf.VarP(&cf.Image, "image", "i", "attach image (parsed; not modeled, repeatable)")
+	pf.StringVar(&cf.LocalProvider, "local-provider", "", "OSS provider name (parsed; not modeled)")
 	pf.StringVarP(&cf.Model, "model", "m", "", "model name (parsed; not modeled)")
+	pf.BoolVar(&cf.NoAltScreen, "no-alt-screen", false, "disable alternate screen mode (parsed; not modeled — alt-screen control not exposed)")
+	pf.BoolVar(&cf.OSS, "oss", false, "use open-source provider (parsed; not modeled)")
+	pf.StringVarP(&cf.Profile, "profile", "p", "", "config profile name (parsed; not modeled)")
 	pf.StringVarP(&cf.Sandbox, "sandbox", "s", "", "sandbox policy (parsed; not modeled)")
+	pf.BoolVar(&cf.Search, "search", false, "enable web search tool (parsed; not modeled)")
 
 	cmd.AddCommand(newResumeCommand(rf, cf))
 	cmd.AddCommand(newExecCommand(rf, cf))
