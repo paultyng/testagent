@@ -13,12 +13,12 @@ package main
 import (
 	"errors"
 	"os"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/paultyng/testagent/cmd/claude"
 	"github.com/paultyng/testagent/cmd/codex"
+	"github.com/paultyng/testagent/internal/rootflags"
 )
 
 // version is set at build time via -ldflags "-X main.version=<tag>".
@@ -40,7 +40,6 @@ var knownSubcommands = map[string]bool{
 }
 
 func main() {
-	rf := &claude.RootFlags{}
 	root := &cobra.Command{
 		Use:           "testagent",
 		Short:         "Fake CLI agent for testing orchestration tooling",
@@ -49,16 +48,7 @@ func main() {
 		SilenceErrors: false,
 	}
 
-	pf := root.PersistentFlags()
-	pf.IntVar(&rf.HistoryCap, "history-cap", 1000, "TUI history cap (0 = unlimited)")
-	// --verbose intentionally has no short form: cobra reserves `-v` for
-	// `--version` once root.Version is set, and a binary-identity flag is
-	// the more useful default for that letter.
-	pf.BoolVar(&rf.Verbose, "verbose", false, "log hook activity to stderr")
-	pf.DurationVar(&rf.AutoExit, "auto-exit", 0, "auto-exit after duration (0 = disabled)")
-	pf.IntVar(&rf.ExitAfter, "exit-after", 0, "auto-exit after N interactions (0 = never)")
-	pf.DurationVar(&rf.ThinkDelay, "think-delay", 2*time.Second, "default thinking-spinner duration per turn (override per-turn with /think)")
-	pf.DurationVar(&rf.StreamDelay, "stream-delay", 30*time.Millisecond, "default per-token stream interval for the response (override per-turn with /stream)")
+	rf := rootflags.Bind(root)
 
 	root.AddCommand(claude.NewCommand(rf))
 	root.AddCommand(codex.NewCommand(rf))
