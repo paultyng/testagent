@@ -118,7 +118,10 @@ func TestRunExec_StreamJSONFormat(t *testing.T) {
 	if frames[3]["type"] != "item.completed" {
 		t.Errorf("frame 3 type = %v, want item.completed", frames[3]["type"])
 	}
-	for _, idx := range []int{2, 3} {
+	// item.started carries empty text (upstream emits this frame
+	// in-progress); item.completed carries the final agent message.
+	wantItemText := map[int]string{2: "", 3: "[session] do the thing"}
+	for idx, wantText := range wantItemText {
 		item, ok := frames[idx]["item"].(map[string]any)
 		if !ok {
 			t.Fatalf("frame %d item not an object: %v", idx, frames[idx]["item"])
@@ -126,8 +129,8 @@ func TestRunExec_StreamJSONFormat(t *testing.T) {
 		if item["type"] != "agent_message" {
 			t.Errorf("frame %d item.type = %v, want agent_message", idx, item["type"])
 		}
-		if item["text"] != "[session] do the thing" {
-			t.Errorf("frame %d item.text = %v, want [session] do the thing", idx, item["text"])
+		if item["text"] != wantText {
+			t.Errorf("frame %d item.text = %v, want %q", idx, item["text"], wantText)
 		}
 	}
 	if frames[4]["type"] != "turn.completed" {
@@ -168,7 +171,10 @@ func TestRunExec_MissingPrompt(t *testing.T) {
 		hooks:        newTestRunner("sid-5"),
 	}, strings.NewReader(""), stdout)
 	if err == nil {
-		t.Errorf("err = nil, want non-nil for missing prompt")
+		t.Fatalf("err = nil, want non-nil for missing prompt")
+	}
+	if !strings.Contains(err.Error(), "requires a prompt") {
+		t.Errorf("err = %q, want substring %q", err.Error(), "requires a prompt")
 	}
 }
 

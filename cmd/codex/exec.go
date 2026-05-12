@@ -190,24 +190,30 @@ func emitExecStreamJSON(w io.Writer, threadID, prompt, finalMessage string) {
 		"type": "turn.started",
 	})
 
-	// 3. item.started — assistant message in-progress. Codex item ids
-	// are opaque; "item_0" matches the upstream EventProcessor's
+	// 3. item.started — assistant message in-progress. Upstream emits
+	// this frame with empty/partial text since the model hasn't finished
+	// streaming; testagent has no streaming so we emit an empty text and
+	// reserve the final string for item.completed. Codex item ids are
+	// opaque; "item_0" matches the upstream EventProcessor's
 	// next_item_id format.
-	itemID := "item_0"
-	agentItem := map[string]any{
-		"id":   itemID,
-		"type": "agent_message",
-		"text": finalMessage,
-	}
+	const itemID = "item_0"
 	_ = enc.Encode(map[string]any{
 		"type": "item.started",
-		"item": agentItem,
+		"item": map[string]any{
+			"id":   itemID,
+			"type": "agent_message",
+			"text": "",
+		},
 	})
 
-	// 4. item.completed — assistant message terminal.
+	// 4. item.completed — assistant message terminal; carries the final text.
 	_ = enc.Encode(map[string]any{
 		"type": "item.completed",
-		"item": agentItem,
+		"item": map[string]any{
+			"id":   itemID,
+			"type": "agent_message",
+			"text": finalMessage,
+		},
 	})
 
 	// 5. turn.completed — usage summary.
