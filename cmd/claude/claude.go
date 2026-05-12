@@ -10,27 +10,15 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/paultyng/testagent/internal/engine"
 	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/mcp"
+	"github.com/paultyng/testagent/internal/rootflags"
 	"github.com/paultyng/testagent/internal/slash"
 )
-
-// RootFlags are the cobra-root persistent flags the claude subcommand
-// reads. Owned by main; the pointer is populated by cobra before RunE
-// fires.
-type RootFlags struct {
-	HistoryCap  int
-	Verbose     bool
-	AutoExit    time.Duration
-	ExitAfter   int
-	ThinkDelay  time.Duration
-	StreamDelay time.Duration
-}
 
 // stringSlice implements pflag.Value for repeatable string flags (--add-dir).
 type stringSlice []string
@@ -42,7 +30,7 @@ func (s *stringSlice) Type() string       { return "stringSlice" }
 // NewCommand returns the "claude" subcommand wired against the given root
 // flags. RunE constructs hooks/mcp/slash deps and dispatches to either
 // runPrint (--print/-p) or engine.Run.
-func NewCommand(rf *RootFlags) *cobra.Command {
+func NewCommand(rf *rootflags.Flags) *cobra.Command {
 	var (
 		addDirs      stringSlice
 		name         string
