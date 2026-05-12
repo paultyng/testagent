@@ -372,11 +372,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.g.StatusLine != "" {
 				headerEnd = 2
 			}
+			// History tail at this point: [user echo of slash line,
+			// rendered slash output]. cmdClear / cmdCompact always
+			// render so the second-to-last entry is the user echo.
 			var userEcho string
-			// History at this point: [...prior history..., user echo of
-			// the slash line, rendered slash output]. The rendered slash
-			// output is the most recent append (line 347 above); the user
-			// echo is the line before it.
 			if len(m.history) >= headerEnd+2 {
 				userEcho = m.history[len(m.history)-2]
 			}
