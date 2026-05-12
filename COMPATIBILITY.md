@@ -187,7 +187,7 @@ Codex's user-facing surface is divided across multiple subcommands; orchestrator
 |------------|-----------|-------|
 | `codex` (no subcommand) | ✓ supported | Interactive session via the shared engine |
 | `codex resume <SESSION_ID>` | ✓ supported | Boots interactive with `Resumed=true` (codex's analog of claude `--resume`) |
-| `codex exec <prompt>` | partial | Text output only; see [#### codex exec](#codex-exec) below for the flag surface and tracking |
+| `codex exec <prompt>` | ✓ supported | `text` / `json` / `stream-json` output formats; see [#### codex exec](#codex-exec) below for the flag surface |
 | `codex fork` | `✗ planned` | Fork current chat session; tracked in [#34](https://github.com/paultyng/testagent/issues/34) |
 | `codex review` | `✗ planned` | Code review of changes; requires model — out of scope unless a fake review-output mode is added |
 | `codex login` | `✗ planned` | Tracked in [#35](https://github.com/paultyng/testagent/issues/35) |
@@ -196,11 +196,11 @@ Codex's user-facing surface is divided across multiple subcommands; orchestrator
 
 #### codex exec
 
-`codex exec <prompt>` is codex's non-interactive one-shot — the analog of `claude --print`. testagent emits text only today; structured output formats and full flag parity are tracked in [#32](https://github.com/paultyng/testagent/issues/32).
+`codex exec <prompt>` is codex's non-interactive one-shot — the analog of `claude --print`. Lifecycle: `session_start` → `user_prompt_submit` → emit per `--output-format` → `stop`. Codex has no `session_end` event.
 
 | Flag | testagent | Notes |
 |------|-----------|-------|
-| `--output-format text\|json\|stream-json` | partial | Only `text` (default) is emitted; `json` and `stream-json` shapes tracked in [#32](https://github.com/paultyng/testagent/issues/32) |
+| `--output-format text\|json\|stream-json` | ✓ supported | `stream-json` emits upstream codex-rs/exec's `ThreadEvent` JSONL sequence (`thread.started` → `turn.started` → `item.started`/`item.completed` for the `agent_message` item → `turn.completed`). `json` emits a single summary object (`type: turn.completed`, `thread_id`, `final_message`, `usage`) — testagent-specific convenience; upstream codex has no equivalent single-shot JSON mode. Fields that require a real model (`reasoning_output_tokens`, `cached_input_tokens`, tool / file-change items) are zero or absent per the no-fabrication rule. Upstream codex's canonical flag is `--json` (alias `--experimental-json`); testagent uses `--output-format` to mirror the claude side. |
 | `--ephemeral` | `✗ planned` | Run without persisting the session; tracked in [#32](https://github.com/paultyng/testagent/issues/32) |
 
 ### Flags (global / interactive)
