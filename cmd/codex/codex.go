@@ -90,7 +90,7 @@ Subcommands:
 	pf.VarP(&cf.Image, "image", "i", "attach image (parsed; not modeled, repeatable)")
 	pf.StringVar(&cf.LocalProvider, "local-provider", "", "OSS provider name (parsed; not modeled)")
 	pf.StringVarP(&cf.Model, "model", "m", "", "model name (parsed; not modeled)")
-	pf.BoolVar(&cf.NoAltScreen, "no-alt-screen", false, "disable alternate screen mode (parsed; not modeled — testagent uses alt screen unconditionally)")
+	pf.BoolVar(&cf.NoAltScreen, "no-alt-screen", false, "disable alternate screen mode (parsed; not modeled — alt-screen control not exposed)")
 	pf.BoolVar(&cf.OSS, "oss", false, "use open-source provider (parsed; not modeled)")
 	pf.StringVarP(&cf.Profile, "profile", "p", "", "config profile name (parsed; not modeled)")
 	pf.StringVarP(&cf.Sandbox, "sandbox", "s", "", "sandbox policy (parsed; not modeled)")

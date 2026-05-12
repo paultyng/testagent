@@ -1,7 +1,6 @@
 package codex
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/paultyng/testagent/internal/rootflags"
@@ -39,10 +38,6 @@ func TestCodexCommand_AcceptsUpstreamArgv(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			cmd := NewCommand(&rootflags.Flags{})
-			cmd.SetArgs(append(tc.argv, "--help"))
-			// Suppress help output during parse.
-			cmd.SetOut(&strings.Builder{})
-			cmd.SetErr(&strings.Builder{})
 			if err := cmd.ParseFlags(tc.argv); err != nil {
 				t.Errorf("ParseFlags(%v) error: %v", tc.argv, err)
 			}
