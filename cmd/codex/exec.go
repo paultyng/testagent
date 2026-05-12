@@ -109,11 +109,11 @@ func newExecCommand(rf *rootflags.Flags, cf *flags) *cobra.Command {
 // error suitable for cobra's RunE return (errors.New for missing prompt,
 // wrapped for I/O failures). Hook errors are logged to stderr and do not
 // affect the exit code, matching cmd/claude/print.go.
+//
+// SessionStart fires only after the prompt is resolved so an early
+// "missing prompt" exit doesn't leave orchestrators with a dangling
+// session_start that never pairs with a Stop.
 func runExec(ctx context.Context, opt execOptions, stdin io.Reader, stdout io.Writer) error {
-	if err := opt.hooks.OnSessionStart(ctx, "startup"); err != nil {
-		fmt.Fprintf(os.Stderr, "testagent: hook OnSessionStart: %v\n", err)
-	}
-
 	prompt := strings.TrimSpace(strings.Join(opt.positional, " "))
 	if prompt == "" {
 		b, err := io.ReadAll(stdin)
@@ -126,6 +126,9 @@ func runExec(ctx context.Context, opt execOptions, stdin io.Reader, stdout io.Wr
 		return errors.New("codex exec requires a prompt (positional arg or stdin)")
 	}
 
+	if err := opt.hooks.OnSessionStart(ctx, "startup"); err != nil {
+		fmt.Fprintf(os.Stderr, "testagent: hook OnSessionStart: %v\n", err)
+	}
 	if err := opt.hooks.OnPrompt(ctx, prompt, opt.name); err != nil {
 		fmt.Fprintf(os.Stderr, "testagent: hook OnPrompt: %v\n", err)
 	}
@@ -134,9 +137,9 @@ func runExec(ctx context.Context, opt execOptions, stdin io.Reader, stdout io.Wr
 
 	switch opt.outputFormat {
 	case "json":
-		emitExecJSON(stdout, opt.sessionID, response)
+		emitExecJSON(stdout, opt.sessionID, prompt, response)
 	case "stream-json":
-		emitExecStreamJSON(stdout, opt.sessionID, response)
+		emitExecStreamJSON(stdout, opt.sessionID, prompt, response)
 	default: // "text" or unset
 		fmt.Fprintln(stdout, response)
 	}
@@ -153,12 +156,12 @@ func runExec(ctx context.Context, opt execOptions, stdin io.Reader, stdout io.Wr
 // for orchestrators that want one parse rather than a JSONL stream;
 // shape mirrors stream-json's terminal `turn.completed` plus the agent
 // message text and thread id.
-func emitExecJSON(w io.Writer, threadID, finalMessage string) {
+func emitExecJSON(w io.Writer, threadID, prompt, finalMessage string) {
 	out := map[string]any{
-		"type":           "turn.completed",
-		"thread_id":      threadID,
-		"final_message":  finalMessage,
-		"usage":          execUsage(finalMessage),
+		"type":          "turn.completed",
+		"thread_id":     threadID,
+		"final_message": finalMessage,
+		"usage":         execUsage(prompt, finalMessage),
 	}
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
@@ -172,7 +175,7 @@ func emitExecJSON(w io.Writer, threadID, finalMessage string) {
 //
 // Fields tied to a real model (reasoning_output_tokens, cached tokens,
 // tool_calls, file changes) are zero/empty — see COMPATIBILITY.md.
-func emitExecStreamJSON(w io.Writer, threadID, finalMessage string) {
+func emitExecStreamJSON(w io.Writer, threadID, prompt, finalMessage string) {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 
@@ -210,7 +213,7 @@ func emitExecStreamJSON(w io.Writer, threadID, finalMessage string) {
 	// 5. turn.completed — usage summary.
 	_ = enc.Encode(map[string]any{
 		"type":  "turn.completed",
-		"usage": execUsage(finalMessage),
+		"usage": execUsage(prompt, finalMessage),
 	})
 }
 
@@ -219,12 +222,11 @@ func emitExecStreamJSON(w io.Writer, threadID, finalMessage string) {
 // reasoning_output_tokens. Token counts are approximate (~4 chars/token)
 // since testagent doesn't run a real tokenizer; cached and reasoning
 // counts are zero (no real model).
-func execUsage(s string) map[string]any {
-	n := approxTokens(s)
+func execUsage(prompt, response string) map[string]any {
 	return map[string]any{
-		"input_tokens":            n,
+		"input_tokens":            approxTokens(prompt),
 		"cached_input_tokens":     0,
-		"output_tokens":           n,
+		"output_tokens":           approxTokens(response),
 		"reasoning_output_tokens": 0,
 	}
 }
