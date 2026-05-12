@@ -63,9 +63,11 @@ func New(sender ToolHookSender, client *mcp.Client, out io.Writer) *Handler {
 }
 
 // pendingToolCall tracks a /fake-tool that has not been completed by /fake-tool-result yet.
-// /fake-tool-result fires the PostToolUse hook with the captured tool_input plus the
-// supplied tool_response and the measured duration. /fake-tool followed by /fake-tool
-// flushes the prior with empty response; shutdown flushes whatever's left.
+// /fake-tool fires PreToolUse immediately (tool_input only); the matching
+// /fake-tool-result fires PostToolUse with the captured tool_input plus
+// the supplied tool_response and the measured duration. /fake-tool
+// followed by /fake-tool flushes the prior with empty response and starts
+// a new Pre→Post cycle; shutdown flushes whatever's left.
 type pendingToolCall struct {
 	toolUseID string
 	name      string
@@ -198,7 +200,7 @@ func (h *Handler) cmdHelp(out io.Writer) {
 		{"/compact", "fires PreCompact, SessionEnd, SessionStart, PostCompact with trigger=manual"},
 		{"/exit [code]", "exits testagent (default code 0; alias /quit)"},
 		{"/fake-auto-compact", "same lifecycle as /compact but with trigger=auto (emulates upstream's internal context-fill trigger)"},
-		{`/fake-tool <name> <json-args>`, "prints a fake tool-use block; pair with /fake-tool-result to fire PostToolUse"},
+		{`/fake-tool <name> <json-args>`, "prints a fake tool-use block and fires PreToolUse; pair with /fake-tool-result to fire PostToolUse"},
 		{`/fake-tool-result <json-or-text>`, "completes the pending /fake-tool and fires PostToolUse with the response"},
 		{"/help", "prints this list"},
 		{"/link <url> [text]", "prints an OSC 8 hyperlink (clickable in supporting terminals); text defaults to url"},

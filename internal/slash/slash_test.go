@@ -367,6 +367,53 @@ func TestSlash_FakeToolResultPair(t *testing.T) {
 	}
 }
 
+// TestSlash_FakeToolCycle_PreBeforePost asserts the full /fake-tool +
+// /fake-tool-result cycle fires PreToolUse before PostToolUse, with the
+// shared tool_use_id linking the two events.
+func TestSlash_FakeToolCycle_PreBeforePost(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu  sync.Mutex
+		seq []map[string]any
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		body["__path"] = r.URL.Path
+		mu.Lock()
+		seq = append(seq, body)
+		mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"PreToolUse":  {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pre", Timeout: 1}}}},
+		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/post", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
+
+	h.Dispatch(context.Background(), `/fake-tool read_file {"path":"foo.go"}`)
+	h.Dispatch(context.Background(), `/fake-tool-result {"contents":"package foo"}`)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seq) != 2 {
+		t.Fatalf("got %d hook calls, want 2", len(seq))
+	}
+	if seq[0]["__path"] != "/pre" {
+		t.Errorf("seq[0].path = %v, want /pre", seq[0]["__path"])
+	}
+	if seq[1]["__path"] != "/post" {
+		t.Errorf("seq[1].path = %v, want /post", seq[1]["__path"])
+	}
+	if seq[0]["tool_use_id"] != seq[1]["tool_use_id"] {
+		t.Errorf("tool_use_id mismatch: pre=%v post=%v", seq[0]["tool_use_id"], seq[1]["tool_use_id"])
+	}
+}
+
 func TestSlash_OrphanFakeToolResult(t *testing.T) {
 	t.Parallel()
 
