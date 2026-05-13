@@ -491,24 +491,74 @@ func (m *model) startPromptTurn(
 // tea.View struct; AltScreen and other terminal-mode toggles live as fields
 // on this value (previously imperative tea.WithAltScreen()).
 func (m model) View() tea.View {
-	var b strings.Builder
+	var hist strings.Builder
 	for _, line := range m.history {
-		b.WriteString(line)
-		b.WriteString("\n")
+		hist.WriteString(line)
+		hist.WriteString("\n")
 	}
+
+	var bottom strings.Builder
 	if m.thinking {
 		elapsed := time.Since(m.thinkStart).Truncate(time.Second)
 		// Spinner glyph (already styled by m.spin.Style = thinking) +
 		// "thinking…" in the same warm token, then the mute parenthetical.
-		b.WriteString(m.spin.View())
-		b.WriteString(render.Thinking(" thinking…"))
-		b.WriteString(render.MuteStyle.Render(fmt.Sprintf(" (%s · esc to interrupt)", elapsed)))
-		b.WriteString("\n")
+		bottom.WriteString(m.spin.View())
+		bottom.WriteString(render.Thinking(" thinking…"))
+		bottom.WriteString(render.MuteStyle.Render(fmt.Sprintf(" (%s · esc to interrupt)", elapsed)))
+		bottom.WriteString("\n")
 	}
-	b.WriteString(m.input.View())
-	v := tea.NewView(b.String())
+	bottom.WriteString(m.input.View())
+
+	// Pin the input to the bottom: when history would push it off-screen,
+	// crop history to the trailing rows that fit. Older content is
+	// unreachable in this build — full scrollback navigation is tracked
+	// separately (#10's viewport half). m.height == 0 before the first
+	// WindowSizeMsg; skip truncation in that case so early-life renders
+	// still show seed content.
+	historyOut := hist.String()
+	if m.height > 0 {
+		bottomRows := strings.Count(bottom.String(), "\n") + 1
+		available := m.height - bottomRows
+		if available <= 0 {
+			historyOut = ""
+		} else {
+			historyOut = lastNRows(historyOut, available)
+		}
+	}
+
+	v := tea.NewView(historyOut + bottom.String())
 	v.AltScreen = true
 	return v
+}
+
+// lastNRows returns the trailing n rows of s, splitting on '\n'. A
+// trailing newline counts as a row separator, not a row, so
+// lastNRows("a\nb\nc\n", 2) is "b\nc\n". Returns s unchanged when
+// it already fits.
+func lastNRows(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	// Count rows = number of newlines (the trailing newline marks the
+	// end of the last row; if s lacks one, the final row has no separator).
+	rows := strings.Count(s, "\n")
+	if !strings.HasSuffix(s, "\n") {
+		rows++
+	}
+	if rows <= n {
+		return s
+	}
+	// Drop the leading (rows - n) lines.
+	drop := rows - n
+	idx := 0
+	for i := 0; i < drop; i++ {
+		next := strings.IndexByte(s[idx:], '\n')
+		if next < 0 {
+			return ""
+		}
+		idx += next + 1
+	}
+	return s[idx:]
 }
 
 // appendHistoryCapped appends a line (with any trailing newlines stripped so
