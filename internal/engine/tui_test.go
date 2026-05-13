@@ -15,6 +15,7 @@ import (
 
 	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/mcp"
+	"github.com/paultyng/testagent/internal/render"
 	"github.com/paultyng/testagent/internal/slash"
 )
 
@@ -230,9 +231,9 @@ func TestModel_SlashLifecyclePrunesScrollback(t *testing.T) {
 		wantHeader  []string
 	}{
 		{name: "clear-no-status", slashLine: "/clear", wantHeader: []string{"BANNER"}},
-		{name: "clear-with-status", statusLine: "hooks: stop", slashLine: "/clear", wantHeader: []string{"BANNER", "[hooks: stop]"}},
+		{name: "clear-with-status", statusLine: "hooks: stop", slashLine: "/clear", wantHeader: []string{"BANNER", render.MuteStyle.Render("[hooks: stop]")}},
 		{name: "compact-no-status", slashLine: "/compact", wantMarker: true, wantHeader: []string{"BANNER"}},
-		{name: "compact-with-status", statusLine: "hooks: stop", slashLine: "/compact", wantMarker: true, wantHeader: []string{"BANNER", "[hooks: stop]"}},
+		{name: "compact-with-status", statusLine: "hooks: stop", slashLine: "/compact", wantMarker: true, wantHeader: []string{"BANNER", render.MuteStyle.Render("[hooks: stop]")}},
 		{name: "fake-auto-compact-no-status", slashLine: "/fake-auto-compact", wantMarker: true, wantHeader: []string{"BANNER"}},
 	}
 	for _, tc := range cases {
@@ -249,9 +250,10 @@ func TestModel_SlashLifecyclePrunesScrollback(t *testing.T) {
 			if cmd == nil {
 				t.Fatal("expected cmd from slash dispatch")
 			}
-			done, ok := cmd().(slashDoneMsg)
+			msg := cmd()
+			done, ok := msg.(slashDoneMsg)
 			if !ok {
-				t.Fatalf("expected slashDoneMsg, got %T", cmd())
+				t.Fatalf("expected slashDoneMsg, got %T", msg)
 			}
 			newM, _ := m.Update(done)
 			m = newM.(model)
