@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -284,6 +285,81 @@ func TestModel_SlashLifecyclePrunesScrollback(t *testing.T) {
 			}
 			if strings.Contains(joined, "earlier prompt") {
 				t.Errorf("history still contains prior turn for %s: %v", tc.slashLine, m.history)
+			}
+		})
+	}
+}
+
+// TestModel_ViewPinsInputToBottom asserts the input row stays visible
+// when history exceeds the terminal height — the rendered frame is
+// truncated from the top so the last line always contains the input.
+func TestModel_ViewPinsInputToBottom(t *testing.T) {
+	t.Parallel()
+
+	m := newTestModel(nil)
+	m.width = 80
+	m.height = 10
+	for i := 0; i < 200; i++ {
+		m.history = append(m.history, fmt.Sprintf("line %d", i))
+	}
+
+	frame := m.View().Content
+	lines := strings.Split(strings.TrimRight(frame, "\n"), "\n")
+	if len(lines) > m.height {
+		t.Errorf("frame line count = %d, want <= %d", len(lines), m.height)
+	}
+	// The last rendered row is the textinput. textinput.View() emits a
+	// non-empty string even when empty (the prompt prefix + cursor). The
+	// frame's last visible line should be from the input, not from history.
+	last := lines[len(lines)-1]
+	if strings.Contains(last, "line ") {
+		t.Errorf("last frame line is history (%q), want input row", last)
+	}
+}
+
+// TestModel_ViewSkipsTruncationBeforeFirstResize asserts that with
+// m.height == 0 (pre-WindowSizeMsg), the View renders the full history.
+// Without this, the very first frame would show nothing.
+func TestModel_ViewSkipsTruncationBeforeFirstResize(t *testing.T) {
+	t.Parallel()
+
+	m := newTestModel(nil)
+	// m.height stays 0 — no WindowSizeMsg fed in.
+	for i := 0; i < 20; i++ {
+		m.history = append(m.history, fmt.Sprintf("line %d", i))
+	}
+
+	frame := m.View().Content
+	if !strings.Contains(frame, "line 0") {
+		t.Errorf("frame missing oldest line: %q", frame)
+	}
+	if !strings.Contains(frame, "line 19") {
+		t.Errorf("frame missing newest line: %q", frame)
+	}
+}
+
+// TestLastNRows pins the rendering helper's behavior so future edits
+// to View()'s trim logic stay honest.
+func TestLastNRows(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   string
+		n    int
+		want string
+	}{
+		{name: "empty", in: "", n: 5, want: ""},
+		{name: "n=0", in: "a\nb\n", n: 0, want: ""},
+		{name: "fits exactly", in: "a\nb\nc\n", n: 3, want: "a\nb\nc\n"},
+		{name: "trim top", in: "a\nb\nc\nd\n", n: 2, want: "c\nd\n"},
+		{name: "no trailing newline", in: "a\nb\nc", n: 2, want: "b\nc"},
+		{name: "n exceeds rows", in: "a\nb\n", n: 10, want: "a\nb\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := lastNRows(tc.in, tc.n); got != tc.want {
+				t.Errorf("lastNRows(%q, %d) = %q, want %q", tc.in, tc.n, got, tc.want)
 			}
 		})
 	}
