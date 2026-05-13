@@ -1,6 +1,14 @@
 // Bubbletea-driven interactive TUI. Used when stdin is a TTY so input
 // keystrokes are accepted concurrently with the thinking spinner. Headless
 // paths (piped stdin) use runScanner instead.
+//
+// Rendering model: bubbletea v2 inline mode (no alt-screen). The bubbletea
+// program manages a small bottom block — optional spinner row, optional
+// streaming line, queue display, multi-line input. Completed content
+// (banner, user echoes, completed streamed responses, lifecycle markers)
+// commits above the program via tea.Println/Printf and becomes native
+// terminal scrollback. /clear and /compact wipe the screen plus scrollback
+// via VT escape sequences and re-emit the banner + slash echo.
 
 package engine
 
@@ -12,8 +20,9 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
-	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -27,10 +36,19 @@ type model struct {
 	g Globals
 	d Deps
 
-	history []string // rendered scrollback
-	pending []string // queued prompts submitted while a turn is in flight
+	// pending holds prompts the user submitted while a turn was in
+	// flight. Rendered as the "queued: ..." display in the bottom pane,
+	// below the spinner (codex pattern). Drained one-at-a-time on
+	// streamDoneMsg.
+	pending []string
 
-	input textinput.Model
+	// scrollback records every line committed above the program block via
+	// commit(). Production-wise it's observability for tests; the actual
+	// committed content lives in the terminal's native scrollback buffer
+	// thanks to tea.Println inside commit().
+	scrollback []string
+
+	input textarea.Model
 	spin  spinner.Model
 
 	// Turn lifecycle. A turn moves through two phases: thinking (spinner
@@ -38,34 +56,35 @@ type model struct {
 	// on each new turn AND on cancel, so any in-flight tick/chunk msg with
 	// a stale tag is ignored.
 	thinking      bool
-	thinkingInput string // current prompt being processed
+	thinkingInput string
 	thinkStart    time.Time
 	turnTag       int
 
-	// Streaming state, valid only while streaming==true.
-	streaming     bool
-	streamTokens  []string // tokens of the assembled echo body (post-name)
-	streamIdx     int      // next token index to emit
-	streamLineIdx int      // index in m.history of the line being grown
-	streamFinal   string   // full "[Name] body" — payload for the Stop hook
-	streamDelay   time.Duration
+	// Streaming state, valid only while streaming==true. streamLine is the
+	// in-progress assistant line shown in the bottom pane; on streamDoneMsg
+	// it commits above the program via tea.Println and clears.
+	streaming    bool
+	streamTokens []string
+	streamIdx    int
+	streamFinal  string
+	streamDelay  time.Duration
+	streamLine   string
 
 	width, height int
 
 	count      int
 	quitReason string
 	quitCode   int
-	bannerDone bool
+	bootDone   bool
 }
 
 // thinkingDoneMsg fires when the simulated thinking delay elapses for tag.
 // The handler closes out the spinner phase ("Thought for Ns" marker), seeds
-// the streaming phase by appending an EchoHeader placeholder line and
-// tokenizing body, then schedules the first streamChunkMsg. The plain
-// "[name] body" payload is captured here as streamFinal so the eventual
-// streamDoneMsg / cancel can fire the Stop hook with ANSI-free text.
-// streamDelay is the per-token interval the streaming phase will use for
-// this turn.
+// the streaming phase with msg.body's tokens, and schedules the first
+// streamChunkMsg. The plain "[name] body" payload is captured as streamFinal
+// so the eventual streamDoneMsg / cancel can fire the Stop hook with
+// ANSI-free text. streamDelay is the per-token interval the streaming phase
+// will use for this turn.
 type thinkingDoneMsg struct {
 	tag         int
 	name        string
@@ -81,7 +100,8 @@ type streamChunkMsg struct {
 }
 
 // streamDoneMsg fires after the last token has been appended. The handler
-// fires the Stop hook and drains the pending queue.
+// commits the assembled line, fires the Stop hook, and drains the pending
+// queue.
 type streamDoneMsg struct {
 	tag  int
 	body string // assembled "[Name] body" payload for OnStop
@@ -93,43 +113,49 @@ type slashDoneMsg struct {
 	outcome  slash.Outcome
 }
 
-// hookErrMsg surfaces a hook error from a goroutine. When err is nil, no-op.
+// hookErrMsg surfaces hook errors that happened on a tea.Cmd goroutine
+// (e.g. cmdHookStop). Renders a single warning line in scrollback.
 type hookErrMsg struct {
 	stage string
 	err   error
 }
 
-// mcpConnectMsg fires after the initial best-effort MCP connect attempt
-// and the boot SessionStart. Both run in the same goroutine (cmdBoot) so
-// SessionStart fires synchronously after mcp.Connect returns — that way
-// SessionStart lands on the wire even if the user quits before this message
-// is delivered to Update. Note: this serializes Connect→SessionStart within
-// the boot goroutine but does NOT serialize against user-driven hook cmds
-// (e.g. /clear, /compact) running on their own goroutines; in practice mcp.Connect
-// is fast enough that no realistic user input beats it, but a paranoid
-// orchestrator should not depend on strict ordering between boot
-// SessionStart and the very first user-submitted hook.
+// mcpConnectMsg surfaces the MCP boot + SessionStart outcome. Logged inline
+// as scrollback once.
 type mcpConnectMsg struct {
 	err      error
 	tools    int
 	startErr error
 }
 
-// autoExitMsg fires when --auto-exit elapses.
+// autoExitMsg fires after --auto-exit's duration elapses.
 type autoExitMsg struct{}
 
-// cancelMsg fires when the user presses Esc during an in-flight turn
-// (either thinking or streaming).
+// cancelMsg is dispatched by Esc to cancel an in-flight turn.
 type cancelMsg struct{}
 
-// newModel builds the initial model. The textinput and spinner are
-// bubbles components; both honor m.width on each Update.
+// newModel builds the initial model. The textarea and spinner are bubbles
+// components; both honor m.width on each Update.
 func newModel(g Globals, d Deps) model {
-	ti := textinput.New()
-	ti.Placeholder = ""
-	ti.Prompt = render.Prompt()
-	ti.Focus()
-	ti.CharLimit = 0
+	ta := textarea.New()
+	ta.Placeholder = ""
+	ta.Prompt = render.Prompt()
+	ta.ShowLineNumbers = false
+	ta.DynamicHeight = true
+	ta.MinHeight = 1
+	ta.MaxHeight = 0   // no cap; expands to fit content
+	ta.CharLimit = 0   // unlimited
+	// Plain Enter submits; Shift+Enter inserts a newline (matches Claude
+	// Code / Codex CLI conventions). The default textarea KeyMap binds
+	// Enter to InsertNewline; we move InsertNewline to shift+enter so our
+	// Update can keep Enter as the submit key.
+	km := textarea.DefaultKeyMap()
+	km.InsertNewline = key.NewBinding(
+		key.WithKeys("shift+enter"),
+		key.WithHelp("shift+enter", "insert newline"),
+	)
+	ta.KeyMap = km
+	ta.Focus()
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -138,7 +164,7 @@ func newModel(g Globals, d Deps) model {
 	return model{
 		g:     g,
 		d:     d,
-		input: ti,
+		input: ta,
 		spin:  sp,
 	}
 }
@@ -171,21 +197,16 @@ func bannerTitle(emulator, name string) string {
 	return render.BannerMetaStyle.Render(emulator+": ") + render.SessionStyle.Render(name)
 }
 
-// Init seeds the initial command batch: spinner ticks (so it animates when
-// thinking starts), textinput cursor blink, the boot sequence (cmdBoot does
-// MCP connect → SessionStart in one goroutine), and optional auto-exit
-// timer. The banner and status line are appended to history here so they
-// appear once on first render. Coupling MCP connect and SessionStart in one
-// cmd means SessionStart fires regardless of whether the model is still
-// alive to process the resulting message — see the note on mcpConnectMsg
-// for the serialization caveat against concurrent user-driven hook cmds.
+// Init seeds the initial command batch: spinner ticks, the boot sequence
+// (cmdBoot does MCP connect → SessionStart in one goroutine), and optional
+// auto-exit timer. The banner is committed via tea.Println on the first
+// Update tick (Init can't mutate state, so we use a bootDone latch).
 func (m model) Init() tea.Cmd {
 	startSource := "startup"
 	if m.g.Resumed {
 		startSource = "resume"
 	}
 	cmds := []tea.Cmd{
-		textinput.Blink,
 		m.spin.Tick,
 		cmdBoot(m.d.MCP, m.d.Hooks, startSource),
 	}
@@ -198,17 +219,17 @@ func (m model) Init() tea.Cmd {
 // Update is the model's event handler. Bubbletea serializes Update calls so
 // no mutex is needed; long-running work is pushed onto goroutines via tea.Cmd.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// Lazy banner injection — Init can't mutate state, so we do it once on
-	// the first Update tick.
-	if !m.bannerDone {
-		m.history = append(m.history, banner(m.g))
-		if m.g.StatusLine != "" {
-			m.history = append(m.history, render.MuteStyle.Render("["+m.g.StatusLine+"]"))
-		}
-		m.bannerDone = true
-	}
-
 	var cmds []tea.Cmd
+
+	// Lazy boot: commit the banner + status line once via tea.Println so
+	// they land in native scrollback at the top of the session.
+	if !m.bootDone {
+		m.bootDone = true
+		cmds = append(cmds, m.commit(banner(m.g)))
+		if m.g.StatusLine != "" {
+			cmds = append(cmds, m.commit(render.MuteStyle.Render("["+m.g.StatusLine+"]")))
+		}
+	}
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -231,22 +252,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "enter":
 			line := strings.TrimSpace(m.input.Value())
-			m.input.SetValue("")
+			m.input.Reset()
 			if line == "" {
-				return m, nil
+				return m, tea.Batch(cmds...)
 			}
 			if m.thinking || m.streaming {
-				// Queue everything (regular + slash) while a turn is in flight.
+				// Queue everything (regular + slash) while a turn is in
+				// flight. The queue lives in the bottom pane (below the
+				// spinner) per the codex bottom-pane model. No scrollback
+				// commit yet — that happens when the queued line promotes
+				// to a real prompt at the start of its turn.
 				m.pending = append(m.pending, line)
-				m.appendHistoryCapped(render.MuteStyle.Render("[queued] " + line))
-				return m, nil
+				return m, tea.Batch(cmds...)
 			}
-			cmd := m.startTurn(line)
-			return m, cmd
+			cmds = append(cmds, m.startTurn(line))
+			return m, tea.Batch(cmds...)
 		default:
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
-			return m, cmd
+			cmds = append(cmds, cmd)
+			return m, tea.Batch(cmds...)
 		}
 
 	case cancelMsg:
@@ -254,40 +279,41 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.turnTag++ // invalidate any pending thinkingDoneMsg
 			m.thinking = false
 			elapsed := time.Since(m.thinkStart).Truncate(time.Second)
-			m.appendHistoryCapped(render.ThoughtMarkerStyle.Render(fmt.Sprintf("Interrupted (after %s)", elapsed)))
-			// Fire OnStop with empty last-assistant-message and stop_hook_active=true.
+			cmds = append(cmds, m.commit(render.ThoughtMarkerStyle.Render(fmt.Sprintf("Interrupted (after %s)", elapsed))))
 			cmds = append(cmds, cmdHookStop(m.d.Hooks, "", true))
 		} else if m.streaming {
 			m.turnTag++ // invalidate any pending streamChunkMsg
 			m.streaming = false
-			// Reconstruct the plain-text partial body from the tokens that
-			// were emitted before cancel — reading the styled history line
-			// would leak ANSI codes into the hook payload.
+			// Reconstruct the plain-text partial body from the tokens
+			// that were emitted before cancel.
 			partial := fmt.Sprintf("[%s] %s", m.g.Name, strings.Join(m.streamTokens[:m.streamIdx], " "))
-			m.appendHistoryCapped(render.ThoughtMarkerStyle.Render("Interrupted"))
+			// Commit whatever streamed before the cancel, then the
+			// interrupt marker.
+			if m.streamLine != "" {
+				cmds = append(cmds, m.commit(m.streamLine))
+			}
+			cmds = append(cmds, m.commit(render.ThoughtMarkerStyle.Render("Interrupted")))
 			cmds = append(cmds, cmdHookStop(m.d.Hooks, partial, true))
 			m.streamTokens = nil
+			m.streamLine = ""
 		}
 
 	case thinkingDoneMsg:
 		if !m.thinking || msg.tag != m.turnTag {
-			// Stale tick from a cancelled or superseded turn.
 			break
 		}
 		m.thinking = false
 		elapsed := time.Since(m.thinkStart).Truncate(time.Second)
-		m.appendHistoryCapped(render.ThoughtMarkerStyle.Render(fmt.Sprintf("Thought for %s", elapsed)))
-		// Transition into streaming. Append the echo header as a placeholder
-		// line and grow it token-by-token via streamChunkMsg.
+		cmds = append(cmds, m.commit(render.ThoughtMarkerStyle.Render(fmt.Sprintf("Thought for %s", elapsed))))
+		// Transition into streaming. streamLine is the growing in-progress
+		// echo shown in the bottom pane; it commits via tea.Println on
+		// streamDoneMsg.
 		m.streaming = true
 		m.streamTokens = strings.Fields(msg.body)
 		m.streamIdx = 0
 		m.streamFinal = fmt.Sprintf("[%s] %s", msg.name, msg.body)
 		m.streamDelay = msg.streamDelay
-		m.appendHistoryCapped(render.EchoHeader(msg.name))
-		m.streamLineIdx = len(m.history) - 1
-		// If the body is empty (e.g., explicit /think 5s "") skip straight
-		// to streamDoneMsg so Stop fires consistently.
+		m.streamLine = render.EchoHeader(msg.name)
 		if len(m.streamTokens) == 0 {
 			cmds = append(cmds, cmdStreamDone(m.turnTag, m.streamFinal))
 		} else {
@@ -304,15 +330,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		tok := m.streamTokens[m.streamIdx]
 		m.streamIdx++
-		// Append the token (with a leading space if not the first) to the
-		// growing history line. If the line index has shifted due to history-
-		// cap rotation between ticks, fall back to creating a new line.
-		if m.streamLineIdx < 0 || m.streamLineIdx >= len(m.history) {
-			m.appendHistoryCapped(render.EchoHeader(m.g.Name) + " " + tok)
-			m.streamLineIdx = len(m.history) - 1
-		} else {
-			m.history[m.streamLineIdx] = m.history[m.streamLineIdx] + " " + tok
-		}
+		m.streamLine = m.streamLine + " " + tok
 		if m.streamIdx < len(m.streamTokens) {
 			cmds = append(cmds, cmdStreamChunk(m.streamDelay, m.turnTag))
 		} else {
@@ -324,284 +342,207 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.streaming = false
+		// Commit the completed streamed line above the program.
+		if m.streamLine != "" {
+			cmds = append(cmds, m.commit(m.streamLine))
+		}
 		m.streamTokens = nil
+		m.streamLine = ""
 		cmds = append(cmds, cmdHookStop(m.d.Hooks, msg.body, false))
 		m.count++
 		if m.g.ExitAfter > 0 && m.count >= m.g.ExitAfter {
-			m.appendHistoryCapped(render.MuteStyle.Render(fmt.Sprintf("[exit-after %d reached]", m.g.ExitAfter)))
+			cmds = append(cmds, m.commit(render.MuteStyle.Render(fmt.Sprintf("[exit-after %d reached]", m.g.ExitAfter))))
 			m.quitReason = "other"
-			return m, tea.Quit
+			cmds = append(cmds, tea.Quit)
+			return m, tea.Batch(cmds...)
 		}
 		// Drain the next pending prompt, if any.
 		if len(m.pending) > 0 {
 			next := m.pending[0]
 			m.pending = m.pending[1:]
-			cmd := m.startTurn(next)
-			cmds = append(cmds, cmd)
+			cmds = append(cmds, m.startTurn(next))
 		}
 
 	case slashDoneMsg:
 		if msg.rendered != "" {
-			// Trim trailing newline so each rendered slash output occupies
-			// one history block. Multi-line content keeps its internal newlines.
-			m.appendHistoryCapped(strings.TrimRight(msg.rendered, "\n"))
+			// Trim trailing newline so the commit is one block.
+			cmds = append(cmds, m.commit(strings.TrimRight(msg.rendered, "\n")))
 		}
 		if msg.outcome.Exit {
 			m.quitReason = msg.outcome.Reason
 			m.quitCode = msg.outcome.ExitCode
-			return m, tea.Quit
+			cmds = append(cmds, tea.Quit)
+			return m, tea.Batch(cmds...)
 		}
 		if msg.outcome.Restart {
-			// Simulate /clear- or /compact-style reset on the wire AND in
-			// the UI: flush any pending /fake-tool, then SessionEnd then
-			// SessionStart with the same matcher value (plus Pre/PostCompact
-			// for compact-flavored lifecycles), all in one tea.Cmd goroutine
-			// so the ordering is sequential. tea.Batch would run them
-			// concurrently and lose the back-to-back contract on the wire.
-			//
-			// Scrollback handling mirrors real Claude Code: keep the banner
-			// (and status line), keep the user-echo line for the slash
-			// command that triggered the lifecycle, drop everything else.
-			// For /compact, render a "Compacted" marker so the post-state
-			// is visually distinguishable from /clear. /fake-auto-compact
-			// gets the same treatment for now (real upstream renders the
-			// auto-compact marker inline; deferring the divergence for
-			// future research). Real codex's post-/compact rendering is
-			// also unconfirmed; this matches claude's shape until we verify.
-			headerEnd := 1
+			// /clear and /compact wipe screen + scrollback (VT escape
+			// sequences ESC[2J ESC[3J ESC[H — same shape codex and the
+			// pre-fullscreen Claude Code use), then re-emit the banner,
+			// status line, and the user-echo for the slash that triggered
+			// the lifecycle. /compact additionally prints a Compacted
+			// marker. Hook lifecycle (PreCompact → SessionEnd →
+			// SessionStart → PostCompact) fires via cmdSlashRestart.
+			// ESC[3J clears the scrollback buffer (xterm extension);
+			// ESC[2J clears the visible screen; ESC[H homes the cursor.
+			// Matches the sequence codex emits on /clear and the
+			// pre-fullscreen Claude Code TUI. Also reset the test-
+			// observable scrollback slice so it reflects what's visible
+			// to the user after the wipe.
+			m.scrollback = nil
+			cmds = append(cmds, tea.Printf("\x1b[3J\x1b[2J\x1b[H"))
+			cmds = append(cmds, m.commit(banner(m.g)))
 			if m.g.StatusLine != "" {
-				headerEnd = 2
+				cmds = append(cmds, m.commit(render.MuteStyle.Render("["+m.g.StatusLine+"]")))
 			}
-			// History tail at this point: [user echo of slash line,
-			// rendered slash output]. cmdClear / cmdCompact always
-			// render so the second-to-last entry is the user echo.
-			var userEcho string
-			if len(m.history) >= headerEnd+2 {
-				userEcho = m.history[len(m.history)-2]
-			}
-			m.history = m.history[:headerEnd:headerEnd]
-			if userEcho != "" {
-				m.history = append(m.history, userEcho)
-			}
+			cmds = append(cmds, m.commit(render.Prompt()+"/"+slashName(msg.outcome.RestartReason, msg.outcome.CompactTrigger)))
 			if msg.outcome.RestartReason == "compact" {
-				m.history = append(m.history, render.ThoughtMarker("Compacted"))
+				cmds = append(cmds, m.commit(render.ThoughtMarker("Compacted")))
 			}
 			cmds = append(cmds, cmdSlashRestart(m.d.Slash, m.d.Hooks, msg.outcome.RestartReason, msg.outcome.CompactTrigger))
-			break
+			return m, tea.Batch(cmds...)
 		}
 		// /think or /stream — run the message through the regular prompt
 		// path so hooks fire and the thinking animation + streamed echo
 		// run. Outcome carries the duration overrides.
 		if msg.outcome.Prompt != "" {
-			return m, m.startPromptTurn(
+			cmds = append(cmds, m.startPromptTurn(
 				msg.outcome.Prompt,
 				msg.outcome.ThinkDuration, msg.outcome.HasThinkDuration,
 				msg.outcome.StreamDuration, msg.outcome.HasStreamDuration,
-			)
+			))
+			return m, tea.Batch(cmds...)
 		}
 
 	case hookErrMsg:
 		if msg.err != nil {
-			// Hook errors get the LifecycleWarn token (yellow) so they don't
-			// vanish into the mute lifecycle-note stream.
-			m.appendHistoryCapped(render.LifecycleWarn(fmt.Sprintf("hook %s error: %v", msg.stage, msg.err)))
+			cmds = append(cmds, m.commit(render.LifecycleWarn(fmt.Sprintf("hook %s error: %v", msg.stage, msg.err))))
 		}
 
 	case mcpConnectMsg:
 		if msg.err != nil {
-			m.appendHistoryCapped(render.MuteStyle.Render(fmt.Sprintf("[mcp connect failed: %v]", msg.err)))
+			cmds = append(cmds, m.commit(render.MuteStyle.Render(fmt.Sprintf("[mcp connect failed: %v]", msg.err))))
 		} else if msg.tools > 0 {
-			m.appendHistoryCapped(render.MuteStyle.Render(fmt.Sprintf("[mcp connected: %d tools]", msg.tools)))
+			cmds = append(cmds, m.commit(render.MuteStyle.Render(fmt.Sprintf("[mcp connected: %d tools]", msg.tools))))
 		}
 		if msg.startErr != nil {
-			m.appendHistoryCapped(render.LifecycleWarn(fmt.Sprintf("hook OnSessionStart error: %v", msg.startErr)))
+			cmds = append(cmds, m.commit(render.LifecycleWarn(fmt.Sprintf("hook OnSessionStart error: %v", msg.startErr))))
 		}
 
 	case autoExitMsg:
-		m.appendHistoryCapped(render.MuteStyle.Render(fmt.Sprintf("[auto-exit after %s]", m.g.AutoExit)))
+		cmds = append(cmds, m.commit(render.MuteStyle.Render(fmt.Sprintf("[auto-exit after %s]", m.g.AutoExit))))
 		m.quitReason = "other"
-		return m, tea.Quit
+		cmds = append(cmds, tea.Quit)
+		return m, tea.Batch(cmds...)
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
-		return m, cmd
+		cmds = append(cmds, cmd)
+		return m, tea.Batch(cmds...)
 	}
 
-	// Forward unhandled messages to the textinput (cursor blink etc).
+	// Forward unhandled messages to the textarea (cursor blink etc).
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	cmds = append(cmds, cmd)
 	return m, tea.Batch(cmds...)
 }
 
-// startTurn is invoked when the user submits a line and we're not currently
-// thinking. It distinguishes slash commands from regular prompts and returns
-// the command(s) to run for this turn.
-func (m *model) startTurn(line string) tea.Cmd {
-	// Echo the user prompt into history (matching the scanner path's "> line").
-	m.appendHistoryCapped(render.Prompt() + line)
-
-	if strings.HasPrefix(line, "/") {
-		// Slash dispatch. We render synchronously (most slash commands are
-		// near-instant; /stream sleeps a few hundred ms which is fine in the
-		// tea.Cmd goroutine).
-		return cmdSlashDispatch(m.d.Slash, line)
-	}
-
-	return m.startPromptTurn(line, 0, false, 0, false)
+// commit emits a line above the program block via tea.Println AND records
+// it in m.scrollback for test observability. Use for anything that should
+// land in native terminal scrollback — banner, user echoes, completed
+// streamed responses, lifecycle markers. Raw escape sequences (e.g. the
+// /clear ESC[3J wipe) still use tea.Printf directly since they aren't
+// "lines" in the scrollback sense.
+func (m *model) commit(line string) tea.Cmd {
+	m.scrollback = append(m.scrollback, line)
+	return tea.Println(line)
 }
 
-// startPromptTurn fires UserPromptSubmit + the thinking animation for a
-// message. Used by raw-input prompts and by /think and /stream (which route
-// through the same code path so they share hooks + animation behavior).
-// thinkOverride / hasThinkOverride and streamOverride / hasStreamOverride
-// let callers swap in per-turn durations; absent overrides use the engine
-// globals.
-func (m *model) startPromptTurn(
-	line string,
-	thinkOverride time.Duration, hasThinkOverride bool,
-	streamOverride time.Duration, hasStreamOverride bool,
-) tea.Cmd {
-	thinkDur := m.g.ThinkDelay
-	if hasThinkOverride {
-		thinkDur = thinkOverride
+// slashName returns the slash-command-as-typed for display when /clear or
+// /compact re-emits the user echo after wiping the screen. /fake-auto-compact
+// uses a CompactTrigger of "auto"; everything else maps from RestartReason.
+func slashName(restartReason, compactTrigger string) string {
+	if restartReason == "compact" && compactTrigger == "auto" {
+		return "fake-auto-compact"
 	}
-	streamDur := m.g.StreamDelay
-	if hasStreamOverride {
-		streamDur = streamOverride
+	return restartReason
+}
+
+// startTurn is invoked when the user submits a line and we're not currently
+// thinking. It distinguishes slash commands from regular prompts and returns
+// the command(s) to run for this turn. The user echo commits via tea.Println.
+func (m *model) startTurn(line string) tea.Cmd {
+	cmds := []tea.Cmd{
+		m.commit(render.Prompt() + line),
 	}
 
-	m.thinking = true
-	m.thinkingInput = line
-	m.thinkStart = time.Now()
+	if strings.HasPrefix(line, "/") {
+		// Slash dispatch.
+		cmds = append(cmds, cmdSlashDispatch(m.d.Slash, line))
+		return tea.Batch(cmds...)
+	}
+
+	cmds = append(cmds, m.startPromptTurn(line, 0, false, 0, false))
+	return tea.Batch(cmds...)
+}
+
+// startPromptTurn kicks off the thinking → streaming pipeline for a regular
+// prompt. Used by both startTurn (raw input) and the /think / /stream slash
+// paths (which supply explicit thinkDur / streamDur overrides).
+func (m *model) startPromptTurn(prompt string, thinkDur time.Duration, hasThink bool, streamDur time.Duration, hasStream bool) tea.Cmd {
 	m.turnTag++
-	tag := m.turnTag
+	m.thinking = true
+	m.thinkingInput = prompt
+	m.thinkStart = time.Now()
 
+	dur := m.g.ThinkDelay
+	if hasThink {
+		dur = thinkDur
+	}
+	streamD := m.g.StreamDelay
+	if hasStream {
+		streamD = streamDur
+	}
+
+	body := prompt
 	return tea.Batch(
-		cmdHookPrompt(m.d.Hooks, line, m.g.Name),
-		cmdThink(thinkDur, streamDur, tag, m.g.Name, line),
-		m.spin.Tick,
+		cmdHookPrompt(m.d.Hooks, prompt, m.g.Name),
+		cmdThink(dur, streamD, m.turnTag, m.g.Name, body),
 	)
 }
 
-// View composes the rendered frame: history, optional spinner row, then the
-// textinput. Bubbletea handles partial-redraw / diffing; the View just
-// produces the full intended frame each tick. In bubbletea v2 View returns a
-// tea.View struct; AltScreen and other terminal-mode toggles live as fields
-// on this value (previously imperative tea.WithAltScreen()).
+// View renders the bottom pane only. Inline mode (no AltScreen) — completed
+// content lives in native terminal scrollback above the program block.
+// Bottom pane composition: optional spinner row, optional streaming line,
+// queue display, multi-line input.
 func (m model) View() tea.View {
-	var hist strings.Builder
-	for _, line := range m.history {
-		hist.WriteString(line)
-		hist.WriteString("\n")
-	}
-
-	var bottom strings.Builder
+	var b strings.Builder
 	if m.thinking {
 		elapsed := time.Since(m.thinkStart).Truncate(time.Second)
-		// Spinner glyph (already styled by m.spin.Style = thinking) +
-		// "thinking…" in the same warm token, then the mute parenthetical.
-		bottom.WriteString(m.spin.View())
-		bottom.WriteString(render.Thinking(" thinking…"))
-		bottom.WriteString(render.MuteStyle.Render(fmt.Sprintf(" (%s · esc to interrupt)", elapsed)))
-		bottom.WriteString("\n")
+		b.WriteString(m.spin.View())
+		b.WriteString(render.Thinking(" thinking…"))
+		b.WriteString(render.MuteStyle.Render(fmt.Sprintf(" (%s · esc to interrupt)", elapsed)))
+		b.WriteString("\n")
 	}
-	bottom.WriteString(m.input.View())
-
-	// Pin the input to the bottom: when history would push it off-screen,
-	// crop history to the trailing rows that fit. Older content is
-	// unreachable in this build — full scrollback navigation is tracked
-	// separately (#10's viewport half). m.height == 0 before the first
-	// WindowSizeMsg; skip truncation in that case so early-life renders
-	// still show seed content.
-	historyOut := hist.String()
-	if m.height > 0 {
-		bottomRows := strings.Count(bottom.String(), "\n") + 1
-		available := m.height - bottomRows
-		if available <= 0 {
-			historyOut = ""
-		} else {
-			historyOut = lastNRows(historyOut, available)
-		}
+	if m.streaming && m.streamLine != "" {
+		b.WriteString(m.streamLine)
+		b.WriteString("\n")
 	}
-
-	v := tea.NewView(historyOut + bottom.String())
-	v.AltScreen = true
-	return v
+	for _, p := range m.pending {
+		b.WriteString(render.MuteStyle.Render("  queued: " + p))
+		b.WriteString("\n")
+	}
+	b.WriteString(m.input.View())
+	return tea.NewView(b.String())
 }
 
-// lastNRows returns the trailing n rows of s, splitting on '\n'. A
-// trailing newline counts as a row separator, not a row, so
-// lastNRows("a\nb\nc\n", 2) is "b\nc\n". Returns s unchanged when
-// it already fits.
-func lastNRows(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	// Count rows = number of newlines (the trailing newline marks the
-	// end of the last row; if s lacks one, the final row has no separator).
-	rows := strings.Count(s, "\n")
-	if !strings.HasSuffix(s, "\n") {
-		rows++
-	}
-	if rows <= n {
-		return s
-	}
-	// Drop the leading (rows - n) lines.
-	drop := rows - n
-	idx := 0
-	for i := 0; i < drop; i++ {
-		next := strings.IndexByte(s[idx:], '\n')
-		if next < 0 {
-			return ""
-		}
-		idx += next + 1
-	}
-	return s[idx:]
-}
-
-// appendHistoryCapped appends a line (with any trailing newlines stripped so
-// View can add its own separator deterministically) and evicts oldest entries
-// when the cap is exceeded. cap=0 disables eviction. When eviction shifts
-// the slice down, m.streamLineIdx is rebased so an in-flight stream's
-// growing line still points at the same row (or goes negative, in which case
-// the chunk handler's bounds check creates a new line).
-func (m *model) appendHistoryCapped(line string) {
-	m.history = append(m.history, strings.TrimRight(line, "\n"))
-	limit := m.g.HistoryCap
-	if limit <= 0 {
-		return
-	}
-	if len(m.history) > limit {
-		drop := len(m.history) - limit
-		m.history = m.history[drop:]
-		if m.streaming {
-			m.streamLineIdx -= drop
-		}
-	}
-}
-
-// cmdThink returns a tea.Cmd that fires thinkingDoneMsg after delay. The tag
-// lets the model ignore the response if the turn was cancelled in the
-// meantime. streamDelay rides along so the streaming phase honors the
-// per-turn override without a second flag plumbing dance. delay<=0 fires
-// immediately on the bubbletea event loop (tea.Tick's behavior with a
-// zero duration is implementation-defined).
 func cmdThink(delay, streamDelay time.Duration, tag int, name, body string) tea.Cmd {
-	if delay <= 0 {
-		return func() tea.Msg {
-			return thinkingDoneMsg{tag: tag, name: name, body: body, streamDelay: streamDelay}
-		}
-	}
 	return tea.Tick(delay, func(time.Time) tea.Msg {
 		return thinkingDoneMsg{tag: tag, name: name, body: body, streamDelay: streamDelay}
 	})
 }
 
-// cmdStreamChunk schedules the next streamChunkMsg after delay. delay==0
-// fires the next chunk immediately on the bubbletea event loop (no
-// perceptible pause).
 func cmdStreamChunk(delay time.Duration, tag int) tea.Cmd {
 	if delay <= 0 {
 		return func() tea.Msg { return streamChunkMsg{tag: tag} }
@@ -611,14 +552,12 @@ func cmdStreamChunk(delay time.Duration, tag int) tea.Cmd {
 	})
 }
 
-// cmdStreamDone fires streamDoneMsg immediately. body is the assembled
-// "[Name] message" payload that the OnStop hook receives.
 func cmdStreamDone(tag int, body string) tea.Cmd {
-	return func() tea.Msg { return streamDoneMsg{tag: tag, body: body} }
+	return func() tea.Msg {
+		return streamDoneMsg{tag: tag, body: body}
+	}
 }
 
-// cmdSlashDispatch runs a slash command on a goroutine and returns its
-// rendered output + outcome.
 func cmdSlashDispatch(handler *slash.Handler, line string) tea.Cmd {
 	return func() tea.Msg {
 		rendered, outcome := handler.DispatchString(context.Background(), line)
@@ -626,17 +565,21 @@ func cmdSlashDispatch(handler *slash.Handler, line string) tea.Cmd {
 	}
 }
 
-// cmdHookPrompt fires UserPromptSubmit on a goroutine.
 func cmdHookPrompt(sender HookSender, prompt, name string) tea.Cmd {
 	return func() tea.Msg {
-		return hookErrMsg{stage: "OnPrompt", err: sender.OnPrompt(context.Background(), prompt, name)}
+		if err := sender.OnPrompt(context.Background(), prompt, name); err != nil {
+			return hookErrMsg{stage: "OnPrompt", err: err}
+		}
+		return nil
 	}
 }
 
-// cmdHookStop fires Stop on a goroutine.
 func cmdHookStop(sender HookSender, last string, stopHookActive bool) tea.Cmd {
 	return func() tea.Msg {
-		return hookErrMsg{stage: "OnStop", err: sender.OnStop(context.Background(), last, stopHookActive)}
+		if err := sender.OnStop(context.Background(), last, stopHookActive); err != nil {
+			return hookErrMsg{stage: "OnStop", err: err}
+		}
+		return nil
 	}
 }
 
@@ -663,9 +606,9 @@ func cmdBoot(client *mcp.Client, sender HookSender, source string) tea.Cmd {
 // cmdSlashRestart performs the /clear or /compact lifecycle in one
 // goroutine so PostToolUse (for any pending /fake-tool), the optional
 // PreCompact, SessionEnd, SessionStart, and the optional PostCompact land
-// on the wire in that fixed order. tea.Batch would dispatch separate
-// cmds concurrently, which would race the POSTs and violate the
-// back-to-back contract documented on slash.Outcome.Restart.
+// on the wire in that fixed order. tea.Batch would dispatch separate cmds
+// concurrently, which would race the POSTs and violate the back-to-back
+// contract documented on slash.Outcome.Restart.
 //
 // compactTrigger is empty for /clear (no Pre/PostCompact emission) and
 // "manual" or "auto" for /compact or /fake-auto-compact.
@@ -696,29 +639,36 @@ func cmdAutoExit(d time.Duration) tea.Cmd {
 
 // runTUI runs the bubbletea program and returns (exit code, shutdown reason).
 // The reason mirrors the model's quitReason ("logout" for /exit, "other"
-// otherwise) so callers can pass it through to the SessionEnd hook. Caller
-// supplies quitCh — closing it forwards SIGINT/SIGTERM into p.Quit() once
+// for SIGINT, EOF, /auto-exit, etc.).
+//
+// quitCh receives a struct{} when the outer engine wants the TUI to exit
+// without ceremony. The program's Quit listener cancels its own context
 // without racing with the alt-screen teardown.
 func runTUI(ctx context.Context, g Globals, d Deps, quitCh <-chan struct{}) (int, string) {
 	m := newModel(g, d)
-	// v2: WithAltScreen() is gone — AltScreen is now a declarative field on
-	// tea.View returned by m.View().
-	p := tea.NewProgram(m, tea.WithContext(ctx))
-
+	p := tea.NewProgram(m,
+		tea.WithContext(ctx),
+		tea.WithInput(os.Stdin),
+		tea.WithOutput(os.Stdout),
+	)
 	if quitCh != nil {
 		go func() {
 			<-quitCh
 			p.Quit()
 		}()
 	}
-
-	finalModel, err := p.Run()
+	out, err := p.Run()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "testagent: tui: %v\n", err)
+		fmt.Fprintf(os.Stderr, "testagent: tui error: %v\n", err)
 		return 1, "other"
 	}
-	if fm, ok := finalModel.(model); ok {
-		return fm.quitCode, fm.quitReason
+	final, ok := out.(model)
+	if !ok {
+		return 1, "other"
 	}
-	return 0, "other"
+	reason := final.quitReason
+	if reason == "" {
+		reason = "other"
+	}
+	return final.quitCode, reason
 }

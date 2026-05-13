@@ -58,7 +58,7 @@ Alphabetical by long name. Short flags shown inline. Global flags (common across
 | `--disable-slash-commands` | `not relevant` | Slash grammar is always active |
 | `--effort` | `not relevant` | No model |
 | `--exit-after` *(global)* | ✓ supported | Auto-exits after N interactions |
-| `--history-cap` *(global)* | ✓ supported | TUI scrollback cap (default 1000; 0 = unlimited) |
+| `--history-cap` *(global)* | accepted | Parsed; no behavior (TUI uses native terminal scrollback since v0.4; flag retained for back-compat) |
 | `--mcp-config` | ✓ supported | Connects, handshakes, exposes tools via `/mcp-call` |
 | `--model` | `not relevant` | No model in testagent |
 | `--name` / `-n` | ✓ supported | Shown in banner (default `test-agent`) |
@@ -143,8 +143,10 @@ The `/fake-*` namespace is reserved for emulation-only commands — slash comman
 | `Ctrl+R` reverse search | `not relevant` | TUI-internal |
 | `Esc` (cancel in-flight turn) | ✓ supported | Fires `Stop` with `stop_hook_active=true`; `[cancelled]` rendered |
 | `Esc Esc` (rewind/checkpoint) | `not relevant` | TUI-internal checkpointing |
-| Concurrent input during thinking | ✓ supported | bubbletea TUI accepts input while spinner runs; lines queue |
-| Scrollback cap | ✓ supported | `--history-cap N` (default 1000; 0 = unlimited) |
+| `Shift+Enter` (multi-line input) | ✓ supported | Inserts a newline in the input without submitting; plain `Enter` submits the full multi-line prompt |
+| Auto-expanding input height | ✓ supported | Input grows vertically as multi-line content is entered |
+| Concurrent input during thinking | ✓ supported | bubbletea TUI accepts input while spinner runs; queued lines render in the bottom pane below the spinner |
+| Scrollback | ✓ supported | TUI uses the terminal's native scrollback (PgUp / mouse wheel work without app-side keybindings); `/clear` wipes both visible screen and scrollback via VT escape sequences |
 | Vim editor mode | `not relevant` | TUI-internal |
 
 ### Hook handler types
@@ -230,7 +232,7 @@ Alphabetical by long name. Short flags shown inline. **These are global flags fo
 
 ### Slash commands
 
-> **Naming collision:** Codex's `/mcp` lists configured MCP tools (use `/mcp verbose` for details). testagent uses `/mcp-call` for tool dispatch to avoid colliding with this. Codex's `/exit` and `/quit` both exit the CLI; testagent's `/exit [code]` maps to either. Codex's `/clear` clears the terminal and starts a new chat; testagent's `/clear` simulates the hook side-effect only (no screen wipe). Codex's `/status` shows session config and token usage; testagent has no equivalent.
+> **Naming collision:** Codex's `/mcp` lists configured MCP tools (use `/mcp verbose` for details). testagent uses `/mcp-call` for tool dispatch to avoid colliding with this. Codex's `/exit` and `/quit` both exit the CLI; testagent's `/exit [code]` maps to either. testagent's `/clear` wipes the visible screen and scrollback (via VT escape codes) and fires the hook side-effect. Codex's `/status` shows session config and token usage; testagent has no equivalent.
 
 #### Built-in
 

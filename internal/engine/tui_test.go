@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +15,6 @@ import (
 
 	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/mcp"
-	"github.com/paultyng/testagent/internal/render"
 	"github.com/paultyng/testagent/internal/slash"
 )
 
@@ -82,6 +80,34 @@ func pressEnter(m model) (model, tea.Cmd) {
 	return newM.(model), cmd
 }
 
+// firstMsgOfType drills into a tea.Cmd (which may be a tea.Batch) and
+// returns the first message of type T it finds. Used by slash-dispatch
+// tests since startTurn now returns a Batch (commit + slash dispatch).
+func firstMsgOfType[T tea.Msg](t *testing.T, cmd tea.Cmd) T {
+	t.Helper()
+	var zero T
+	if cmd == nil {
+		t.Fatalf("cmd is nil; can't extract %T", zero)
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, inner := range batch {
+			if inner == nil {
+				continue
+			}
+			if v, ok := inner().(T); ok {
+				return v
+			}
+		}
+		t.Fatalf("no %T in BatchMsg of %d cmds", zero, len(batch))
+	}
+	if v, ok := msg.(T); ok {
+		return v
+	}
+	t.Fatalf("expected %T, got %T", zero, msg)
+	return zero
+}
+
 // drainStream advances the model through a turn's streaming phase by
 // synthesizing successive streamChunkMsg / streamDoneMsg until streaming
 // ends. Mirrors what the bubbletea runtime would do for tea.Tick output.
@@ -135,7 +161,7 @@ func TestModel_EnterSubmitsAndEchoes(t *testing.T) {
 
 	foundEcho := false
 	foundThought := false
-	for _, line := range m.history {
+	for _, line := range m.scrollback {
 		if strings.Contains(line, "[Test]") && strings.Contains(line, "hi") {
 			foundEcho = true
 		}
@@ -144,10 +170,10 @@ func TestModel_EnterSubmitsAndEchoes(t *testing.T) {
 		}
 	}
 	if !foundEcho {
-		t.Errorf("history missing [Test] hi echo:\n%v", m.history)
+		t.Errorf("history missing [Test] hi echo:\n%v", m.scrollback)
 	}
 	if !foundThought {
-		t.Errorf("history missing 'Thought for' marker:\n%v", m.history)
+		t.Errorf("history missing 'Thought for' marker:\n%v", m.scrollback)
 	}
 }
 
@@ -193,18 +219,11 @@ func TestModel_SlashDispatchAppendsRendered(t *testing.T) {
 	m := newTestModel(nil)
 	m = typeInto(m, "/panel hi")
 	m, cmd := pressEnter(m)
-	if cmd == nil {
-		t.Fatal("expected cmd from slash dispatch")
-	}
-	msg := cmd()
-	done, ok := msg.(slashDoneMsg)
-	if !ok {
-		t.Fatalf("expected slashDoneMsg, got %T", msg)
-	}
+	done := firstMsgOfType[slashDoneMsg](t, cmd)
 	newM, _ := m.Update(done)
 	m = newM.(model)
 
-	joined := strings.Join(m.history, "\n")
+	joined := strings.Join(m.scrollback, "\n")
 	// The /panel renders a rounded-border box; rounded corners ╭/╰ or ─ should appear.
 	if !strings.ContainsAny(joined, "╭─") {
 		t.Errorf("history missing panel border:\n%s", joined)
@@ -214,154 +233,126 @@ func TestModel_SlashDispatchAppendsRendered(t *testing.T) {
 	}
 }
 
-// TestModel_SlashLifecyclePrunesScrollback covers /clear, /compact, and
+// TestModel_SlashLifecycleResetsScrollback covers /clear, /compact, and
 // /fake-auto-compact across both header shapes (banner only vs banner +
-// status line). Each case asserts:
-//   - history is pruned to the header prefix
-//   - the user-echo line for the slash command survives
-//   - a "Compacted" marker is present only for the two compact flavors
-//   - no leftover lines from prior turns survive
-func TestModel_SlashLifecyclePrunesScrollback(t *testing.T) {
+// status line). Each case asserts that after the lifecycle dispatch,
+// m.scrollback is reset (the visible terminal is wiped) and then
+// re-seeded with banner, optional status line, the user-echo line, and a
+// Compacted marker (compact flavors only).
+func TestModel_SlashLifecycleResetsScrollback(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name        string
-		statusLine  string
-		slashLine   string
-		wantMarker  bool
-		wantHeader  []string
+		name       string
+		statusLine string
+		slashLine  string
+		wantMarker bool
 	}{
-		{name: "clear-no-status", slashLine: "/clear", wantHeader: []string{"BANNER"}},
-		{name: "clear-with-status", statusLine: "hooks: stop", slashLine: "/clear", wantHeader: []string{"BANNER", render.MuteStyle.Render("[hooks: stop]")}},
-		{name: "compact-no-status", slashLine: "/compact", wantMarker: true, wantHeader: []string{"BANNER"}},
-		{name: "compact-with-status", statusLine: "hooks: stop", slashLine: "/compact", wantMarker: true, wantHeader: []string{"BANNER", render.MuteStyle.Render("[hooks: stop]")}},
-		{name: "fake-auto-compact-no-status", slashLine: "/fake-auto-compact", wantMarker: true, wantHeader: []string{"BANNER"}},
+		{name: "clear-no-status", slashLine: "/clear"},
+		{name: "clear-with-status", statusLine: "hooks: stop", slashLine: "/clear"},
+		{name: "compact-no-status", slashLine: "/compact", wantMarker: true},
+		{name: "compact-with-status", statusLine: "hooks: stop", slashLine: "/compact", wantMarker: true},
+		{name: "fake-auto-compact-no-status", slashLine: "/fake-auto-compact", wantMarker: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			m := newTestModel(&testOpts{HistoryCap: 1000})
+			m := newTestModel(nil)
 			m.g.StatusLine = tc.statusLine
-			m.history = append(m.history, tc.wantHeader...)
-			// Prior conversation noise that should NOT survive.
-			m.history = append(m.history, "> earlier prompt", "Thought for 10ms", "[Test] earlier prompt")
+			// Seed prior conversation noise that the lifecycle should wipe.
+			m.scrollback = append(m.scrollback, "> earlier prompt", "Thought for 10ms", "[Test] earlier prompt")
 
 			m = typeInto(m, tc.slashLine)
 			m, cmd := pressEnter(m)
-			if cmd == nil {
-				t.Fatal("expected cmd from slash dispatch")
-			}
-			msg := cmd()
-			done, ok := msg.(slashDoneMsg)
-			if !ok {
-				t.Fatalf("expected slashDoneMsg, got %T", msg)
-			}
+			done := firstMsgOfType[slashDoneMsg](t, cmd)
 			newM, _ := m.Update(done)
 			m = newM.(model)
 
-			wantLen := len(tc.wantHeader) + 1 // + user echo
-			if tc.wantMarker {
-				wantLen++ // + "Compacted"
+			joined := strings.Join(m.scrollback, "\n")
+			if strings.Contains(joined, "earlier prompt") {
+				t.Errorf("scrollback still contains pre-lifecycle content: %v", m.scrollback)
 			}
-			if len(m.history) != wantLen {
-				t.Fatalf("history len = %d, want %d: %v", len(m.history), wantLen, m.history)
+			// Banner re-emit always lands first; it carries the session id.
+			if !strings.Contains(m.scrollback[0], "sid-test") {
+				t.Errorf("scrollback[0] = %q, want banner containing sid-test", m.scrollback[0])
 			}
-			for i, h := range tc.wantHeader {
-				if m.history[i] != h {
-					t.Errorf("history[%d] = %q, want %q", i, m.history[i], h)
+			expectedLen := 2 // banner + user echo
+			if tc.statusLine != "" {
+				expectedLen++
+				if !strings.Contains(m.scrollback[1], tc.statusLine) {
+					t.Errorf("scrollback[1] = %q, want status line containing %q", m.scrollback[1], tc.statusLine)
 				}
 			}
-			echoIdx := len(tc.wantHeader)
-			if !strings.Contains(m.history[echoIdx], tc.slashLine) {
-				t.Errorf("history[%d] = %q, want user echo containing %q", echoIdx, m.history[echoIdx], tc.slashLine)
-			}
-			joined := strings.Join(m.history, "\n")
 			if tc.wantMarker {
-				if !strings.Contains(m.history[echoIdx+1], "Compacted") {
-					t.Errorf("history[%d] = %q, want Compacted marker", echoIdx+1, m.history[echoIdx+1])
+				expectedLen++
+			}
+			if len(m.scrollback) != expectedLen {
+				t.Fatalf("scrollback len = %d, want %d: %v", len(m.scrollback), expectedLen, m.scrollback)
+			}
+			// User echo is second-to-last for compact flavors, last for clear.
+			echoIdx := len(m.scrollback) - 1
+			if tc.wantMarker {
+				echoIdx--
+			}
+			if !strings.Contains(m.scrollback[echoIdx], tc.slashLine) {
+				t.Errorf("scrollback[%d] = %q, want user echo containing %q", echoIdx, m.scrollback[echoIdx], tc.slashLine)
+			}
+			if tc.wantMarker {
+				if !strings.Contains(m.scrollback[len(m.scrollback)-1], "Compacted") {
+					t.Errorf("last scrollback line = %q, want Compacted marker", m.scrollback[len(m.scrollback)-1])
 				}
 			} else if strings.Contains(joined, "Compacted") {
-				t.Errorf("history must not contain Compacted marker for %s: %v", tc.slashLine, m.history)
-			}
-			if strings.Contains(joined, "earlier prompt") {
-				t.Errorf("history still contains prior turn for %s: %v", tc.slashLine, m.history)
+				t.Errorf("scrollback must not contain Compacted marker for %s: %v", tc.slashLine, m.scrollback)
 			}
 		})
 	}
 }
 
-// TestModel_ViewPinsInputToBottom asserts the input row stays visible
-// when history exceeds the terminal height — the rendered frame is
-// truncated from the top so the last line always contains the input.
-func TestModel_ViewPinsInputToBottom(t *testing.T) {
+// TestModel_ViewBottomPaneOnly asserts View renders only the live bottom
+// block (spinner / streaming line / queue / input). Committed scrollback
+// content lives in the terminal's native buffer above the program and
+// must NOT appear in the View frame.
+func TestModel_ViewBottomPaneOnly(t *testing.T) {
 	t.Parallel()
 
 	m := newTestModel(nil)
 	m.width = 80
 	m.height = 10
-	for i := 0; i < 200; i++ {
-		m.history = append(m.history, fmt.Sprintf("line %d", i))
-	}
+	m.scrollback = append(m.scrollback, "BANNER", "> hi", "[Test] hi", "Thought for 1s")
 
 	frame := m.View().Content
-	lines := strings.Split(strings.TrimRight(frame, "\n"), "\n")
-	if len(lines) > m.height {
-		t.Errorf("frame line count = %d, want <= %d", len(lines), m.height)
-	}
-	// The last rendered row is the textinput. textinput.View() emits a
-	// non-empty string even when empty (the prompt prefix + cursor). The
-	// frame's last visible line should be from the input, not from history.
-	last := lines[len(lines)-1]
-	if strings.Contains(last, "line ") {
-		t.Errorf("last frame line is history (%q), want input row", last)
+	for _, committed := range []string{"BANNER", "> hi", "[Test] hi", "Thought for 1s"} {
+		if strings.Contains(frame, committed) {
+			t.Errorf("View frame must not contain committed content %q (committed lines live in scrollback): %q", committed, frame)
+		}
 	}
 }
 
-// TestModel_ViewSkipsTruncationBeforeFirstResize asserts that with
-// m.height == 0 (pre-WindowSizeMsg), the View renders the full history.
-// Without this, the very first frame would show nothing.
-func TestModel_ViewSkipsTruncationBeforeFirstResize(t *testing.T) {
+// TestModel_ShiftEnterInsertsNewline asserts shift+enter inserts a newline
+// into the multi-line textarea without submitting, and plain Enter then
+// submits the full multi-line value.
+func TestModel_ShiftEnterInsertsNewline(t *testing.T) {
 	t.Parallel()
 
 	m := newTestModel(nil)
-	// m.height stays 0 — no WindowSizeMsg fed in.
-	for i := 0; i < 20; i++ {
-		m.history = append(m.history, fmt.Sprintf("line %d", i))
+	m = typeInto(m, "line one")
+	// Shift+Enter: textarea inserts a newline; model does NOT submit.
+	newM, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	m = newM.(model)
+	if m.thinking {
+		t.Fatal("shift+enter must not start a turn")
 	}
-
-	frame := m.View().Content
-	if !strings.Contains(frame, "line 0") {
-		t.Errorf("frame missing oldest line: %q", frame)
+	if !strings.Contains(m.input.Value(), "\n") {
+		t.Errorf("input value = %q, want embedded newline after shift+enter", m.input.Value())
 	}
-	if !strings.Contains(frame, "line 19") {
-		t.Errorf("frame missing newest line: %q", frame)
+	m = typeInto(m, "line two")
+	// Plain Enter submits the multi-line value.
+	m, _ = pressEnter(m)
+	if !m.thinking {
+		t.Fatal("plain Enter should start the turn")
 	}
-}
-
-// TestLastNRows pins the rendering helper's behavior so future edits
-// to View()'s trim logic stay honest.
-func TestLastNRows(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name string
-		in   string
-		n    int
-		want string
-	}{
-		{name: "empty", in: "", n: 5, want: ""},
-		{name: "n=0", in: "a\nb\n", n: 0, want: ""},
-		{name: "fits exactly", in: "a\nb\nc\n", n: 3, want: "a\nb\nc\n"},
-		{name: "trim top", in: "a\nb\nc\nd\n", n: 2, want: "c\nd\n"},
-		{name: "no trailing newline", in: "a\nb\nc", n: 2, want: "b\nc"},
-		{name: "n exceeds rows", in: "a\nb\n", n: 10, want: "a\nb\n"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if got := lastNRows(tc.in, tc.n); got != tc.want {
-				t.Errorf("lastNRows(%q, %d) = %q, want %q", tc.in, tc.n, got, tc.want)
-			}
-		})
+	if m.thinkingInput != "line one\nline two" {
+		t.Errorf("thinkingInput = %q, want %q", m.thinkingInput, "line one\nline two")
 	}
 }
 
@@ -371,14 +362,7 @@ func TestModel_SlashExitQuits(t *testing.T) {
 	m := newTestModel(nil)
 	m = typeInto(m, "/exit 7")
 	m, cmd := pressEnter(m)
-	if cmd == nil {
-		t.Fatal("expected cmd from /exit")
-	}
-	msg := cmd()
-	done, ok := msg.(slashDoneMsg)
-	if !ok {
-		t.Fatalf("expected slashDoneMsg, got %T", msg)
-	}
+	done := firstMsgOfType[slashDoneMsg](t, cmd)
 	if !done.outcome.Exit || done.outcome.ExitCode != 7 {
 		t.Errorf("outcome = %+v, want Exit=true ExitCode=7", done.outcome)
 	}
@@ -399,11 +383,11 @@ func TestModel_WindowSizeUpdatesInputWidth(t *testing.T) {
 	m := newTestModel(nil)
 	newM, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
 	m = newM.(model)
-	if m.input.Width() != 38 {
-		t.Errorf("input.Width = %d, want 38", m.input.Width())
-	}
 	if m.width != 40 || m.height != 10 {
 		t.Errorf("model size = %dx%d, want 40x10", m.width, m.height)
+	}
+	if m.input.Width() == 0 {
+		t.Errorf("input.Width = 0, want > 0 after WindowSizeMsg")
 	}
 }
 
@@ -440,41 +424,23 @@ func TestModel_EscCancelsThinking(t *testing.T) {
 		t.Errorf("thinkTag should have advanced past %d", originalTag)
 	}
 	found := false
-	for _, line := range m.history {
+	for _, line := range m.scrollback {
 		if strings.Contains(line, "Interrupted") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("history missing Interrupted marker:\n%v", m.history)
+		t.Errorf("history missing Interrupted marker:\n%v", m.scrollback)
 	}
 
 	// A stale thinkingDoneMsg with the old tag must be ignored.
 	stale := thinkingDoneMsg{tag: originalTag, name: "Test", body: "hello"}
 	newM, _ = m.Update(stale)
 	m = newM.(model)
-	for _, line := range m.history {
+	for _, line := range m.scrollback {
 		if strings.Contains(line, "[Test] hello") {
 			t.Errorf("stale thinkingDoneMsg leaked into history: %q", line)
-		}
-	}
-}
-
-func TestModel_HistoryCapEvictsOldest(t *testing.T) {
-	t.Parallel()
-
-	m := newTestModel(&testOpts{HistoryCap: 3})
-	for _, s := range []string{"one", "two", "three", "four", "five"} {
-		m.appendHistoryCapped(s)
-	}
-	if len(m.history) != 3 {
-		t.Fatalf("history len = %d, want 3", len(m.history))
-	}
-	want := []string{"three", "four", "five"}
-	for i, w := range want {
-		if m.history[i] != w {
-			t.Errorf("history[%d] = %q, want %q", i, m.history[i], w)
 		}
 	}
 }
