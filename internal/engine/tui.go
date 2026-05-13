@@ -393,26 +393,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// the lifecycle. /compact additionally prints a Compacted
 			// marker. Hook lifecycle (PreCompact → SessionEnd →
 			// SessionStart → PostCompact) fires via cmdSlashRestart.
-			// ESC[3J clears the scrollback buffer (xterm extension);
-			// ESC[2J clears the visible screen; ESC[H homes the cursor.
-			// Matches the sequence codex emits on /clear and the
-			// pre-fullscreen Claude Code TUI. Also reset the test-
-			// observable scrollback slice so it reflects what's visible
-			// to the user after the wipe.
+			// Reset the test-observable scrollback slice so it reflects
+			// what's visible to the user after the wipe.
 			m.scrollback = nil
-			// Order matters: wipe MUST land before the re-emit, otherwise
-			// the banner can race the escape and disappear off-screen.
-			// tea.Batch has no ordering guarantees within its cmds, so the
-			// wipe + re-emit chain runs through tea.Sequence.
+			// Order matters: wipe MUST land before the re-emit, so use
+			// tea.Sequence (tea.Batch has no ordering guarantees).
 			//
-			// Two-step wipe: ESC[3J clears the xterm scrollback buffer
-			// (no bubbletea primitive exists for this), then tea.ClearScreen
-			// clears the visible screen the proper way. Using a single Printf
-			// with the full escape (including cursor-home) confused
-			// bubbletea's internal cursor tracking and left the textarea
-			// prompt rendering above the bottom instead of in it.
+			// ESC[2J ESC[H clears the visible viewport including content
+			// tea.Println committed inline; tea.ClearScreen alone only
+			// touches bubbletea's cell buffer, leaving inline content
+			// visible until it scrolls off. tea.ClearScreen then resyncs
+			// bubbletea's cursor so the program redraw lands correctly.
+			// Scrollback (ESC[3J) is preserved so the user can scroll back.
 			redraw := []tea.Cmd{
-				tea.Printf("\x1b[3J"),
+				tea.Printf("\x1b[2J\x1b[H"),
 				tea.ClearScreen,
 				m.commit(banner(m.g)),
 			}
