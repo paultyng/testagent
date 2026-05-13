@@ -21,8 +21,8 @@ RELEASING.md is the **policy source-of-record**: semver scope,
 the bump table keyed to testagent's public surface, two runbooks,
 recovery branches. This skill is the **executor**: it cites
 RELEASING.md sections by anchor, performs each step, and gates on
-the two decisions a human must own (version number, release-notes
-copy).
+the one combined decision a human must own (version number +
+release-notes copy).
 
 ## 1. Preflight
 
@@ -72,22 +72,7 @@ in RELEASING.md.
 Output: proposed bump (`patch` / `minor` / `major`) with file-and-
 line evidence per category.
 
-## 3. Version proposal — HUMAN GATE
-
-Compute the next version: prev tag + proposed bump. Present:
-
-```
-PREV: v0.2.1
-PROPOSED: v0.2.2 (patch)
-JUSTIFICATION: <one-liner citing the highest-impact change>
-```
-
-**Wait for explicit confirmation** before proceeding. Honor the
-`confirm-before-implementing` rule. The user may override the
-version (e.g. promote a patch to a minor for visibility) — accept
-the override and continue.
-
-## 4. COMPATIBILITY.md drift check
+## 3. COMPATIBILITY.md drift check
 
 ```bash
 task dumpcli:claude
@@ -102,12 +87,25 @@ before tagging** and hand off to the appropriate research skill:
 
 Do **not** auto-fix matrix rows from this skill. Wait for the user
 to drive the matrix update (or explicitly waive the check) before
-returning here.
+returning here. Run drift before the gate so the gate has the full
+context the user needs to confirm in one read.
 
-## 5. Release notes draft — HUMAN GATE
+## 4. Version + release notes — HUMAN GATE
 
-Generate three-bucket Markdown per [RELEASING.md § Writing release
-notes](../../../RELEASING.md):
+Compute the next version and draft the three-bucket release notes,
+then present both together for one confirmation. Same input feeds
+both: the commit list from step 2.
+
+Version proposal:
+
+```
+PREV: v0.2.1
+PROPOSED: v0.2.2 (patch)
+JUSTIFICATION: <one-liner citing the highest-impact change>
+```
+
+Release notes (per [RELEASING.md § Writing release
+notes](../../../RELEASING.md)):
 
 ```markdown
 **<one-paragraph user-visible narrative — what changed and why
@@ -123,7 +121,7 @@ it matters>**
 - <bullet> (#NN)
 ```
 
-Rules:
+Notes rules:
 - Group `BREAKING CHANGE:` commits → Breaking; `feat:` → New;
   `fix:` → Fixed. Drop `chore:`, `docs:`, `ci:`, `test:`,
   `refactor:` from the curated section — they live in the auto
@@ -135,9 +133,13 @@ Rules:
 - Omit empty buckets entirely.
 - Narrative cap: 200 words. Bullet copy: terse imperative.
 
-Present the draft. **Wait for explicit confirmation**.
+**Wait for explicit confirmation of the combined proposal** before
+proceeding. Honor the `confirm-before-implementing` rule. The user
+may override the version (e.g. promote a patch to a minor for
+visibility) and/or edit the notes copy — accept overrides and
+continue with the adjusted values.
 
-## 6. Tag + push
+## 5. Tag + push
 
 ```bash
 git tag -a vX.Y.Z -m "vX.Y.Z"
@@ -146,9 +148,9 @@ git push origin vX.Y.Z
 
 The tag push triggers `.github/workflows/release.yml` →
 goreleaser. The annotation message can be brief — the curated
-release-notes copy goes onto the GitHub Release page in step 8.
+release-notes copy goes onto the GitHub Release page in step 7.
 
-## 7. Watch CI
+## 6. Watch CI
 
 ```bash
 RUN=$(gh run list --workflow=release.yml --branch=vX.Y.Z --limit=1 \
@@ -166,10 +168,10 @@ export GH_TOKEN=$(gh auth token)
 task release:local
 ```
 
-## 8. Publish curated notes
+## 7. Publish curated notes
 
 After goreleaser publishes the auto-generated commit list, prepend
-the curated three-bucket draft from step 5:
+the curated three-bucket draft from step 4:
 
 ```bash
 EXISTING=$(gh release view vX.Y.Z --json body -q .body)
@@ -181,7 +183,7 @@ gh release edit vX.Y.Z --notes "$PAYLOAD"
 Verify the GitHub Release page renders both the narrative and the
 auto changelog.
 
-## 9. Verify
+## 8. Verify
 
 ```bash
 gh release view vX.Y.Z
@@ -199,9 +201,8 @@ missing.
 
 ## Hard constraints
 
-- **No tag push without explicit version confirmation** (step 3).
-- **No release notes published without explicit copy confirmation**
-  (step 5).
+- **No tag push or release-notes publish without explicit
+  confirmation of the combined proposal** (step 4).
 - **No matrix auto-fixes** — drift detection only; hand off to
   `research-*-coverage` skills.
 - **No edits to `RELEASING.md`** from this skill. Policy changes
