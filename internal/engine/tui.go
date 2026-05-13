@@ -386,27 +386,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 		}
 		if msg.outcome.Restart {
-			// /clear and /compact wipe screen + scrollback (VT escape
-			// sequences ESC[2J ESC[3J ESC[H — same shape codex and the
-			// pre-fullscreen Claude Code use), then re-emit the banner,
-			// status line, and the user-echo for the slash that triggered
-			// the lifecycle. /compact additionally prints a Compacted
-			// marker. Hook lifecycle (PreCompact → SessionEnd →
-			// SessionStart → PostCompact) fires via cmdSlashRestart.
-			// Reset the test-observable scrollback slice so it reflects
-			// what's visible to the user after the wipe.
+			// /clear and /compact wipe the visible viewport, then re-emit
+			// the banner, status line, and user-echo for the slash that
+			// triggered the lifecycle. /compact additionally prints a
+			// Compacted marker. Hook lifecycle (PreCompact → SessionEnd
+			// → SessionStart → PostCompact) fires via cmdSlashRestart.
+			// Scrollback is preserved so the user can scroll back to
+			// inspect prior turns. Reset the test-observable scrollback
+			// slice so it reflects what's visible after the wipe.
 			m.scrollback = nil
 			// Order matters: wipe MUST land before the re-emit, so use
 			// tea.Sequence (tea.Batch has no ordering guarantees).
 			//
-			// ESC[2J ESC[H clears the visible viewport including content
-			// tea.Println committed inline; tea.ClearScreen alone only
-			// touches bubbletea's cell buffer, leaving inline content
-			// visible until it scrolls off. tea.ClearScreen then resyncs
-			// bubbletea's cursor so the program redraw lands correctly.
-			// Scrollback (ESC[3J) is preserved so the user can scroll back.
+			// ESC[2J wipes inline tea.Println content from the visible
+			// viewport; tea.ClearScreen alone only resets bubbletea's
+			// cell buffer. Cursor-home is left to tea.ClearScreen so
+			// bubbletea's internal cursor tracking stays in sync.
 			redraw := []tea.Cmd{
-				tea.Printf("\x1b[2J\x1b[H"),
+				tea.Printf("\x1b[2J"),
 				tea.ClearScreen,
 				m.commit(banner(m.g)),
 			}
