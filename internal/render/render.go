@@ -1,8 +1,8 @@
 // Package render holds testagent's intent-named styling tokens, inspired
 // by Catppuccin Mocha.
 //
-// testagent's deployed canvas today is a dark terminal (the demo/hero.tape
-// runs `Set Theme "Catppuccin Mocha"`), so foreground colors are picked
+// testagent's deployed canvas today is a dark terminal (the demo tapes
+// run `Set Theme "Catppuccin Mocha"`), so foreground colors are picked
 // from the Mocha palette. The tokens are organized by intent — what the
 // styled bytes mean — not by hue:
 //

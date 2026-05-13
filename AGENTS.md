@@ -41,6 +41,8 @@ internal/shellrun/          # DefaultShellCommand + process-tree teardown (share
 internal/mcp/               # Client (MCP HTTP handshake + tools/call)
 internal/slash/             # Handler (slash-command grammar)
 internal/render/            # lipgloss style tokens + intent helpers
+internal/rootflags/         # Shared global-flag parsing for cmd/claude + cmd/codex
+internal/ptytest/           # PTY harness for the Unix-only pty_e2e_test.go
 e2e_test.go                 # builds the binary, pipes stdin, asserts behavior
 Taskfile.yaml               # build / test / lint / ci / gen:demo / dumpcli:claude
 ```
@@ -54,7 +56,7 @@ The argv shape is `testagent [global-flags] <subcommand> [subcommand-flags]`. Ba
 
 ## Fixtures
 
-Real-Claude protocol shapes are captured from a real Claude session run against an orchestrator that records hook POSTs and MCP JSON-RPC frames. Captures live under `testdata/captures/` and are **gitignored** (they contain real session content). Sanitized, OSS-safe fixtures are committed under `testdata/fixtures/` as phases that need them are authored.
+Real-Claude protocol shapes are captured from a real Claude session run against an orchestrator that records hook POSTs and MCP JSON-RPC frames. Captures live under `testdata/captures/` and are **gitignored** (they contain real session content). When a phase requires committed fixtures, sanitize them and land them under `testdata/fixtures/` — the directory is created lazily by the first phase that needs it.
 
 ## Demos
 
