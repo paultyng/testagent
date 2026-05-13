@@ -629,9 +629,13 @@ func TestModel_EscDuringStreamingCommitsPartial(t *testing.T) {
 }
 
 // drainCmds recursively calls every leaf tea.Cmd inside cmd, flattening
-// tea.BatchMsg / tea.sequenceMsg returns. Used by tests that want to
-// observe the side effects of hook-firing cmds (e.g. an HTTP POST landing
-// on a spy server) without driving the full bubbletea runtime.
+// tea.BatchMsg returns. Used by tests that want to observe the side
+// effects of hook-firing cmds (e.g. an HTTP POST landing on a spy server)
+// without driving the full bubbletea runtime.
+//
+// tea.sequenceMsg (from tea.Sequence) is intentionally not handled; all
+// cancel-path cmds use tea.Batch. Extend when a test needs to drain
+// Sequence-wrapped cmds.
 func drainCmds(cmd tea.Cmd) {
 	if cmd == nil {
 		return
