@@ -514,10 +514,12 @@ func TestModel_ViewShowsBottomPaneContent(t *testing.T) {
 }
 
 // TestModel_EscDuringStreamingCommitsPartial asserts Esc mid-stream
-// commits the partial streamLine + an Interrupted marker to scrollback,
-// fires Stop with stop_hook_active=true, and clears streaming state.
-// Covers the second branch of the cancelMsg handler that
-// TestModel_EscCancelsThinking doesn't exercise.
+// commits the partial streamLine + an Interrupted marker to scrollback
+// and clears streaming state. Covers the second branch of the cancelMsg
+// handler that TestModel_EscCancelsThinking doesn't exercise.
+// Stop-hook firing (cmdHookStop with stop_hook_active=true) happens via
+// a returned tea.Cmd; this test doesn't inspect the cmd, so the hook
+// payload itself isn't asserted here.
 func TestModel_EscDuringStreamingCommitsPartial(t *testing.T) {
 	t.Parallel()
 
