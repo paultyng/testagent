@@ -241,7 +241,7 @@ func TestMCPClient_HandshakeAndTools(t *testing.T) {
 
 			fake := &fakeMCPServer{
 				name:   "fileserver",
-				tools:  stdTools("idea"),
+				tools:  stdTools("demo"),
 				useSSE: tt.useSSE,
 			}
 			ts := httptest.NewServer(fake.handler())
@@ -283,8 +283,8 @@ func TestMCPClient_HandshakeAndTools(t *testing.T) {
 				if tool.Server != "fileserver" {
 					t.Errorf("tool.Server = %q, want fileserver", tool.Server)
 				}
-				if !strings.HasPrefix(tool.Name, "idea_") {
-					t.Errorf("tool.Name = %q, want idea_ prefix", tool.Name)
+				if !strings.HasPrefix(tool.Name, "demo_") {
+					t.Errorf("tool.Name = %q, want demo_ prefix", tool.Name)
 				}
 				if len(tool.InputSchema) == 0 {
 					t.Errorf("tool %q has empty InputSchema", tool.Name)
@@ -297,7 +297,7 @@ func TestMCPClient_HandshakeAndTools(t *testing.T) {
 func TestMCPClient_HeadersPropagated(t *testing.T) {
 	t.Parallel()
 
-	fake := &fakeMCPServer{name: "fileserver", tools: stdTools("idea")}
+	fake := &fakeMCPServer{name: "fileserver", tools: stdTools("demo")}
 	ts := httptest.NewServer(fake.handler())
 	defer ts.Close()
 
@@ -371,9 +371,9 @@ func TestMCPClient_Call(t *testing.T) {
 
 	fake := &fakeMCPServer{
 		name:  "fileserver",
-		tools: stdTools("idea"),
+		tools: stdTools("demo"),
 		callReply: func(name string, args map[string]any) ([]map[string]any, bool) {
-			if name == "idea_get" {
+			if name == "demo_get" {
 				id, _ := args["id"].(string)
 				return []map[string]any{{"type": "text", "text": "id=" + id}}, false
 			}
@@ -391,7 +391,7 @@ func TestMCPClient_Call(t *testing.T) {
 	}
 	defer c.Close()
 
-	res, err := c.Call(context.Background(), "fileserver.idea_get", map[string]any{"id": "42"})
+	res, err := c.Call(context.Background(), "fileserver.demo_get", map[string]any{"id": "42"})
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -409,7 +409,7 @@ func TestMCPClient_Call(t *testing.T) {
 func TestMCPClient_CallUnknown(t *testing.T) {
 	t.Parallel()
 
-	fake := &fakeMCPServer{name: "fileserver", tools: stdTools("idea")}
+	fake := &fakeMCPServer{name: "fileserver", tools: stdTools("demo")}
 	ts := httptest.NewServer(fake.handler())
 	defer ts.Close()
 
@@ -425,10 +425,10 @@ func TestMCPClient_CallUnknown(t *testing.T) {
 		name string
 		qual string
 	}{
-		{"unknown server", "nope.idea_get"},
+		{"unknown server", "nope.demo_get"},
 		{"unknown tool on known server", "fileserver.no_such_tool"},
 		{"missing dot", "fileservertool"},
-		{"empty server", ".idea_get"},
+		{"empty server", ".demo_get"},
 		{"empty tool", "fileserver."},
 	}
 	// Subtests are sequential here: they all share the same parent client,
@@ -447,7 +447,7 @@ func TestMCPClient_CallUnknown(t *testing.T) {
 func TestMCPClient_CloseIdempotent(t *testing.T) {
 	t.Parallel()
 
-	fake := &fakeMCPServer{name: "fileserver", tools: stdTools("idea")}
+	fake := &fakeMCPServer{name: "fileserver", tools: stdTools("demo")}
 	ts := httptest.NewServer(fake.handler())
 	defer ts.Close()
 
@@ -473,7 +473,7 @@ func TestMCPClient_CloseIdempotent(t *testing.T) {
 func TestMCPClient_ConnectIdempotent(t *testing.T) {
 	t.Parallel()
 
-	fake := &fakeMCPServer{name: "fileserver", tools: stdTools("idea")}
+	fake := &fakeMCPServer{name: "fileserver", tools: stdTools("demo")}
 	ts := httptest.NewServer(fake.handler())
 	defer ts.Close()
 

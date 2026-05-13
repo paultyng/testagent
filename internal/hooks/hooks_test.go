@@ -196,7 +196,7 @@ func TestSender_OnPreToolUse_Payload(t *testing.T) {
 func TestSender_OnToolUse_PayloadAndHeaders(t *testing.T) {
 	t.Parallel()
 	srv, recs, mu := captureServer(t)
-	sender := newTestSender(t, matchersFor(PostToolUse, map[string]string{"X-Idea-Slug": "demo"}, srv.URL+"/hooks/tool-use"))
+	sender := newTestSender(t, matchersFor(PostToolUse, map[string]string{"X-Session-Slug": "demo"}, srv.URL+"/hooks/tool-use"))
 
 	toolInput := map[string]any{"command": "ls -la"}
 	toolResponse := map[string]any{"stdout": "file1\nfile2", "exit_code": float64(0)}
@@ -210,8 +210,8 @@ func TestSender_OnToolUse_PayloadAndHeaders(t *testing.T) {
 		t.Fatalf("expected 1 request, got %d", len(*recs))
 	}
 	rec := (*recs)[0]
-	if got := rec.headers.Get("X-Idea-Slug"); got != "demo" {
-		t.Errorf("X-Idea-Slug = %q, want demo", got)
+	if got := rec.headers.Get("X-Session-Slug"); got != "demo" {
+		t.Errorf("X-Session-Slug = %q, want demo", got)
 	}
 	if got := rec.body["hook_event_name"]; got != "PostToolUse" {
 		t.Errorf("hook_event_name = %v", got)
