@@ -404,8 +404,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// the banner can race the escape and disappear off-screen.
 			// tea.Batch has no ordering guarantees within its cmds, so the
 			// wipe + re-emit chain runs through tea.Sequence.
+			//
+			// Two-step wipe: ESC[3J clears the xterm scrollback buffer
+			// (no bubbletea primitive exists for this), then tea.ClearScreen
+			// clears the visible screen the proper way. Using a single Printf
+			// with the full escape (including cursor-home) confused
+			// bubbletea's internal cursor tracking and left the textarea
+			// prompt rendering above the bottom instead of in it.
 			redraw := []tea.Cmd{
-				tea.Printf("\x1b[3J\x1b[2J\x1b[H"),
+				tea.Printf("\x1b[3J"),
+				tea.ClearScreen,
 				m.commit(banner(m.g)),
 			}
 			if m.g.StatusLine != "" {

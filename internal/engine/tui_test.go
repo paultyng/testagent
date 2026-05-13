@@ -513,6 +513,39 @@ func TestModel_ViewShowsBottomPaneContent(t *testing.T) {
 	})
 }
 
+// TestModel_SlashLifecyclePreservesInputPrompt asserts /clear and
+// /compact don't break the textarea prompt rendering. Real-world bug:
+// the original combined-escape Printf left bubbletea's cursor tracking
+// confused and the textarea View() rendered without the "> " prefix
+// after /clear; /compact happened to mask it (the extra Compacted
+// commit nudged the redraw). Pins both branches to render the prompt
+// after the lifecycle dispatch.
+func TestModel_SlashLifecyclePreservesInputPrompt(t *testing.T) {
+	t.Parallel()
+
+	for _, slashLine := range []string{"/clear", "/compact"} {
+		t.Run(slashLine, func(t *testing.T) {
+			t.Parallel()
+			m := newTestModel(nil)
+			m = typeInto(m, slashLine)
+			m, cmd := pressEnter(m)
+			done := firstMsgOfType[slashDoneMsg](t, cmd)
+			newM, _ := m.Update(done)
+			m = newM.(model)
+
+			// Textarea must still have the prompt configured and focus
+			// preserved so the next user keystroke lands.
+			if !m.input.Focused() {
+				t.Errorf("textarea lost focus after %s", slashLine)
+			}
+			frame := m.View().Content
+			if !strings.Contains(frame, render.Prompt()) {
+				t.Errorf("View frame missing input prompt %q after %s:\n%s", render.Prompt(), slashLine, frame)
+			}
+		})
+	}
+}
+
 // TestModel_EscDuringStreamingCommitsPartial asserts Esc mid-stream
 // commits the partial streamLine + an Interrupted marker to scrollback,
 // clears streaming state, and fires Stop with stop_hook_active=true and
