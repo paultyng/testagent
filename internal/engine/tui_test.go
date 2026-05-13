@@ -514,16 +514,31 @@ func TestModel_ViewShowsBottomPaneContent(t *testing.T) {
 }
 
 // TestModel_EscDuringStreamingCommitsPartial asserts Esc mid-stream
-// commits the partial streamLine + an Interrupted marker to scrollback
-// and clears streaming state. Covers the second branch of the cancelMsg
-// handler that TestModel_EscCancelsThinking doesn't exercise.
-// Stop-hook firing (cmdHookStop with stop_hook_active=true) happens via
-// a returned tea.Cmd; this test doesn't inspect the cmd, so the hook
-// payload itself isn't asserted here.
+// commits the partial streamLine + an Interrupted marker to scrollback,
+// clears streaming state, and fires Stop with stop_hook_active=true and
+// the reconstructed partial body. Covers the second branch of the
+// cancelMsg handler that TestModel_EscCancelsThinking doesn't exercise.
 func TestModel_EscDuringStreamingCommitsPartial(t *testing.T) {
 	t.Parallel()
 
-	m := newTestModel(nil)
+	var (
+		mu    sync.Mutex
+		stops []map[string]any
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		stops = append(stops, body)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	hookSender := hooks.NewSender(map[string][]hooks.Matcher{
+		hooks.Stop: {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/stop", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
+	m := newTestModel(&testOpts{Hooks: hookSender})
 	m = typeInto(m, "hello world here")
 	m, _ = pressEnter(m)
 	// Transition to streaming.
@@ -542,14 +557,22 @@ func TestModel_EscDuringStreamingCommitsPartial(t *testing.T) {
 	}
 	partialLine := m.streamLine // capture before cancel resets
 
-	// Esc → cancelMsg → commit partial + Interrupted.
+	// Esc → cancelMsg → commit partial + Interrupted + fire Stop.
 	newM, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = newM.(model)
 	if cmd == nil {
 		t.Fatal("expected cancelMsg cmd from Esc")
 	}
-	newM, _ = m.Update(cmd())
+	newM, cancelCmd := m.Update(cmd())
 	m = newM.(model)
+
+	// Execute every cmd returned from the cancelMsg Update so cmdHookStop
+	// actually POSTs to the spy server. The returned cmd is a tea.Batch
+	// containing the commit Println cmds plus cmdHookStop; iterate to find
+	// and invoke each.
+	if cancelCmd != nil {
+		drainCmds(cancelCmd)
+	}
 
 	if m.streaming {
 		t.Errorf("expected streaming=false after Esc")
@@ -573,6 +596,52 @@ func TestModel_EscDuringStreamingCommitsPartial(t *testing.T) {
 	interruptIdx := strings.Index(joined, "Interrupted")
 	if partialIdx >= interruptIdx {
 		t.Errorf("expected partial line before Interrupted; partial at %d, interrupt at %d", partialIdx, interruptIdx)
+	}
+
+	// Stop hook payload assertions: cmdHookStop fires asynchronously via
+	// HTTP POST. Allow a brief moment for the goroutine to land.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		got := len(stops)
+		mu.Unlock()
+		if got >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(stops) != 1 {
+		t.Fatalf("expected 1 Stop hook POST, got %d", len(stops))
+	}
+	body := stops[0]
+	if body["stop_hook_active"] != true {
+		t.Errorf("Stop body stop_hook_active = %v, want true", body["stop_hook_active"])
+	}
+	// The partial body submitted to the hook is "[Name] <space-joined tokens>".
+	// With 2/4 tokens of "hello world here" advanced, the first two tokens are
+	// "hello" and "world".
+	wantPartial := "[Test] hello world"
+	if body["last_assistant_message"] != wantPartial {
+		t.Errorf("Stop body last_assistant_message = %q, want %q", body["last_assistant_message"], wantPartial)
+	}
+}
+
+// drainCmds recursively calls every leaf tea.Cmd inside cmd, flattening
+// tea.BatchMsg / tea.sequenceMsg returns. Used by tests that want to
+// observe the side effects of hook-firing cmds (e.g. an HTTP POST landing
+// on a spy server) without driving the full bubbletea runtime.
+func drainCmds(cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	msg := cmd()
+	switch v := msg.(type) {
+	case tea.BatchMsg:
+		for _, inner := range v {
+			drainCmds(inner)
+		}
 	}
 }
 
