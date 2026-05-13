@@ -22,7 +22,6 @@ import (
 type testOpts struct {
 	Name       string
 	ThinkDelay time.Duration
-	HistoryCap int
 	Hooks      *hooks.Sender
 	MCP        *mcp.Client
 }
@@ -34,7 +33,6 @@ func newTestModel(opt *testOpts) model {
 		Name:       "Test",
 		SessionID:  "sid-test",
 		ThinkDelay: 10 * time.Millisecond,
-		HistoryCap: 1000,
 	}
 	d := Deps{
 		Hooks: hooks.NewSender(nil, "sid-test", "/tmp", "", "default", nil),
@@ -46,9 +44,6 @@ func newTestModel(opt *testOpts) model {
 		}
 		if opt.ThinkDelay != 0 {
 			g.ThinkDelay = opt.ThinkDelay
-		}
-		if opt.HistoryCap != 0 {
-			g.HistoryCap = opt.HistoryCap
 		}
 		if opt.Hooks != nil {
 			d.Hooks = opt.Hooks

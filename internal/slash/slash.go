@@ -114,9 +114,10 @@ type Outcome struct {
 }
 
 // DispatchString is the TUI-friendly entry point. It captures all rendered
-// output as a string (so the model can append it to history) and returns it
-// alongside the control-flow outcome. Concurrent-safe: each call writes to
-// its own buffer, so multiple in-flight goroutines never interfere.
+// output as a string (so the model can commit it above the program block
+// via tea.Println) and returns it alongside the control-flow outcome.
+// Concurrent-safe: each call writes to its own buffer, so multiple
+// in-flight goroutines never interfere.
 func (h *Handler) DispatchString(ctx context.Context, line string) (string, Outcome) {
 	var buf bytes.Buffer
 	outcome := h.dispatchTo(ctx, line, &buf)

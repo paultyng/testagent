@@ -155,6 +155,15 @@ func newModel(g Globals, d Deps) model {
 		key.WithHelp("shift+enter", "insert newline"),
 	)
 	ta.KeyMap = km
+	// Flatten the focused/blurred cursor-line tint; textarea ships with a
+	// full-row background on the active line which makes the input visually
+	// distinct from scrollback above. textinput (and real Claude Code's
+	// input) don't have one. Override to a plain style so the input row
+	// blends with surrounding content.
+	styles := ta.Styles()
+	styles.Focused.CursorLine = lipgloss.NewStyle()
+	styles.Blurred.CursorLine = lipgloss.NewStyle()
+	ta.SetStyles(styles)
 	ta.Focus()
 
 	sp := spinner.New()
@@ -222,13 +231,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	// Lazy boot: commit the banner + status line once via tea.Println so
-	// they land in native scrollback at the top of the session.
+	// they land in native scrollback at the top of the session. Sequenced
+	// so the status line renders under the banner, not above it.
 	if !m.bootDone {
 		m.bootDone = true
-		cmds = append(cmds, m.commit(banner(m.g)))
+		boot := []tea.Cmd{m.commit(banner(m.g))}
 		if m.g.StatusLine != "" {
-			cmds = append(cmds, m.commit(render.MuteStyle.Render("["+m.g.StatusLine+"]")))
+			boot = append(boot, m.commit(render.MuteStyle.Render("["+m.g.StatusLine+"]")))
 		}
+		cmds = append(cmds, tea.Sequence(boot...))
 	}
 
 	switch msg := msg.(type) {
@@ -389,15 +400,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// observable scrollback slice so it reflects what's visible
 			// to the user after the wipe.
 			m.scrollback = nil
-			cmds = append(cmds, tea.Printf("\x1b[3J\x1b[2J\x1b[H"))
-			cmds = append(cmds, m.commit(banner(m.g)))
+			// Order matters: wipe MUST land before the re-emit, otherwise
+			// the banner can race the escape and disappear off-screen.
+			// tea.Batch has no ordering guarantees within its cmds, so the
+			// wipe + re-emit chain runs through tea.Sequence.
+			redraw := []tea.Cmd{
+				tea.Printf("\x1b[3J\x1b[2J\x1b[H"),
+				m.commit(banner(m.g)),
+			}
 			if m.g.StatusLine != "" {
-				cmds = append(cmds, m.commit(render.MuteStyle.Render("["+m.g.StatusLine+"]")))
+				redraw = append(redraw, m.commit(render.MuteStyle.Render("["+m.g.StatusLine+"]")))
 			}
-			cmds = append(cmds, m.commit(render.Prompt()+"/"+slashName(msg.outcome.RestartReason, msg.outcome.CompactTrigger)))
+			redraw = append(redraw, m.commit(render.Prompt()+"/"+slashName(msg.outcome.RestartReason, msg.outcome.CompactTrigger)))
 			if msg.outcome.RestartReason == "compact" {
-				cmds = append(cmds, m.commit(render.ThoughtMarker("Compacted")))
+				redraw = append(redraw, m.commit(render.ThoughtMarker("Compacted")))
 			}
+			cmds = append(cmds, tea.Sequence(redraw...))
 			cmds = append(cmds, cmdSlashRestart(m.d.Slash, m.d.Hooks, msg.outcome.RestartReason, msg.outcome.CompactTrigger))
 			return m, tea.Batch(cmds...)
 		}
@@ -538,6 +556,14 @@ func (m model) View() tea.View {
 }
 
 func cmdThink(delay, streamDelay time.Duration, tag int, name, body string) tea.Cmd {
+	if delay <= 0 {
+		// Synchronous fast-path: dispatch the thinkingDoneMsg without going
+		// through a timer goroutine. Keeps deterministic ordering in tests
+		// and snappier behavior when callers want "no spinner".
+		return func() tea.Msg {
+			return thinkingDoneMsg{tag: tag, name: name, body: body, streamDelay: streamDelay}
+		}
+	}
 	return tea.Tick(delay, func(time.Time) tea.Msg {
 		return thinkingDoneMsg{tag: tag, name: name, body: body, streamDelay: streamDelay}
 	})
