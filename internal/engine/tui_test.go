@@ -15,6 +15,7 @@ import (
 
 	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/mcp"
+	"github.com/paultyng/testagent/internal/render"
 	"github.com/paultyng/testagent/internal/slash"
 )
 
@@ -209,6 +210,82 @@ func TestModel_SlashDispatchAppendsRendered(t *testing.T) {
 	}
 	if !strings.Contains(joined, "hi") {
 		t.Errorf("history missing panel content:\n%s", joined)
+	}
+}
+
+// TestModel_SlashLifecyclePrunesScrollback covers /clear, /compact, and
+// /fake-auto-compact across both header shapes (banner only vs banner +
+// status line). Each case asserts:
+//   - history is pruned to the header prefix
+//   - the user-echo line for the slash command survives
+//   - a "Compacted" marker is present only for the two compact flavors
+//   - no leftover lines from prior turns survive
+func TestModel_SlashLifecyclePrunesScrollback(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		statusLine  string
+		slashLine   string
+		wantMarker  bool
+		wantHeader  []string
+	}{
+		{name: "clear-no-status", slashLine: "/clear", wantHeader: []string{"BANNER"}},
+		{name: "clear-with-status", statusLine: "hooks: stop", slashLine: "/clear", wantHeader: []string{"BANNER", render.MuteStyle.Render("[hooks: stop]")}},
+		{name: "compact-no-status", slashLine: "/compact", wantMarker: true, wantHeader: []string{"BANNER"}},
+		{name: "compact-with-status", statusLine: "hooks: stop", slashLine: "/compact", wantMarker: true, wantHeader: []string{"BANNER", render.MuteStyle.Render("[hooks: stop]")}},
+		{name: "fake-auto-compact-no-status", slashLine: "/fake-auto-compact", wantMarker: true, wantHeader: []string{"BANNER"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newTestModel(&testOpts{HistoryCap: 1000})
+			m.g.StatusLine = tc.statusLine
+			m.history = append(m.history, tc.wantHeader...)
+			// Prior conversation noise that should NOT survive.
+			m.history = append(m.history, "> earlier prompt", "Thought for 10ms", "[Test] earlier prompt")
+
+			m = typeInto(m, tc.slashLine)
+			m, cmd := pressEnter(m)
+			if cmd == nil {
+				t.Fatal("expected cmd from slash dispatch")
+			}
+			msg := cmd()
+			done, ok := msg.(slashDoneMsg)
+			if !ok {
+				t.Fatalf("expected slashDoneMsg, got %T", msg)
+			}
+			newM, _ := m.Update(done)
+			m = newM.(model)
+
+			wantLen := len(tc.wantHeader) + 1 // + user echo
+			if tc.wantMarker {
+				wantLen++ // + "Compacted"
+			}
+			if len(m.history) != wantLen {
+				t.Fatalf("history len = %d, want %d: %v", len(m.history), wantLen, m.history)
+			}
+			for i, h := range tc.wantHeader {
+				if m.history[i] != h {
+					t.Errorf("history[%d] = %q, want %q", i, m.history[i], h)
+				}
+			}
+			echoIdx := len(tc.wantHeader)
+			if !strings.Contains(m.history[echoIdx], tc.slashLine) {
+				t.Errorf("history[%d] = %q, want user echo containing %q", echoIdx, m.history[echoIdx], tc.slashLine)
+			}
+			joined := strings.Join(m.history, "\n")
+			if tc.wantMarker {
+				if !strings.Contains(m.history[echoIdx+1], "Compacted") {
+					t.Errorf("history[%d] = %q, want Compacted marker", echoIdx+1, m.history[echoIdx+1])
+				}
+			} else if strings.Contains(joined, "Compacted") {
+				t.Errorf("history must not contain Compacted marker for %s: %v", tc.slashLine, m.history)
+			}
+			if strings.Contains(joined, "earlier prompt") {
+				t.Errorf("history still contains prior turn for %s: %v", tc.slashLine, m.history)
+			}
+		})
 	}
 }
 

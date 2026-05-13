@@ -85,8 +85,8 @@ Alphabetical by long name. Short flags shown inline. Global flags (common across
 | Command | testagent | Notes |
 |---------|-----------|-------|
 | `/add-dir <path>` | `✗ planned` | |
-| `/clear` | partial | Fires `SessionEnd(reason=clear)` → `SessionStart(source=clear)`; screen wipe not done |
-| `/compact` | ✓ supported | Fires `PreCompact(trigger=manual)` → `SessionEnd(reason=compact)` → `SessionStart(source=compact)` → `PostCompact(trigger=manual)` |
+| `/clear` | ✓ supported | Fires `SessionEnd(reason=clear)` → `SessionStart(source=clear)`; scrollback pruned to banner + the `/clear` user-echo line |
+| `/compact` | ✓ supported | Fires `PreCompact(trigger=manual)` → `SessionEnd(reason=compact)` → `SessionStart(source=compact)` → `PostCompact(trigger=manual)`; scrollback pruned to banner + the `/compact` user-echo line + a `Compacted` marker |
 | `/config` | `not relevant` | No settings UI |
 | `/context` | `not relevant` | No context window |
 | `/exit` | ✓ supported | Accepts optional exit code |
@@ -241,9 +241,9 @@ Visible release commands from the `SlashCommand` enum in `codex-rs/tui/src/slash
 | `/agent` | `✗ planned` | Switch active agent thread |
 | `/apps` | `not relevant` | App/connector management; no connector system |
 | `/approve` | `not relevant` | Approve one auto-review denial retry; no approval system |
-| `/clear` | partial | Fires `session_end(reason=clear)` → `session_start(source=clear)`; screen wipe not done |
+| `/clear` | ✓ supported | Fires `session_end(reason=clear)` → `session_start(source=clear)`; scrollback pruned to banner + the `/clear` user-echo line. Real codex's post-`/clear` rendering not yet verified — mirrors claude shape for now |
 | `/collab` | `not relevant` | Collaboration mode (experimental); requires model |
-| `/compact` | ✓ supported | Fires `pre_compact(trigger=manual)` → `session_end(reason=compact)` → `session_start(source=compact)` → `post_compact(trigger=manual)` |
+| `/compact` | ✓ supported | Fires `pre_compact(trigger=manual)` → `session_end(reason=compact)` → `session_start(source=compact)` → `post_compact(trigger=manual)`; scrollback pruned to banner + the `/compact` user-echo line + a `Compacted` marker. Real codex's post-`/compact` rendering not yet verified — mirrors claude shape for now |
 | `/copy` | `not relevant` | Copy last response to clipboard; TUI-internal |
 | `/debug-config` | `not relevant` | Config layer debug view; no config system |
 | `/diff` | `not relevant` | Show git diff including untracked; TUI-internal |

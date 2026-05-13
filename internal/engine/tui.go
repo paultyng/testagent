@@ -352,12 +352,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		if msg.outcome.Restart {
-			// Simulate /clear- or /compact-style reset on the wire only:
-			// flush any pending /fake-tool, then SessionEnd then SessionStart
-			// with the same matcher value, all in one tea.Cmd goroutine so
-			// the ordering is sequential. tea.Batch would run them
+			// Simulate /clear- or /compact-style reset on the wire AND in
+			// the UI: flush any pending /fake-tool, then SessionEnd then
+			// SessionStart with the same matcher value (plus Pre/PostCompact
+			// for compact-flavored lifecycles), all in one tea.Cmd goroutine
+			// so the ordering is sequential. tea.Batch would run them
 			// concurrently and lose the back-to-back contract on the wire.
-			// History/scrollback is not cleared — that's a future UI primitive.
+			//
+			// Scrollback handling mirrors real Claude Code: keep the banner
+			// (and status line), keep the user-echo line for the slash
+			// command that triggered the lifecycle, drop everything else.
+			// For /compact, render a "Compacted" marker so the post-state
+			// is visually distinguishable from /clear. /fake-auto-compact
+			// gets the same treatment for now (real upstream renders the
+			// auto-compact marker inline; deferring the divergence for
+			// future research). Real codex's post-/compact rendering is
+			// also unconfirmed; this matches claude's shape until we verify.
+			headerEnd := 1
+			if m.g.StatusLine != "" {
+				headerEnd = 2
+			}
+			// History tail at this point: [user echo of slash line,
+			// rendered slash output]. cmdClear / cmdCompact always
+			// render so the second-to-last entry is the user echo.
+			var userEcho string
+			if len(m.history) >= headerEnd+2 {
+				userEcho = m.history[len(m.history)-2]
+			}
+			m.history = m.history[:headerEnd:headerEnd]
+			if userEcho != "" {
+				m.history = append(m.history, userEcho)
+			}
+			if msg.outcome.RestartReason == "compact" {
+				m.history = append(m.history, render.ThoughtMarker("Compacted"))
+			}
 			cmds = append(cmds, cmdSlashRestart(m.d.Slash, m.d.Hooks, msg.outcome.RestartReason, msg.outcome.CompactTrigger))
 			break
 		}
