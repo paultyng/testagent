@@ -398,12 +398,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Order matters: wipe MUST land before the re-emit, so use
 			// tea.Sequence (tea.Batch has no ordering guarantees).
 			//
-			// ESC[2J wipes inline tea.Println content from the visible
-			// viewport; tea.ClearScreen alone only resets bubbletea's
-			// cell buffer. Cursor-home is left to tea.ClearScreen so
-			// bubbletea's internal cursor tracking stays in sync.
+			// ESC[2J wipes inline tea.Println content; ESC[H pulls the
+			// terminal cursor to the top so the re-emitted banner lands
+			// at row 1 (without it, new content stacks just above the
+			// program block at its prior position, shoving the prior
+			// turn into scrollback on each /clear). tea.ClearScreen
+			// then resyncs bubbletea's internal cursor state.
 			redraw := []tea.Cmd{
-				tea.Printf("\x1b[2J"),
+				tea.Printf("\x1b[2J\x1b[H"),
 				tea.ClearScreen,
 				m.commit(banner(m.g)),
 			}
