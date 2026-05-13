@@ -143,8 +143,8 @@ func newModel(g Globals, d Deps) model {
 	ta.ShowLineNumbers = false
 	ta.DynamicHeight = true
 	ta.MinHeight = 1
-	ta.MaxHeight = 0   // no cap; expands to fit content
-	ta.CharLimit = 0   // unlimited
+	ta.MaxHeight = 0 // no cap; expands to fit content
+	ta.CharLimit = 0 // unlimited
 	// Plain Enter submits; Shift+Enter inserts a newline (matches Claude
 	// Code / Codex CLI conventions). The default textarea KeyMap binds
 	// Enter to InsertNewline; we move InsertNewline to shift+enter so our
