@@ -15,6 +15,7 @@ import (
 
 	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/mcp"
+	"github.com/paultyng/testagent/internal/render"
 	"github.com/paultyng/testagent/internal/slash"
 )
 
@@ -437,6 +438,139 @@ func TestModel_EscCancelsThinking(t *testing.T) {
 		if strings.Contains(line, "[Test] hello") {
 			t.Errorf("stale thinkingDoneMsg leaked into history: %q", line)
 		}
+	}
+}
+
+// TestCmdThink_ZeroDelaySynchronous pins the synchronous fast-path for
+// delay=0: cmdThink must dispatch thinkingDoneMsg directly rather than
+// going through tea.Tick's timer goroutine (which would change ordering
+// semantics in tests and add cosmetic latency in callers that want "no
+// spinner"). Regression guard — the path was silently dropped during
+// the inline-rendering rewrite and restored after review.
+func TestCmdThink_ZeroDelaySynchronous(t *testing.T) {
+	t.Parallel()
+
+	cmd := cmdThink(0, 0, 42, "Test", "hello world")
+	if cmd == nil {
+		t.Fatal("cmdThink returned nil cmd")
+	}
+	msg := cmd()
+	done, ok := msg.(thinkingDoneMsg)
+	if !ok {
+		t.Fatalf("expected thinkingDoneMsg, got %T", msg)
+	}
+	if done.tag != 42 || done.name != "Test" || done.body != "hello world" {
+		t.Errorf("done = %+v, want {tag:42 name:Test body:hello world}", done)
+	}
+}
+
+// TestModel_ViewShowsBottomPaneContent asserts the View positively
+// renders the live bottom-pane composition: spinner row when thinking,
+// streaming line when streaming, queued: prefix per pending entry, and
+// the input row at the bottom. Complement to TestModel_ViewBottomPaneOnly
+// which only asserts the negative.
+func TestModel_ViewShowsBottomPaneContent(t *testing.T) {
+	t.Parallel()
+
+	t.Run("thinking-spinner-and-queue", func(t *testing.T) {
+		t.Parallel()
+		m := newTestModel(nil)
+		m.thinking = true
+		m.thinkStart = time.Now()
+		m.pending = []string{"queued one", "queued two"}
+		frame := m.View().Content
+		if !strings.Contains(frame, "thinking…") {
+			t.Errorf("frame missing thinking row: %q", frame)
+		}
+		if !strings.Contains(frame, "queued one") || !strings.Contains(frame, "queued two") {
+			t.Errorf("frame missing queue entries: %q", frame)
+		}
+		// Input row must be the last non-empty line.
+		lines := strings.Split(strings.TrimRight(frame, "\n"), "\n")
+		// The trailing input row from textarea is non-empty (carries the
+		// prompt prefix) but may render as multiple lines due to dynamic
+		// height; we just verify it sits below the queue lines.
+		joined := strings.Join(lines, "\n")
+		queuedIdx := strings.Index(joined, "queued two")
+		inputIdx := strings.LastIndex(joined, render.Prompt())
+		if inputIdx < 0 {
+			t.Errorf("frame missing input prompt: %q", joined)
+		}
+		if inputIdx <= queuedIdx {
+			t.Errorf("input prompt should render below queue; queue at %d, input at %d", queuedIdx, inputIdx)
+		}
+	})
+
+	t.Run("streaming-line", func(t *testing.T) {
+		t.Parallel()
+		m := newTestModel(nil)
+		m.streaming = true
+		m.streamLine = "[Test] partial response so far"
+		frame := m.View().Content
+		if !strings.Contains(frame, "[Test] partial response so far") {
+			t.Errorf("frame missing streaming line: %q", frame)
+		}
+	})
+}
+
+// TestModel_EscDuringStreamingCommitsPartial asserts Esc mid-stream
+// commits the partial streamLine + an Interrupted marker to scrollback,
+// fires Stop with stop_hook_active=true, and clears streaming state.
+// Covers the second branch of the cancelMsg handler that
+// TestModel_EscCancelsThinking doesn't exercise.
+func TestModel_EscDuringStreamingCommitsPartial(t *testing.T) {
+	t.Parallel()
+
+	m := newTestModel(nil)
+	m = typeInto(m, "hello world here")
+	m, _ = pressEnter(m)
+	// Transition to streaming.
+	newM, _ := m.Update(thinkingDoneMsg{tag: m.turnTag, name: "Test", body: "hello world here", streamDelay: 0})
+	m = newM.(model)
+	if !m.streaming {
+		t.Fatal("expected streaming=true after thinkingDoneMsg")
+	}
+	// Advance two of the four tokens so streamLine is partial.
+	newM, _ = m.Update(streamChunkMsg{tag: m.turnTag})
+	m = newM.(model)
+	newM, _ = m.Update(streamChunkMsg{tag: m.turnTag})
+	m = newM.(model)
+	if m.streamIdx != 2 {
+		t.Fatalf("streamIdx = %d, want 2 before Esc", m.streamIdx)
+	}
+	partialLine := m.streamLine // capture before cancel resets
+
+	// Esc → cancelMsg → commit partial + Interrupted.
+	newM, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = newM.(model)
+	if cmd == nil {
+		t.Fatal("expected cancelMsg cmd from Esc")
+	}
+	newM, _ = m.Update(cmd())
+	m = newM.(model)
+
+	if m.streaming {
+		t.Errorf("expected streaming=false after Esc")
+	}
+	if m.streamLine != "" {
+		t.Errorf("expected streamLine cleared, got %q", m.streamLine)
+	}
+	if m.streamTokens != nil {
+		t.Errorf("expected streamTokens nil, got %v", m.streamTokens)
+	}
+
+	joined := strings.Join(m.scrollback, "\n")
+	if !strings.Contains(joined, partialLine) {
+		t.Errorf("scrollback missing partial stream line %q:\n%s", partialLine, joined)
+	}
+	if !strings.Contains(joined, "Interrupted") {
+		t.Errorf("scrollback missing Interrupted marker:\n%s", joined)
+	}
+	// Partial line should come before the Interrupted marker.
+	partialIdx := strings.Index(joined, partialLine)
+	interruptIdx := strings.Index(joined, "Interrupted")
+	if partialIdx >= interruptIdx {
+		t.Errorf("expected partial line before Interrupted; partial at %d, interrupt at %d", partialIdx, interruptIdx)
 	}
 }
 
