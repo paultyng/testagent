@@ -19,12 +19,12 @@ func TestParseBody(t *testing.T) {
 		{
 			name: "whitespace only",
 			body: "   \n",
-			want: Result{Raw: []byte("   \n")},
+			want: Result{},
 		},
 		{
 			name: "malformed JSON",
 			body: `{"decision":`,
-			want: Result{Raw: []byte(`{"decision":`)},
+			want: Result{},
 		},
 		{
 			name: "permissionDecision allow",
@@ -76,9 +76,10 @@ func TestParseBody(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := ParseBody([]byte(tc.body))
-			// Raw comparison: only check if test specified one.
-			if tc.want.Raw != nil && string(got.Raw) != string(tc.want.Raw) {
-				t.Errorf("Raw = %q, want %q", got.Raw, tc.want.Raw)
+			// Raw always echoes the input body — assert it unconditionally
+			// so misaligned expectations surface (e.g. nil-vs-empty drift).
+			if string(got.Raw) != tc.body {
+				t.Errorf("Raw = %q, want %q", got.Raw, tc.body)
 			}
 			if got.Block != tc.want.Block || got.Ask != tc.want.Ask || got.Allow != tc.want.Allow || got.Reason != tc.want.Reason {
 				t.Errorf("decision = {Block:%v Ask:%v Allow:%v Reason:%q}, want {Block:%v Ask:%v Allow:%v Reason:%q}",

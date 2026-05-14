@@ -48,9 +48,9 @@ type Result struct {
 	// Source: permissionDecisionReason / decision.message / stderr / reason.
 	Reason string
 
-	// Raw is the raw response body (HTTP) or stdout bytes (command) the
+	// Raw echoes the response body (HTTP) or stdout bytes (command) the
 	// result was parsed from. Useful for tests, debug traces, and future
-	// fields not yet modeled. Empty when nothing was returned.
+	// fields not yet modeled.
 	Raw []byte
 }
 

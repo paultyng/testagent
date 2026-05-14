@@ -382,7 +382,13 @@ func (s *Sender) post(ctx context.Context, event string, hook Hook, payload []by
 	if resp.StatusCode >= 400 {
 		return hookresult.Result{}, fmt.Errorf("status %d", resp.StatusCode)
 	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	if readErr != nil && s.debugWriter != nil {
+		// Partial body is still fed to the parser (truncated JSON → zero
+		// result, the safe permissive outcome); the transport error is
+		// surfaced via debug so operators can diagnose flaky hooks.
+		fmt.Fprintf(s.debugWriter, "hook %s POST %s body-read err=%q\n", event, hook.URL, readErr.Error())
+	}
 	return hookresult.ParseBody(body), nil
 }
 

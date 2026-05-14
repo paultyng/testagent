@@ -344,9 +344,6 @@ func (h *Handler) cmdFakeTool(ctx context.Context, out io.Writer, rest string) {
 		input:     args,
 		startedAt: time.Now(),
 	})
-	// Phase 1: capture the aggregated hook decision but do not act on it.
-	// Decision routing (block / ask) lands in a follow-up PR; this PR is
-	// the no-behavior-change refactor that plumbs hookresult through.
 	if _, err := h.hooks.OnPreToolUse(ctx, toolUseID, name, args); err != nil {
 		fmt.Fprintf(os.Stderr, "testagent: hook OnPreToolUse: %v\n", err)
 	}
