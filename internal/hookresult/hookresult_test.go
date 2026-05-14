@@ -137,6 +137,12 @@ func TestParseCommand(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := ParseCommand(tc.exitCode, []byte(tc.stdout), []byte(tc.stderr))
+			// Raw is documented to echo stdout regardless of exit code —
+			// in the exit-2 path the reason comes from stderr but Raw
+			// preserves stdout for diagnostic visibility.
+			if string(got.Raw) != tc.stdout {
+				t.Errorf("Raw = %q, want %q (stdout)", got.Raw, tc.stdout)
+			}
 			if got.Block != tc.want.Block || got.Ask != tc.want.Ask || got.Allow != tc.want.Allow || got.Reason != tc.want.Reason {
 				t.Errorf("decision = {Block:%v Ask:%v Allow:%v Reason:%q}, want {Block:%v Ask:%v Allow:%v Reason:%q}",
 					got.Block, got.Ask, got.Allow, got.Reason,
