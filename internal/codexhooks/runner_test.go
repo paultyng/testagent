@@ -92,7 +92,8 @@ func TestRunner_FiresShellCommands(t *testing.T) {
 			name:  "pre_tool_use",
 			event: EventPreToolUse,
 			fire: func(r *Runner) error {
-				return r.OnPreToolUse(context.Background(), "tu_1", "read_file", map[string]any{"path": "foo.go"})
+				_, err := r.OnPreToolUse(context.Background(), "tu_1", "read_file", map[string]any{"path": "foo.go"})
+				return err
 			},
 			extraEnv: "CODEX_HOOK_TOOL_NAME",
 			extraVal: "read_file",
@@ -218,6 +219,49 @@ func TestRunner_TimeoutHonored(t *testing.T) {
 	}
 	if elapsed > 3*time.Second {
 		t.Errorf("hook took %s — timeout not honored", elapsed)
+	}
+}
+
+func TestRunner_OnPreToolUse_Exit2Blocks(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("windows cmd quoting differs; covered by claude side")
+	}
+	matchers := map[string][]Matcher{
+		EventPreToolUse: {
+			{Command: `printf 'blocked by codex hook\n' 1>&2; exit 2`, Timeout: hookTestTimeout},
+		},
+	}
+	r := NewRunner(matchers, "sid", t.TempDir(), "", "default", nil)
+	res, err := r.OnPreToolUse(context.Background(), "tu_1", "shell", map[string]any{"command": "rm -rf /"})
+	if err != nil {
+		t.Fatalf("OnPreToolUse: %v", err)
+	}
+	if !res.Block {
+		t.Errorf("Block = false, want true; got %+v", res)
+	}
+	if !strings.Contains(res.Reason, "blocked by codex hook") {
+		t.Errorf("Reason = %q, want substring %q", res.Reason, "blocked by codex hook")
+	}
+}
+
+func TestRunner_OnPreToolUse_Exit0ParsesStdout(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("windows cmd quoting differs; covered by claude side")
+	}
+	matchers := map[string][]Matcher{
+		EventPreToolUse: {
+			{Command: `printf '{"hookSpecificOutput":{"permissionDecision":"allow"}}\n'`, Timeout: hookTestTimeout},
+		},
+	}
+	r := NewRunner(matchers, "sid", t.TempDir(), "", "default", nil)
+	res, err := r.OnPreToolUse(context.Background(), "tu_1", "shell", nil)
+	if err != nil {
+		t.Fatalf("OnPreToolUse: %v", err)
+	}
+	if !res.Allow || res.Block || res.Ask {
+		t.Errorf("decision = %+v, want Allow=true only", res)
 	}
 }
 

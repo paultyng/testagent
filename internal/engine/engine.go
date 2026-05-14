@@ -15,6 +15,7 @@ import (
 
 	"github.com/mattn/go-isatty"
 
+	"github.com/paultyng/testagent/internal/hookresult"
 	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/mcp"
 	"github.com/paultyng/testagent/internal/slash"
@@ -48,7 +49,7 @@ type Globals struct {
 // as HookSender keeps both tool-use methods callable.
 type HookSender interface {
 	OnPrompt(ctx context.Context, prompt, sessionTitle string) error
-	OnPreToolUse(ctx context.Context, toolUseID, toolName string, toolInput any) error
+	OnPreToolUse(ctx context.Context, toolUseID, toolName string, toolInput any) (hookresult.Result, error)
 	OnPostToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error
 	OnStop(ctx context.Context, lastAssistantMessage string, stopHookActive bool) error
 	OnSessionStart(ctx context.Context, source string) error

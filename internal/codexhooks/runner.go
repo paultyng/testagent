@@ -35,14 +35,20 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/paultyng/testagent/internal/engine"
+	"github.com/paultyng/testagent/internal/hookresult"
 	"github.com/paultyng/testagent/internal/shellrun"
 	"github.com/paultyng/testagent/internal/slash"
 )
+
+// maxResponseBody caps stdout/stderr capture per matcher. Decision JSON
+// is small; protects against a misbehaving hook script.
+const maxResponseBody = 64 << 10
 
 // Compile-time conformance: Runner satisfies both interfaces the
 // engine and slash dispatcher consume. Keeping the assertions here
@@ -161,16 +167,19 @@ func (r *Runner) Close(ctx context.Context) error {
 
 // OnPrompt fires user_prompt_submit hooks.
 func (r *Runner) OnPrompt(ctx context.Context, prompt, sessionTitle string) error {
-	return r.fire(ctx, EventUserPromptSubmit, map[string]string{
+	_, err := r.fire(ctx, EventUserPromptSubmit, map[string]string{
 		"CODEX_HOOK_PROMPT":        prompt,
 		"CODEX_HOOK_SESSION_TITLE": sessionTitle,
 	})
+	return err
 }
 
 // OnPreToolUse fires pre_tool_use before the tool runs. Tool input lands
 // as a JSON string in CODEX_HOOK_TOOL_INPUT so matcher configs can branch
-// on it via standard jq-style processing inside the hook script.
-func (r *Runner) OnPreToolUse(ctx context.Context, toolUseID, toolName string, toolInput any) error {
+// on it via standard jq-style processing inside the hook script. The
+// returned hookresult.Result carries the aggregated decision; see the
+// claude OnPreToolUse doc for the contract.
+func (r *Runner) OnPreToolUse(ctx context.Context, toolUseID, toolName string, toolInput any) (hookresult.Result, error) {
 	return r.fire(ctx, EventPreToolUse, map[string]string{
 		"CODEX_HOOK_TOOL_USE_ID": toolUseID,
 		"CODEX_HOOK_TOOL_NAME":   toolName,
@@ -180,28 +189,31 @@ func (r *Runner) OnPreToolUse(ctx context.Context, toolUseID, toolName string, t
 
 // OnPostToolUse fires post_tool_use after the tool completes.
 func (r *Runner) OnPostToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error {
-	return r.fire(ctx, EventPostToolUse, map[string]string{
+	_, err := r.fire(ctx, EventPostToolUse, map[string]string{
 		"CODEX_HOOK_TOOL_USE_ID":   toolUseID,
 		"CODEX_HOOK_TOOL_NAME":     toolName,
 		"CODEX_HOOK_TOOL_INPUT":    jsonEncodeOrEmpty(toolInput),
 		"CODEX_HOOK_TOOL_RESPONSE": jsonEncodeOrEmpty(toolResponse),
 		"CODEX_HOOK_DURATION_MS":   strconv.FormatInt(durationMs, 10),
 	})
+	return err
 }
 
 // OnStop fires stop hooks.
 func (r *Runner) OnStop(ctx context.Context, lastAssistantMessage string, stopHookActive bool) error {
-	return r.fire(ctx, EventStop, map[string]string{
+	_, err := r.fire(ctx, EventStop, map[string]string{
 		"CODEX_HOOK_LAST_ASSISTANT_MESSAGE": lastAssistantMessage,
 		"CODEX_HOOK_STOP_HOOK_ACTIVE":       boolToString(stopHookActive),
 	})
+	return err
 }
 
 // OnSessionStart fires session_start hooks.
 func (r *Runner) OnSessionStart(ctx context.Context, source string) error {
-	return r.fire(ctx, EventSessionStart, map[string]string{
+	_, err := r.fire(ctx, EventSessionStart, map[string]string{
 		"CODEX_HOOK_SOURCE": source,
 	})
+	return err
 }
 
 // OnSessionEnd is a no-op — codex's HooksTable has no session_end
@@ -218,30 +230,40 @@ func (r *Runner) OnSessionEnd(ctx context.Context, reason string) error {
 // lifecycle); it lands in CODEX_HOOK_TRIGGER so a config matcher on
 // `trigger = "manual"` or `trigger = "auto"` can branch.
 func (r *Runner) OnPreCompact(ctx context.Context, trigger string) error {
-	return r.fire(ctx, EventPreCompact, map[string]string{
+	_, err := r.fire(ctx, EventPreCompact, map[string]string{
 		"CODEX_HOOK_TRIGGER": trigger,
 	})
+	return err
 }
 
 // OnPostCompact fires post_compact after the SessionStart that follows
 // compaction. trigger matches the PreCompact value.
 func (r *Runner) OnPostCompact(ctx context.Context, trigger string) error {
-	return r.fire(ctx, EventPostCompact, map[string]string{
+	_, err := r.fire(ctx, EventPostCompact, map[string]string{
 		"CODEX_HOOK_TRIGGER": trigger,
 	})
+	return err
 }
 
 // fire runs every matcher registered for event. Synchronous matchers
 // honor their timeout; async matchers fire-and-forget on a goroutine
 // (errors are logged via debugWriter only). Per-matcher errors are
 // aggregated via errors.Join — one bad matcher does not stop the rest.
-func (r *Runner) fire(ctx context.Context, event string, extraEnv map[string]string) error {
+//
+// Synchronous matchers' stdout/stderr + exit code feed hookresult.Aggregate
+// for the event; async matchers never contribute to the decision (their
+// result is observed only via debugWriter, since by definition the agent
+// has already moved on).
+func (r *Runner) fire(ctx context.Context, event string, extraEnv map[string]string) (hookresult.Result, error) {
 	matchers, ok := r.matchers[event]
 	if !ok || len(matchers) == 0 {
-		return nil
+		return hookresult.Result{}, nil
 	}
 	baseEnv := r.envFor(event, extraEnv)
-	var errs []error
+	var (
+		errs    []error
+		results []hookresult.Result
+	)
 	for _, m := range matchers {
 		if m.Async {
 			r.mu.Lock()
@@ -254,25 +276,33 @@ func (r *Runner) fire(ctx context.Context, event string, extraEnv map[string]str
 			go r.runAsync(event, m, baseEnv)
 			continue
 		}
-		if err := r.runOne(ctx, event, m, baseEnv); err != nil {
+		res, err := r.runOne(ctx, event, m, baseEnv)
+		if err != nil {
 			errs = append(errs, fmt.Errorf("%s hook: %w", event, err))
+			continue
 		}
+		results = append(results, res)
 	}
-	return errors.Join(errs...)
+	return hookresult.Aggregate(event, results), errors.Join(errs...)
 }
 
 // runAsync is the goroutine body for async matchers. The per-matcher
 // timeout in runOne bounds wall-clock; Close waits for these via
-// inflight.Wait so they don't outlive the process.
+// inflight.Wait so they don't outlive the process. The decision result
+// is discarded — async matchers cannot influence a tool's execution
+// because the synchronous code path has already proceeded.
 func (r *Runner) runAsync(event string, m Matcher, env []string) {
 	defer r.inflight.Done()
-	_ = r.runOne(context.Background(), event, m, env)
+	_, _ = r.runOne(context.Background(), event, m, env)
 }
 
 // runOne spawns the platform default shell via defaultShellCommand,
-// applies the per-matcher timeout, and emits a debug line if
+// applies the per-matcher timeout, captures stdout/stderr (capped at
+// maxResponseBody), and feeds the outcome to hookresult.ParseCommand
+// per the documented exit-code contract (0 = parse stdout, 2 = block
+// with stderr message, other = non-blocking). Emits a debug line when
 // debugWriter is set.
-func (r *Runner) runOne(ctx context.Context, event string, m Matcher, env []string) (err error) {
+func (r *Runner) runOne(ctx context.Context, event string, m Matcher, env []string) (result hookresult.Result, err error) {
 	start := time.Now()
 	defer func() {
 		if r.debugWriter != nil {
@@ -290,15 +320,56 @@ func (r *Runner) runOne(ctx context.Context, event string, m Matcher, env []stri
 	cmd := shellrun.DefaultShellCommand(runCtx, m.Command)
 	cmd.Env = env
 	cmd.Dir = r.cwd
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &limitedWriter{w: &stdout, max: maxResponseBody}
+	cmd.Stderr = &limitedWriter{w: &stderr, max: maxResponseBody}
 	shellrun.SetProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
-		return err
+		return hookresult.Result{}, err
 	}
 	cleanup := shellrun.AfterStart(cmd)
 	defer cleanup()
-	return cmd.Wait()
+	waitErr := cmd.Wait()
+	if ctxErr := runCtx.Err(); ctxErr != nil {
+		return hookresult.Result{}, ctxErr
+	}
+	exitCode := 0
+	if waitErr != nil {
+		var exitErr *exec.ExitError
+		if errors.As(waitErr, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else {
+			return hookresult.Result{}, waitErr
+		}
+	}
+	return hookresult.ParseCommand(exitCode, stdout.Bytes(), stderr.Bytes()), nil
+}
+
+// limitedWriter caps memory growth from a hook that emits unbounded
+// output. Mirrors internal/hooks.limitedWriter; kept separate so each
+// vendor package owns its own state without cross-import.
+type limitedWriter struct {
+	w   io.Writer
+	max int
+	n   int
+}
+
+func (l *limitedWriter) Write(p []byte) (int, error) {
+	if l.n >= l.max {
+		return len(p), nil
+	}
+	remaining := l.max - l.n
+	if len(p) <= remaining {
+		n, err := l.w.Write(p)
+		l.n += n
+		return n, err
+	}
+	n, err := l.w.Write(p[:remaining])
+	l.n += n
+	if err != nil {
+		return n, err
+	}
+	return len(p), nil
 }
 
 // envFor returns the shell environment for a hook invocation: the

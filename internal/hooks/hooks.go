@@ -13,10 +13,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os/exec"
 	"time"
 
+	"github.com/paultyng/testagent/internal/hookresult"
 	"github.com/paultyng/testagent/internal/shellrun"
 )
+
+// maxResponseBody caps the per-hook response body we read into memory.
+// Decision JSON is small; protects against a misbehaving hook server that
+// streams gigabytes. 64KiB is the same ceiling Claude Code applies.
+const maxResponseBody = 64 << 10
 
 // Claude Code hook event names, exported so callers can build matcher maps
 // without stringly-typed event keys.
@@ -176,11 +183,16 @@ func (s *Sender) OnPrompt(ctx context.Context, prompt, sessionTitle string) erro
 		SessionTitle:   sessionTitle,
 		TranscriptPath: s.transcriptPath,
 	}
-	return s.fire(ctx, UserPromptSubmit, body)
+	_, err := s.fire(ctx, UserPromptSubmit, body)
+	return err
 }
 
-// OnPreToolUse fires PreToolUse before the tool runs.
-func (s *Sender) OnPreToolUse(ctx context.Context, toolUseID, toolName string, toolInput any) error {
+// OnPreToolUse fires PreToolUse before the tool runs. The returned
+// hookresult.Result carries the aggregated decision the hook server(s)
+// returned (block / ask / allow + reason). Callers that gate tool
+// execution on the response — currently the slash dispatcher — consult
+// Block and Ask; other callers may discard it.
+func (s *Sender) OnPreToolUse(ctx context.Context, toolUseID, toolName string, toolInput any) (hookresult.Result, error) {
 	body := preToolUseBody{
 		CWD:            s.cwd,
 		HookEventName:  PreToolUse,
@@ -208,7 +220,8 @@ func (s *Sender) OnPostToolUse(ctx context.Context, toolUseID, toolName string, 
 		ToolUseID:      toolUseID,
 		TranscriptPath: s.transcriptPath,
 	}
-	return s.fire(ctx, PostToolUse, body)
+	_, err := s.fire(ctx, PostToolUse, body)
+	return err
 }
 
 // OnStop fires Stop.
@@ -222,7 +235,8 @@ func (s *Sender) OnStop(ctx context.Context, lastAssistantMessage string, stopHo
 		StopHookActive:       stopHookActive,
 		TranscriptPath:       s.transcriptPath,
 	}
-	return s.fire(ctx, Stop, body)
+	_, err := s.fire(ctx, Stop, body)
+	return err
 }
 
 // OnSessionStart fires SessionStart. source is one of "startup", "resume",
@@ -235,7 +249,8 @@ func (s *Sender) OnSessionStart(ctx context.Context, source string) error {
 		Source:         source,
 		TranscriptPath: s.transcriptPath,
 	}
-	return s.fire(ctx, SessionStart, body)
+	_, err := s.fire(ctx, SessionStart, body)
+	return err
 }
 
 // OnSessionEnd fires SessionEnd. reason is one of "clear", "logout", "other", etc.
@@ -247,7 +262,8 @@ func (s *Sender) OnSessionEnd(ctx context.Context, reason string) error {
 		SessionID:      s.sessionID,
 		TranscriptPath: s.transcriptPath,
 	}
-	return s.fire(ctx, SessionEnd, body)
+	_, err := s.fire(ctx, SessionEnd, body)
+	return err
 }
 
 // OnPreCompact fires PreCompact before context-summarization runs. trigger
@@ -260,7 +276,8 @@ func (s *Sender) OnPreCompact(ctx context.Context, trigger string) error {
 		TranscriptPath: s.transcriptPath,
 		Trigger:        trigger,
 	}
-	return s.fire(ctx, PreCompact, body)
+	_, err := s.fire(ctx, PreCompact, body)
+	return err
 }
 
 // OnPostCompact fires PostCompact after the SessionStart that follows
@@ -273,7 +290,8 @@ func (s *Sender) OnPostCompact(ctx context.Context, trigger string) error {
 		TranscriptPath: s.transcriptPath,
 		Trigger:        trigger,
 	}
-	return s.fire(ctx, PostCompact, body)
+	_, err := s.fire(ctx, PostCompact, body)
+	return err
 }
 
 // fire iterates every Matcher registered for event and dispatches each
@@ -281,41 +299,57 @@ func (s *Sender) OnPostCompact(ctx context.Context, trigger string) error {
 // are aggregated via errors.Join; a failing hook does not prevent the
 // rest from firing. Unknown Types are silently skipped (forward-compat
 // with hooks-config readers that downgrade to a no-op rather than fail).
-func (s *Sender) fire(ctx context.Context, event string, body any) error {
+//
+// Per-hook decision bodies are parsed via hookresult and aggregated
+// using the event-specific rule. The aggregated result is returned to
+// the caller; callers that gate on decisions (slash dispatcher) consult
+// Block / Ask / Allow, others discard it.
+func (s *Sender) fire(ctx context.Context, event string, body any) (hookresult.Result, error) {
 	if len(s.matchers) == 0 {
-		return nil
+		return hookresult.Result{}, nil
 	}
 	matchers, ok := s.matchers[event]
 	if !ok || len(matchers) == 0 {
-		return nil
+		return hookresult.Result{}, nil
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return fmt.Errorf("marshaling %s body: %w", event, err)
+		return hookresult.Result{}, fmt.Errorf("marshaling %s body: %w", event, err)
 	}
-	var errs []error
+	var (
+		errs    []error
+		results []hookresult.Result
+	)
 	for _, m := range matchers {
 		for _, hook := range m.Hooks {
 			switch hook.Type {
 			case "http":
-				if err := s.post(ctx, event, hook, payload); err != nil {
+				r, err := s.post(ctx, event, hook, payload)
+				if err != nil {
 					errs = append(errs, fmt.Errorf("%s hook %s: %w", event, hook.URL, err))
+					continue
 				}
+				results = append(results, r)
 			case "command":
-				if err := s.runCommand(ctx, event, hook, payload); err != nil {
+				r, err := s.runCommand(ctx, event, hook, payload)
+				if err != nil {
 					errs = append(errs, fmt.Errorf("%s hook %s: %w", event, hook.Command, err))
+					continue
 				}
+				results = append(results, r)
 			}
 		}
 	}
-	return errors.Join(errs...)
+	return hookresult.Aggregate(event, results), errors.Join(errs...)
 }
 
 // post POSTs payload as application/json to hook.URL with hook.Headers applied.
 // hook.Timeout is honored as a per-request context deadline (0 → default).
 // When debugWriter is set, emits a one-line trace per attempt regardless of
-// outcome (build error, transport error, success, non-2xx).
-func (s *Sender) post(ctx context.Context, event string, hook Hook, payload []byte) (err error) {
+// outcome (build error, transport error, success, non-2xx). On 2xx the
+// response body (capped at maxResponseBody) is parsed via hookresult; the
+// returned Result is zero when the body is empty or unparseable.
+func (s *Sender) post(ctx context.Context, event string, hook Hook, payload []byte) (result hookresult.Result, err error) {
 	start := time.Now()
 	status := 0
 	defer func() {
@@ -333,7 +367,7 @@ func (s *Sender) post(ctx context.Context, event string, hook Hook, payload []by
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, hook.URL, bytes.NewReader(payload))
 	if err != nil {
-		return fmt.Errorf("building request: %w", err)
+		return hookresult.Result{}, fmt.Errorf("building request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range hook.Headers {
@@ -341,23 +375,26 @@ func (s *Sender) post(ctx context.Context, event string, hook Hook, payload []by
 	}
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("posting: %w", err)
+		return hookresult.Result{}, fmt.Errorf("posting: %w", err)
 	}
 	defer resp.Body.Close()
 	status = resp.StatusCode
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("status %d", resp.StatusCode)
+		return hookresult.Result{}, fmt.Errorf("status %d", resp.StatusCode)
 	}
-	return nil
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	return hookresult.ParseBody(body), nil
 }
 
 // runCommand spawns hook.Command via the platform default shell and
 // pipes payload to its stdin. hook.Timeout (or defaultTimeout) bounds
 // the wall-clock; on context cancel or timeout the shell + any
 // grandchildren are killed via shellrun's process-group / Job-object
-// machinery. stdout/stderr are discarded — the hook's effect is its
-// stdin-driven side effects, not its console output.
-func (s *Sender) runCommand(ctx context.Context, event string, hook Hook, payload []byte) (err error) {
+// machinery. stdout and stderr are captured up to maxResponseBody so
+// hookresult can apply the documented exit-code contract: 0 parses
+// stdout JSON; 2 blocks with stderr as the reason; other non-zero exit
+// codes are non-blocking and produce a zero result.
+func (s *Sender) runCommand(ctx context.Context, event string, hook Hook, payload []byte) (result hookresult.Result, err error) {
 	start := time.Now()
 	defer func() {
 		if s.debugWriter != nil {
@@ -375,18 +412,61 @@ func (s *Sender) runCommand(ctx context.Context, event string, hook Hook, payloa
 	cmd := shellrun.DefaultShellCommand(runCtx, hook.Command)
 	cmd.Dir = s.cwd
 	cmd.Stdin = bytes.NewReader(payload)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &limitedWriter{w: &stdout, max: maxResponseBody}
+	cmd.Stderr = &limitedWriter{w: &stderr, max: maxResponseBody}
 	shellrun.SetProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("starting: %w", err)
+		return hookresult.Result{}, fmt.Errorf("starting: %w", err)
 	}
 	cleanup := shellrun.AfterStart(cmd)
 	defer cleanup()
-	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("running: %w", err)
+	waitErr := cmd.Wait()
+	if ctxErr := runCtx.Err(); ctxErr != nil {
+		// Context cancel / deadline surfaces as a run error regardless of
+		// how Wait reported the underlying signal kill. Preserves the
+		// timeout contract callers had pre-refactor.
+		return hookresult.Result{}, fmt.Errorf("running: %w", ctxErr)
 	}
-	return nil
+	exitCode := 0
+	if waitErr != nil {
+		var exitErr *exec.ExitError
+		if errors.As(waitErr, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else {
+			return hookresult.Result{}, fmt.Errorf("running: %w", waitErr)
+		}
+	}
+	return hookresult.ParseCommand(exitCode, stdout.Bytes(), stderr.Bytes()), nil
+}
+
+// limitedWriter writes to w until max bytes have been accepted; beyond
+// that point Write silently discards. Caps memory growth from a hook
+// that emits unbounded output without surfacing a write error to the
+// child process (which would change its observable behavior vs real
+// Claude).
+type limitedWriter struct {
+	w   io.Writer
+	max int
+	n   int
+}
+
+func (l *limitedWriter) Write(p []byte) (int, error) {
+	if l.n >= l.max {
+		return len(p), nil
+	}
+	remaining := l.max - l.n
+	if len(p) <= remaining {
+		n, err := l.w.Write(p)
+		l.n += n
+		return n, err
+	}
+	n, err := l.w.Write(p[:remaining])
+	l.n += n
+	if err != nil {
+		return n, err
+	}
+	return len(p), nil
 }
 
 // writeCmdDebug emits the command-hook analog of writeDebug:

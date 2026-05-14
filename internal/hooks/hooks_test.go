@@ -161,7 +161,7 @@ func TestSender_OnPreToolUse_Payload(t *testing.T) {
 	sender := newTestSender(t, matchersFor(PreToolUse, nil, srv.URL+"/hooks/pre-tool-use"))
 
 	toolInput := map[string]any{"path": "main.go"}
-	if err := sender.OnPreToolUse(context.Background(), "tu_pre", "read_file", toolInput); err != nil {
+	if _, err := sender.OnPreToolUse(context.Background(), "tu_pre", "read_file", toolInput); err != nil {
 		t.Fatalf("OnPreToolUse: %v", err)
 	}
 
@@ -860,6 +860,129 @@ func TestSender_CommandHook_DebugLine(t *testing.T) {
 		if !strings.Contains(line, want) {
 			t.Errorf("debug line missing %q\nfull line: %s", want, line)
 		}
+	}
+}
+
+// decideServer is a captureServer variant that responds with a caller-
+// supplied body. Lets PreToolUse / PermissionRequest tests assert that
+// the response decision lands on the returned hookresult.Result.
+func decideServer(t *testing.T, responseBody string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, responseBody)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestSender_OnPreToolUse_ParsesAllowResponse(t *testing.T) {
+	t.Parallel()
+	srv := decideServer(t, `{"hookSpecificOutput":{"permissionDecision":"allow"}}`)
+	sender := newTestSender(t, matchersFor(PreToolUse, nil, srv.URL))
+
+	res, err := sender.OnPreToolUse(context.Background(), "tu_1", "Bash", map[string]any{"command": "ls"})
+	if err != nil {
+		t.Fatalf("OnPreToolUse: %v", err)
+	}
+	if res.Block || res.Ask {
+		t.Errorf("unexpected decision: %+v", res)
+	}
+	if !res.Allow {
+		t.Errorf("Allow = false, want true; got %+v", res)
+	}
+}
+
+func TestSender_OnPreToolUse_ParsesDenyResponse(t *testing.T) {
+	t.Parallel()
+	srv := decideServer(t, `{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"not in allowlist"}}`)
+	sender := newTestSender(t, matchersFor(PreToolUse, nil, srv.URL))
+
+	res, err := sender.OnPreToolUse(context.Background(), "tu_1", "Bash", map[string]any{"command": "rm -rf /"})
+	if err != nil {
+		t.Fatalf("OnPreToolUse: %v", err)
+	}
+	if !res.Block {
+		t.Errorf("Block = false, want true; got %+v", res)
+	}
+	if res.Reason != "not in allowlist" {
+		t.Errorf("Reason = %q, want %q", res.Reason, "not in allowlist")
+	}
+}
+
+func TestSender_OnPreToolUse_AggregatesAcrossMatchers(t *testing.T) {
+	t.Parallel()
+	// Two matchers: first allows, second denies. PreToolUse aggregation
+	// rule = any-block-wins.
+	allow := decideServer(t, `{"hookSpecificOutput":{"permissionDecision":"allow"}}`)
+	deny := decideServer(t, `{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"second matcher denies"}}`)
+	matchers := map[string][]Matcher{
+		PreToolUse: {
+			{Matcher: "*", Hooks: []Hook{{Type: "http", URL: allow.URL}}},
+			{Matcher: "*", Hooks: []Hook{{Type: "http", URL: deny.URL}}},
+		},
+	}
+	sender := newTestSender(t, matchers)
+
+	res, err := sender.OnPreToolUse(context.Background(), "tu_1", "Bash", nil)
+	if err != nil {
+		t.Fatalf("OnPreToolUse: %v", err)
+	}
+	if !res.Block || res.Reason != "second matcher denies" {
+		t.Errorf("aggregate = %+v, want Block=true Reason=%q", res, "second matcher denies")
+	}
+}
+
+func TestSender_OnPreToolUse_CommandHookExitCode2Blocks(t *testing.T) {
+	t.Parallel()
+	// Exit 2 + stderr = blocking decision per the documented contract.
+	var cmd string
+	if runtime.GOOS == "windows" {
+		cmd = `cmd /C "echo blocked: dangerous>&2 & exit 2"`
+	} else {
+		cmd = `printf 'blocked: dangerous\n' 1>&2; exit 2`
+	}
+	matchers := map[string][]Matcher{
+		PreToolUse: {
+			{Matcher: "*", Hooks: []Hook{{Type: "command", Command: cmd, Timeout: hookCmdTimeout}}},
+		},
+	}
+	sender := newCmdTestSender(t, matchers)
+
+	res, err := sender.OnPreToolUse(context.Background(), "tu_1", "Bash", nil)
+	if err != nil {
+		t.Fatalf("OnPreToolUse: %v", err)
+	}
+	if !res.Block {
+		t.Errorf("Block = false, want true; got %+v", res)
+	}
+	if !strings.Contains(res.Reason, "blocked: dangerous") {
+		t.Errorf("Reason = %q, want substring %q", res.Reason, "blocked: dangerous")
+	}
+}
+
+func TestSender_OnPreToolUse_CommandHookExit0ParsesStdout(t *testing.T) {
+	t.Parallel()
+	var cmd string
+	if runtime.GOOS == "windows" {
+		cmd = `cmd /C echo {"hookSpecificOutput":{"permissionDecision":"allow"}}`
+	} else {
+		cmd = `printf '{"hookSpecificOutput":{"permissionDecision":"allow"}}\n'`
+	}
+	matchers := map[string][]Matcher{
+		PreToolUse: {
+			{Matcher: "*", Hooks: []Hook{{Type: "command", Command: cmd, Timeout: hookCmdTimeout}}},
+		},
+	}
+	sender := newCmdTestSender(t, matchers)
+
+	res, err := sender.OnPreToolUse(context.Background(), "tu_1", "Bash", nil)
+	if err != nil {
+		t.Fatalf("OnPreToolUse: %v", err)
+	}
+	if !res.Allow || res.Block || res.Ask {
+		t.Errorf("decision = %+v, want Allow=true only", res)
 	}
 }
 
