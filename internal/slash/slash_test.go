@@ -625,6 +625,59 @@ func TestSlash_FakeTool_AwaitingPermission_ResultShortCircuits(t *testing.T) {
 	}
 }
 
+func TestSlash_FakeTool_AwaitingPermission_DisplacedByNextTool(t *testing.T) {
+	t.Parallel()
+	// /fake-tool A enters awaitingPermission via /pre's ask response;
+	// /fake-tool B then arrives and must flush A with the blocked
+	// synthetic shape (not the legacy nil response).
+	var (
+		mu   sync.Mutex
+		hits []map[string]any
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		body["__path"] = r.URL.Path
+		mu.Lock()
+		hits = append(hits, body)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		if r.URL.Path == "/pre" && body["tool_name"] == "A" {
+			_, _ = io.WriteString(w, `{"hookSpecificOutput":{"permissionDecision":"ask","permissionDecisionReason":"confirm A"}}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"PreToolUse":  {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pre", Timeout: 1}}}},
+		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/post", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
+
+	ctx := context.Background()
+	h.Dispatch(ctx, `/fake-tool A {}`)
+	h.Dispatch(ctx, `/fake-tool B {}`)
+
+	mu.Lock()
+	defer mu.Unlock()
+	// Pre-A (ask), Post-A (displaced flush, blocked synthetic), Pre-B (allow), B remains pending — 3 hits.
+	if len(hits) != 3 {
+		t.Fatalf("got %d hooks, want 3:\n%v", len(hits), hits)
+	}
+	if hits[1]["__path"] != "/post" || hits[1]["tool_name"] != "A" {
+		t.Fatalf("hits[1] = %v, want Post for A", hits[1])
+	}
+	resp, _ := hits[1]["tool_response"].(map[string]any)
+	if resp == nil || resp["error"] != "blocked" {
+		t.Errorf("displaced Post-A tool_response = %v, want {error:blocked, reason:...}", hits[1]["tool_response"])
+	}
+	if reason, _ := resp["reason"].(string); !strings.Contains(reason, "replaced") {
+		t.Errorf("displaced Post-A reason = %q, want substring %q", reason, "replaced")
+	}
+}
+
 func TestSlash_FakeTool_AwaitingPermission_FlushOnShutdown(t *testing.T) {
 	t.Parallel()
 	var (
