@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -437,6 +438,278 @@ func TestSlash_OrphanFakeToolResult(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&hits); got != 0 {
 		t.Errorf("orphan /fake-tool-result fired %d hook(s); want 0", got)
+	}
+}
+
+// decisionRouter is a single httptest.Server whose handler returns a
+// canned JSON body based on the request path. Hits are captured in the
+// supplied slice for assertions on event order + payload shape.
+func decisionRouter(t *testing.T, hits *[]map[string]any, mu *sync.Mutex, bodyByPath map[string]string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		body["__path"] = r.URL.Path
+		mu.Lock()
+		*hits = append(*hits, body)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		if resp, ok := bodyByPath[r.URL.Path]; ok {
+			_, _ = io.WriteString(w, resp)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestSlash_FakeTool_BlockedByHook_FiresPostWithError(t *testing.T) {
+	t.Parallel()
+	var (
+		mu   sync.Mutex
+		hits []map[string]any
+	)
+	srv := decisionRouter(t, &hits, &mu, map[string]string{
+		"/pre": `{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"path not allowed"}}`,
+	})
+
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"PreToolUse":  {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pre", Timeout: 1}}}},
+		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/post", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
+
+	h.Dispatch(context.Background(), `/fake-tool Bash {"command":"rm -rf /"}`)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hits) != 2 {
+		t.Fatalf("got %d hooks, want 2 (Pre then Post)", len(hits))
+	}
+	if hits[0]["__path"] != "/pre" || hits[1]["__path"] != "/post" {
+		t.Errorf("hook order = %v, %v; want /pre then /post", hits[0]["__path"], hits[1]["__path"])
+	}
+	post := hits[1]
+	resp, _ := post["tool_response"].(map[string]any)
+	if resp == nil || resp["error"] != "blocked" || resp["reason"] != "path not allowed" {
+		t.Errorf("PostToolUse tool_response = %v, want {error:blocked, reason:path not allowed}", post["tool_response"])
+	}
+	if !strings.Contains(out.String(), "blocked by hook: path not allowed") {
+		t.Errorf("output missing block marker; got %q", out.String())
+	}
+}
+
+func TestSlash_FakeTool_BlockedWithPriorPending_FlushesPriorThenBlocks(t *testing.T) {
+	t.Parallel()
+	// Exercises the flush-prior code path: /fake-tool A (allowed) lands
+	// in pending; /fake-tool B (denied) flushes A then short-circuits B.
+	// One PreToolUse matcher that branches on tool_name so the
+	// aggregation rule (any-block-wins) doesn't bleed B's deny into A.
+	var (
+		mu   sync.Mutex
+		hits []map[string]any
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		body["__path"] = r.URL.Path
+		mu.Lock()
+		hits = append(hits, body)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		if r.URL.Path == "/pre" && body["tool_name"] == "B" {
+			_, _ = io.WriteString(w, `{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"B denied"}}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"PreToolUse":  {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pre", Timeout: 1}}}},
+		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/post", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
+
+	ctx := context.Background()
+	h.Dispatch(ctx, `/fake-tool A {}`)
+	h.Dispatch(ctx, `/fake-tool B {}`)
+
+	mu.Lock()
+	defer mu.Unlock()
+	// Pre-A, Post-A (flush), Pre-B, Post-B (blocked) = 4 hits.
+	if len(hits) != 4 {
+		t.Fatalf("got %d hooks, want 4:\n%v", len(hits), hits)
+	}
+	wantPaths := []string{"/pre", "/post", "/pre", "/post"}
+	wantNames := []string{"A", "A", "B", "B"}
+	for i, h := range hits {
+		if h["__path"] != wantPaths[i] {
+			t.Errorf("hits[%d].__path = %v, want %v", i, h["__path"], wantPaths[i])
+		}
+		if h["tool_name"] != wantNames[i] {
+			t.Errorf("hits[%d].tool_name = %v, want %v", i, h["tool_name"], wantNames[i])
+		}
+	}
+	// Post-A is the flush (nil response per the flush convention).
+	if _, ok := hits[1]["tool_response"]; ok && hits[1]["tool_response"] != nil {
+		t.Errorf("flush Post-A tool_response = %v, want nil", hits[1]["tool_response"])
+	}
+	// Post-B is the blocked synthetic.
+	resp, _ := hits[3]["tool_response"].(map[string]any)
+	if resp == nil || resp["error"] != "blocked" || resp["reason"] != "B denied" {
+		t.Errorf("blocked Post-B tool_response = %v, want {error:blocked, reason:B denied}", hits[3]["tool_response"])
+	}
+}
+
+func TestSlash_FakeTool_BlockedThenResult_NoExtraPost(t *testing.T) {
+	t.Parallel()
+	// After a block-and-Post lifecycle, a stray /fake-tool-result must
+	// not fire another PostToolUse — no pending entry should remain.
+	var (
+		mu   sync.Mutex
+		hits []map[string]any
+	)
+	srv := decisionRouter(t, &hits, &mu, map[string]string{
+		"/pre": `{"hookSpecificOutput":{"permissionDecision":"deny"}}`,
+	})
+
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"PreToolUse":  {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pre", Timeout: 1}}}},
+		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/post", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
+
+	h.Dispatch(context.Background(), `/fake-tool Bash {}`)
+	h.Dispatch(context.Background(), `/fake-tool-result {"contents":"x"}`)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hits) != 2 {
+		t.Fatalf("got %d hooks, want 2 (Pre + the blocked Post; the orphan result must not fire)", len(hits))
+	}
+}
+
+func TestSlash_FakeTool_AwaitingPermission_ResultShortCircuits(t *testing.T) {
+	t.Parallel()
+	var (
+		mu   sync.Mutex
+		hits []map[string]any
+	)
+	srv := decisionRouter(t, &hits, &mu, map[string]string{
+		"/pre": `{"hookSpecificOutput":{"permissionDecision":"ask","permissionDecisionReason":"please confirm"}}`,
+	})
+
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"PreToolUse":  {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pre", Timeout: 1}}}},
+		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/post", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
+
+	h.Dispatch(context.Background(), `/fake-tool Bash {}`)
+	h.Dispatch(context.Background(), `/fake-tool-result {"contents":"x"}`)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hits) != 1 {
+		t.Errorf("got %d hooks, want 1 (Pre only; /fake-tool-result must short-circuit)", len(hits))
+	}
+	if !strings.Contains(out.String(), "awaiting permission: please confirm") {
+		t.Errorf("output missing awaiting marker; got %q", out.String())
+	}
+	if !strings.Contains(out.String(), "still awaiting permission") {
+		t.Errorf("output missing short-circuit marker on /fake-tool-result; got %q", out.String())
+	}
+}
+
+func TestSlash_FakeTool_AwaitingPermission_DisplacedByNextTool(t *testing.T) {
+	t.Parallel()
+	// /fake-tool A enters awaitingPermission via /pre's ask response;
+	// /fake-tool B then arrives and must flush A with the blocked
+	// synthetic shape (not the legacy nil response).
+	var (
+		mu   sync.Mutex
+		hits []map[string]any
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		body["__path"] = r.URL.Path
+		mu.Lock()
+		hits = append(hits, body)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		if r.URL.Path == "/pre" && body["tool_name"] == "A" {
+			_, _ = io.WriteString(w, `{"hookSpecificOutput":{"permissionDecision":"ask","permissionDecisionReason":"confirm A"}}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"PreToolUse":  {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pre", Timeout: 1}}}},
+		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/post", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
+
+	ctx := context.Background()
+	h.Dispatch(ctx, `/fake-tool A {}`)
+	h.Dispatch(ctx, `/fake-tool B {}`)
+
+	mu.Lock()
+	defer mu.Unlock()
+	// Pre-A (ask), Post-A (displaced flush, blocked synthetic), Pre-B (allow), B remains pending — 3 hits.
+	if len(hits) != 3 {
+		t.Fatalf("got %d hooks, want 3:\n%v", len(hits), hits)
+	}
+	if hits[1]["__path"] != "/post" || hits[1]["tool_name"] != "A" {
+		t.Fatalf("hits[1] = %v, want Post for A", hits[1])
+	}
+	resp, _ := hits[1]["tool_response"].(map[string]any)
+	if resp == nil || resp["error"] != "blocked" {
+		t.Errorf("displaced Post-A tool_response = %v, want {error:blocked, reason:...}", hits[1]["tool_response"])
+	}
+	if reason, _ := resp["reason"].(string); !strings.Contains(reason, "replaced") {
+		t.Errorf("displaced Post-A reason = %q, want substring %q", reason, "replaced")
+	}
+}
+
+func TestSlash_FakeTool_AwaitingPermission_FlushOnShutdown(t *testing.T) {
+	t.Parallel()
+	var (
+		mu   sync.Mutex
+		hits []map[string]any
+	)
+	srv := decisionRouter(t, &hits, &mu, map[string]string{
+		"/pre": `{"hookSpecificOutput":{"permissionDecision":"ask"}}`,
+	})
+
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"PreToolUse":  {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pre", Timeout: 1}}}},
+		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/post", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
+
+	h.Dispatch(context.Background(), `/fake-tool Bash {}`)
+	h.FlushPendingTool(context.Background())
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hits) != 2 {
+		t.Fatalf("got %d hooks, want 2 (Pre then Post-on-flush)", len(hits))
+	}
+	post := hits[1]
+	if post["__path"] != "/post" {
+		t.Fatalf("second hook path = %v, want /post", post["__path"])
+	}
+	resp, _ := post["tool_response"].(map[string]any)
+	if resp == nil || resp["error"] != "blocked" {
+		t.Errorf("flush PostToolUse tool_response = %v, want {error:blocked, ...}", post["tool_response"])
 	}
 }
 

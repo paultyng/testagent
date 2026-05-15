@@ -69,11 +69,17 @@ func New(sender ToolHookSender, client *mcp.Client, out io.Writer) *Handler {
 // the supplied tool_response and the measured duration. /fake-tool
 // followed by /fake-tool flushes the prior with empty response and starts
 // a new Pre→Post cycle; shutdown flushes whatever's left.
+//
+// awaitingPermission is set when PreToolUse returned permissionDecision=ask
+// (claude only); /fake-tool-result short-circuits in that state, and
+// shutdown flushes with a synthetic blocked PostToolUse.
 type pendingToolCall struct {
-	toolUseID string
-	name      string
-	input     any
-	startedAt time.Time
+	toolUseID          string
+	name               string
+	input              any
+	startedAt          time.Time
+	awaitingPermission bool
+	permissionReason   string
 }
 
 // Outcome reports control-flow signals from a slash command.
@@ -320,6 +326,11 @@ func (h *Handler) cmdLink(out io.Writer, rest string) {
 // as pending. The matching /fake-tool-result completes it and fires PostToolUse with
 // the full payload (input + response + duration). Submitting another /fake-tool
 // while one is pending flushes the prior with empty response.
+//
+// If PreToolUse returns deny, render a [blocked] marker and fire
+// PostToolUse with an error tool_response (no pending kept). If it
+// returns ask, render an [awaiting permission] marker and keep the
+// pending entry with awaitingPermission=true.
 func (h *Handler) cmdFakeTool(ctx context.Context, out io.Writer, rest string) {
 	name, jsonArgs := splitFirstWord(rest)
 	if name == "" {
@@ -333,19 +344,58 @@ func (h *Handler) cmdFakeTool(ctx context.Context, out io.Writer, rest string) {
 		render.MuteStyle.Render(string(prettyArgs)))
 
 	// Flush any prior pending /fake-tool that never got a /fake-tool-result.
+	// An awaitingPermission prior gets the same blocked synthetic Post
+	// shape that FlushPendingTool uses on shutdown; non-awaiting priors
+	// retain the legacy nil-response behavior.
 	if prior := h.takePending(); prior != nil {
 		fmt.Fprintf(os.Stderr, "testagent: /fake-tool replaced pending %q without /fake-tool-result\n", prior.name)
-		h.firePendingHook(ctx, prior, nil)
+		if prior.awaitingPermission {
+			h.flushPendingAsBlocked(ctx, prior, "replaced before permission resolution")
+		} else {
+			h.firePendingHook(ctx, prior, nil)
+		}
 	}
 	toolUseID := "toolu_" + randomHex(12)
-	h.setPending(&pendingToolCall{
-		toolUseID: toolUseID,
-		name:      name,
-		input:     args,
-		startedAt: time.Now(),
-	})
-	if _, err := h.hooks.OnPreToolUse(ctx, toolUseID, name, args); err != nil {
+	startedAt := time.Now()
+	result, err := h.hooks.OnPreToolUse(ctx, toolUseID, name, args)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "testagent: hook OnPreToolUse: %v\n", err)
+	}
+	switch {
+	case result.Block:
+		// Hook denied; render marker and emit PostToolUse with an error
+		// response so orchestrators see the full lifecycle.
+		marker := "blocked by hook"
+		if result.Reason != "" {
+			marker += ": " + result.Reason
+		}
+		fmt.Fprintf(out, "%s\n", render.LifecycleWarn(marker))
+		toolResponse := map[string]any{"error": "blocked", "reason": result.Reason}
+		dur := time.Since(startedAt).Milliseconds()
+		if err := h.hooks.OnPostToolUse(ctx, toolUseID, name, args, toolResponse, dur); err != nil {
+			fmt.Fprintf(os.Stderr, "testagent: hook OnPostToolUse: %v\n", err)
+		}
+	case result.Ask:
+		marker := "awaiting permission"
+		if result.Reason != "" {
+			marker += ": " + result.Reason
+		}
+		fmt.Fprintf(out, "%s\n", render.Lifecycle(marker))
+		h.setPending(&pendingToolCall{
+			toolUseID:          toolUseID,
+			name:               name,
+			input:              args,
+			startedAt:          startedAt,
+			awaitingPermission: true,
+			permissionReason:   result.Reason,
+		})
+	default:
+		h.setPending(&pendingToolCall{
+			toolUseID: toolUseID,
+			name:      name,
+			input:     args,
+			startedAt: startedAt,
+		})
 	}
 }
 
@@ -354,7 +404,16 @@ func (h *Handler) cmdFakeTool(ctx context.Context, out io.Writer, rest string) {
 // measured duration. JSON results are stored structured; non-JSON as the
 // raw string. With no pending /fake-tool, only renders (no synthetic hook —
 // inventing a tool_use_id and tool_name would produce dishonest fixtures).
+//
+// When the pending is in awaitingPermission state (PreToolUse returned
+// ask), this short-circuits: a marker renders, the pending is restored,
+// and PostToolUse does not fire.
 func (h *Handler) cmdFakeToolResult(ctx context.Context, out io.Writer, rest string) {
+	pending, kept := h.takePendingUnlessAwaiting()
+	if kept {
+		fmt.Fprintf(out, "%s\n", render.Lifecycle("still awaiting permission — pending preserved"))
+		return
+	}
 	mark := render.ResultOk()
 	var response any
 	switch {
@@ -372,7 +431,7 @@ func (h *Handler) cmdFakeToolResult(ctx context.Context, out io.Writer, rest str
 		}
 	}
 
-	if pending := h.takePending(); pending != nil {
+	if pending != nil {
 		h.firePendingHook(ctx, pending, response)
 	}
 }
@@ -380,10 +439,35 @@ func (h *Handler) cmdFakeToolResult(ctx context.Context, out io.Writer, rest str
 // FlushPendingTool fires PostToolUse for any in-flight /fake-tool with a nil
 // response. Called from shutdown paths (/exit, signal, EOF, auto-exit) so
 // dangling /fake-tool calls don't silently lose their hook event.
+//
+// An awaitingPermission pending is flushed via flushPendingAsBlocked
+// with a synthetic blocked response — the orchestrator never resolved
+// the permission, so the equivalent terminal state is "denied."
 func (h *Handler) FlushPendingTool(ctx context.Context) {
-	if pending := h.takePending(); pending != nil {
-		fmt.Fprintf(os.Stderr, "testagent: /fake-tool %q flushed on shutdown without /fake-tool-result\n", pending.name)
-		h.firePendingHook(ctx, pending, nil)
+	pending := h.takePending()
+	if pending == nil {
+		return
+	}
+	if pending.awaitingPermission {
+		fmt.Fprintf(os.Stderr, "testagent: /fake-tool %q flushed on shutdown while awaiting permission\n", pending.name)
+		h.flushPendingAsBlocked(ctx, pending, "shutdown before permission resolution")
+		return
+	}
+	fmt.Fprintf(os.Stderr, "testagent: /fake-tool %q flushed on shutdown without /fake-tool-result\n", pending.name)
+	h.firePendingHook(ctx, pending, nil)
+}
+
+// flushPendingAsBlocked fires PostToolUse for an awaitingPermission
+// pending using the synthetic blocked tool_response shape. The
+// orchestrator never resolved the permission, so the equivalent
+// terminal state is "denied" with the supplied reason. Called from
+// FlushPendingTool (shutdown) and cmdFakeTool's prior-flush branch
+// (replaced before resolution).
+func (h *Handler) flushPendingAsBlocked(ctx context.Context, p *pendingToolCall, reason string) {
+	dur := time.Since(p.startedAt).Milliseconds()
+	toolResponse := map[string]any{"error": "blocked", "reason": reason}
+	if err := h.hooks.OnPostToolUse(ctx, p.toolUseID, p.name, p.input, toolResponse, dur); err != nil {
+		fmt.Fprintf(os.Stderr, "testagent: hook OnPostToolUse: %v\n", err)
 	}
 }
 
@@ -399,6 +483,23 @@ func (h *Handler) takePending() *pendingToolCall {
 	p := h.pendingTool
 	h.pendingTool = nil
 	return p
+}
+
+// takePendingUnlessAwaiting atomically returns the current pending and
+// clears it, OR keeps it in place when awaitingPermission is set. The
+// second return value is true when the pending was kept (the caller
+// must NOT call setPending). Used by /fake-tool-result to short-circuit
+// without a check-then-act window that a concurrent /fake-tool could
+// race through.
+func (h *Handler) takePendingUnlessAwaiting() (*pendingToolCall, bool) {
+	h.pendingToolMu.Lock()
+	defer h.pendingToolMu.Unlock()
+	p := h.pendingTool
+	if p != nil && p.awaitingPermission {
+		return p, true
+	}
+	h.pendingTool = nil
+	return p, false
 }
 
 // firePendingHook posts PostToolUse for a captured /fake-tool. response is the
