@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/paultyng/testagent/internal/hookresult"
 	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/mcp"
 	"github.com/paultyng/testagent/internal/render"
@@ -31,7 +32,7 @@ import (
 // satisfy this directly), and both internal/hooks.Sender (claude HTTP)
 // and internal/codexhooks.Runner (codex shell-command) implement it.
 type ToolHookSender interface {
-	OnPreToolUse(ctx context.Context, toolUseID, toolName string, toolInput any) error
+	OnPreToolUse(ctx context.Context, toolUseID, toolName string, toolInput any) (hookresult.Result, error)
 	OnPostToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error
 }
 
@@ -343,7 +344,7 @@ func (h *Handler) cmdFakeTool(ctx context.Context, out io.Writer, rest string) {
 		input:     args,
 		startedAt: time.Now(),
 	})
-	if err := h.hooks.OnPreToolUse(ctx, toolUseID, name, args); err != nil {
+	if _, err := h.hooks.OnPreToolUse(ctx, toolUseID, name, args); err != nil {
 		fmt.Fprintf(os.Stderr, "testagent: hook OnPreToolUse: %v\n", err)
 	}
 }
