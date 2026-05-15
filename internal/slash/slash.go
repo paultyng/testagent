@@ -71,10 +71,8 @@ func New(sender ToolHookSender, client *mcp.Client, out io.Writer) *Handler {
 // a new Pre→Post cycle; shutdown flushes whatever's left.
 //
 // awaitingPermission is set when PreToolUse returned permissionDecision=ask
-// (claude only). In that state /fake-tool-result short-circuits without
-// firing PostToolUse — the orchestrator must resolve the permission first.
-// The resolution slash command lands in a follow-up; today the only way
-// out is another /fake-tool (flushes prior) or shutdown.
+// (claude only); /fake-tool-result short-circuits in that state, and
+// shutdown flushes with a synthetic blocked PostToolUse.
 type pendingToolCall struct {
 	toolUseID          string
 	name               string
@@ -329,11 +327,10 @@ func (h *Handler) cmdLink(out io.Writer, rest string) {
 // the full payload (input + response + duration). Submitting another /fake-tool
 // while one is pending flushes the prior with empty response.
 //
-// If the PreToolUse hook returns a deny/block decision, the tool is
-// short-circuited: a [blocked] marker renders and PostToolUse fires
-// immediately with an error tool_response. If the decision is ask
-// (claude only), the pending entry is marked awaitingPermission and
-// /fake-tool-result short-circuits until resolved.
+// If PreToolUse returns deny, render a [blocked] marker and fire
+// PostToolUse with an error tool_response (no pending kept). If it
+// returns ask, render an [awaiting permission] marker and keep the
+// pending entry with awaitingPermission=true.
 func (h *Handler) cmdFakeTool(ctx context.Context, out io.Writer, rest string) {
 	name, jsonArgs := splitFirstWord(rest)
 	if name == "" {
@@ -401,18 +398,16 @@ func (h *Handler) cmdFakeTool(ctx context.Context, out io.Writer, rest string) {
 // raw string. With no pending /fake-tool, only renders (no synthetic hook —
 // inventing a tool_use_id and tool_name would produce dishonest fixtures).
 //
-// When the pending /fake-tool is in awaitingPermission state (PreToolUse
-// returned ask), /fake-tool-result short-circuits: a marker renders and
-// the pending entry is preserved so a future permission-resolve slash
-// can complete the lifecycle. PostToolUse does not fire here.
+// When the pending is in awaitingPermission state (PreToolUse returned
+// ask), this short-circuits: a marker renders, the pending is restored,
+// and PostToolUse does not fire.
 func (h *Handler) cmdFakeToolResult(ctx context.Context, out io.Writer, rest string) {
-	// Peek at pending without taking — need to know if we're awaiting
-	// permission before deciding whether to render the result or the
-	// awaiting marker.
-	h.pendingToolMu.Lock()
-	awaiting := h.pendingTool != nil && h.pendingTool.awaitingPermission
-	h.pendingToolMu.Unlock()
-	if awaiting {
+	// Take pending atomically; if it's awaiting permission, restore and
+	// short-circuit. Peeking under one lock then taking under another
+	// races against a concurrent /fake-tool replacing the entry.
+	pending := h.takePending()
+	if pending != nil && pending.awaitingPermission {
+		h.setPending(pending)
 		fmt.Fprintf(out, "%s\n", render.Lifecycle("still awaiting permission — pending preserved"))
 		return
 	}
@@ -433,7 +428,7 @@ func (h *Handler) cmdFakeToolResult(ctx context.Context, out io.Writer, rest str
 		}
 	}
 
-	if pending := h.takePending(); pending != nil {
+	if pending != nil {
 		h.firePendingHook(ctx, pending, response)
 	}
 }

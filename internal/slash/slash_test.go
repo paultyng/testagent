@@ -500,6 +500,66 @@ func TestSlash_FakeTool_BlockedByHook_FiresPostWithError(t *testing.T) {
 	}
 }
 
+func TestSlash_FakeTool_BlockedWithPriorPending_FlushesPriorThenBlocks(t *testing.T) {
+	t.Parallel()
+	// /fake-tool A (default) → /fake-tool B (deny): expect 4 hooks in
+	// order — Pre-A, Post-A (flush of prior), Pre-B, Post-B (blocked).
+	// /pre-A allows (empty body), /pre-B denies; both /post path hits
+	// fall into the same handler.
+	var (
+		mu   sync.Mutex
+		hits []map[string]any
+	)
+	srv := decisionRouter(t, &hits, &mu, map[string]string{
+		"/pre-b": `{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"B denied"}}`,
+	})
+
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"PreToolUse": {
+			// Two matchers — only the matching tool name should fire,
+			// but Phase 2 doesn't enforce matcher patterns (#84), so
+			// both fire on every Pre. Use distinct URLs and assert
+			// presence rather than exact ordering across them.
+			{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pre-a", Timeout: 1}}},
+			{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pre-b", Timeout: 1}}},
+		},
+		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/post", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
+
+	ctx := context.Background()
+	h.Dispatch(ctx, `/fake-tool A {}`)
+	h.Dispatch(ctx, `/fake-tool B {}`)
+
+	mu.Lock()
+	defer mu.Unlock()
+	// Pre fires for both matchers per /fake-tool: 4 Pre + 1 Post (flush) + 1 Post (blocked) = 6.
+	if len(hits) != 6 {
+		t.Fatalf("got %d hooks, want 6:\n%v", len(hits), hits)
+	}
+	// Walk and tally posts; assert the flush-Post used tool_name "A" and the blocked-Post used "B".
+	var posts []map[string]any
+	for _, h := range hits {
+		if h["__path"] == "/post" {
+			posts = append(posts, h)
+		}
+	}
+	if len(posts) != 2 {
+		t.Fatalf("got %d Post hooks, want 2; all hits: %v", len(posts), hits)
+	}
+	if posts[0]["tool_name"] != "A" {
+		t.Errorf("first Post tool_name = %v, want A", posts[0]["tool_name"])
+	}
+	if posts[1]["tool_name"] != "B" {
+		t.Errorf("second Post tool_name = %v, want B", posts[1]["tool_name"])
+	}
+	resp, _ := posts[1]["tool_response"].(map[string]any)
+	if resp == nil || resp["error"] != "blocked" || resp["reason"] != "B denied" {
+		t.Errorf("blocked Post tool_response = %v, want {error:blocked, reason:B denied}", posts[1]["tool_response"])
+	}
+}
+
 func TestSlash_FakeTool_BlockedThenResult_NoExtraPost(t *testing.T) {
 	t.Parallel()
 	// After a block-and-Post lifecycle, a stray /fake-tool-result must
