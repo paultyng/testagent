@@ -51,6 +51,7 @@ type HookSender interface {
 	OnPrompt(ctx context.Context, prompt, sessionTitle string) error
 	OnPreToolUse(ctx context.Context, toolUseID, toolName string, toolInput any) (hookresult.Result, error)
 	OnPostToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error
+	OnPermissionRequest(ctx context.Context, toolUseID, toolName string, toolInput any) (hookresult.Result, error)
 	OnStop(ctx context.Context, lastAssistantMessage string, stopHookActive bool) error
 	OnSessionStart(ctx context.Context, source string) error
 	OnSessionEnd(ctx context.Context, reason string) error
