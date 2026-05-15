@@ -80,6 +80,7 @@ func ParseBody(body []byte) Result {
 				return r
 			case "allow":
 				r.Allow = true
+				r.Reason = hso.Decision.Message
 				return r
 			}
 		}

@@ -386,6 +386,120 @@ func TestSender_OnPostCompact_Payload(t *testing.T) {
 	}
 }
 
+func TestSender_OnNotification_Payload(t *testing.T) {
+	t.Parallel()
+	srv, recs, mu := captureServer(t)
+	sender := newTestSender(t, matchersFor(Notification, nil, srv.URL+"/hooks/notification"))
+
+	if err := sender.OnNotification(context.Background(), NotificationPermissionPrompt, "approve Bash?", "Bash"); err != nil {
+		t.Fatalf("OnNotification: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(*recs) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(*recs))
+	}
+	rec := (*recs)[0]
+	wantFields := map[string]any{
+		"hook_event_name": "Notification",
+		"matcher":         "permission_prompt",
+		"message":         "approve Bash?",
+		"title":           "Bash",
+	}
+	for k, want := range wantFields {
+		if got := rec.body[k]; got != want {
+			t.Errorf("body[%s] = %v, want %v", k, got, want)
+		}
+	}
+}
+
+func TestSender_OnPermissionRequest_PayloadAndAllow(t *testing.T) {
+	t.Parallel()
+	srv := decideServer(t, `{"hookSpecificOutput":{"decision":{"behavior":"allow"}}}`)
+	sender := newTestSender(t, matchersFor(PermissionRequest, nil, srv.URL))
+
+	res, err := sender.OnPermissionRequest(context.Background(), "tu_1", "Bash", map[string]any{"command": "ls"})
+	if err != nil {
+		t.Fatalf("OnPermissionRequest: %v", err)
+	}
+	if !res.Allow || res.Block || res.Ask {
+		t.Errorf("decision = %+v, want Allow=true only", res)
+	}
+}
+
+func TestSender_OnPermissionRequest_DenyWithMessage(t *testing.T) {
+	t.Parallel()
+	srv := decideServer(t, `{"hookSpecificOutput":{"decision":{"behavior":"deny","message":"timed out"}}}`)
+	sender := newTestSender(t, matchersFor(PermissionRequest, nil, srv.URL))
+
+	res, err := sender.OnPermissionRequest(context.Background(), "tu_1", "Bash", nil)
+	if err != nil {
+		t.Fatalf("OnPermissionRequest: %v", err)
+	}
+	if !res.Block || res.Reason != "timed out" {
+		t.Errorf("decision = %+v, want Block=true Reason=%q", res, "timed out")
+	}
+}
+
+func TestSender_OnPermissionRequest_AggregatesLastAllowWins(t *testing.T) {
+	t.Parallel()
+	// Two matchers — both allow, second's reason should carry per the
+	// PermissionRequest aggregation rule.
+	first := decideServer(t, `{"hookSpecificOutput":{"decision":{"behavior":"allow","message":"first"}}}`)
+	second := decideServer(t, `{"hookSpecificOutput":{"decision":{"behavior":"allow","message":"second"}}}`)
+	matchers := map[string][]Matcher{
+		PermissionRequest: {
+			{Matcher: "*", Hooks: []Hook{{Type: "http", URL: first.URL}}},
+			{Matcher: "*", Hooks: []Hook{{Type: "http", URL: second.URL}}},
+		},
+	}
+	sender := newTestSender(t, matchers)
+
+	res, err := sender.OnPermissionRequest(context.Background(), "tu_1", "Bash", nil)
+	if err != nil {
+		t.Fatalf("OnPermissionRequest: %v", err)
+	}
+	if !res.Allow || res.Reason != "second" {
+		t.Errorf("aggregate = %+v, want Allow=true Reason=%q", res, "second")
+	}
+}
+
+func TestSender_OnPermissionRequest_AggregatesAnyDenyWins(t *testing.T) {
+	t.Parallel()
+	allow := decideServer(t, `{"hookSpecificOutput":{"decision":{"behavior":"allow"}}}`)
+	deny := decideServer(t, `{"hookSpecificOutput":{"decision":{"behavior":"deny","message":"second denies"}}}`)
+	tail := decideServer(t, `{"hookSpecificOutput":{"decision":{"behavior":"allow","message":"third allows"}}}`)
+	matchers := map[string][]Matcher{
+		PermissionRequest: {
+			{Matcher: "*", Hooks: []Hook{{Type: "http", URL: allow.URL}}},
+			{Matcher: "*", Hooks: []Hook{{Type: "http", URL: deny.URL}}},
+			{Matcher: "*", Hooks: []Hook{{Type: "http", URL: tail.URL}}},
+		},
+	}
+	sender := newTestSender(t, matchers)
+
+	res, err := sender.OnPermissionRequest(context.Background(), "tu_1", "Bash", nil)
+	if err != nil {
+		t.Fatalf("OnPermissionRequest: %v", err)
+	}
+	if !res.Block || res.Reason != "second denies" {
+		t.Errorf("aggregate = %+v, want Block=true Reason=%q", res, "second denies")
+	}
+}
+
+func TestSender_OnPermissionRequest_DefaultTimeout(t *testing.T) {
+	t.Parallel()
+	// permissionRequestTimeout is the per-event default. defaultTimeoutFor
+	// should return the longer ceiling for this event, the standard 10s
+	// elsewhere — verify both branches.
+	if got, want := defaultTimeoutFor(PermissionRequest), permissionRequestTimeout; got != want {
+		t.Errorf("defaultTimeoutFor(PermissionRequest) = %s, want %s", got, want)
+	}
+	if got, want := defaultTimeoutFor(Notification), defaultTimeout; got != want {
+		t.Errorf("defaultTimeoutFor(Notification) = %s, want %s", got, want)
+	}
+}
+
 func TestSender_MultipleHooksFire(t *testing.T) {
 	t.Parallel()
 	srv, recs, mu := captureServer(t)

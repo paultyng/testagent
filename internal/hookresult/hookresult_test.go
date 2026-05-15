@@ -52,6 +52,11 @@ func TestParseBody(t *testing.T) {
 			want: Result{Allow: true},
 		},
 		{
+			name: "PermissionRequest allow with message",
+			body: `{"hookSpecificOutput":{"decision":{"behavior":"allow","message":"approved by alice"}}}`,
+			want: Result{Allow: true, Reason: "approved by alice"},
+		},
+		{
 			name: "PermissionRequest deny with message",
 			body: `{"hookSpecificOutput":{"decision":{"behavior":"deny","message":"timed out"}}}`,
 			want: Result{Block: true, Reason: "timed out"},

@@ -265,6 +265,56 @@ func TestRunner_OnPreToolUse_Exit0ParsesStdout(t *testing.T) {
 	}
 }
 
+func TestRunner_OnPermissionRequest_Exit0Allows(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("windows cmd.exe quoting for JSON literal")
+	}
+	matchers := map[string][]Matcher{
+		EventPermissionRequest: {
+			{Command: `printf '{"hookSpecificOutput":{"decision":{"behavior":"allow"}}}\n'`, Timeout: hookTestTimeout},
+		},
+	}
+	r := NewRunner(matchers, "sid", t.TempDir(), "", "default", nil)
+	res, err := r.OnPermissionRequest(context.Background(), "tu_1", "shell", map[string]any{"command": "ls"})
+	if err != nil {
+		t.Fatalf("OnPermissionRequest: %v", err)
+	}
+	if !res.Allow || res.Block {
+		t.Errorf("decision = %+v, want Allow=true only", res)
+	}
+}
+
+func TestRunner_OnPermissionRequest_Exit2Blocks(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("windows cmd.exe stderr redirect + exit 2 quoting")
+	}
+	matchers := map[string][]Matcher{
+		EventPermissionRequest: {
+			{Command: `printf 'permission denied\n' 1>&2; exit 2`, Timeout: hookTestTimeout},
+		},
+	}
+	r := NewRunner(matchers, "sid", t.TempDir(), "", "default", nil)
+	res, err := r.OnPermissionRequest(context.Background(), "tu_1", "shell", nil)
+	if err != nil {
+		t.Fatalf("OnPermissionRequest: %v", err)
+	}
+	if !res.Block || !strings.Contains(res.Reason, "permission denied") {
+		t.Errorf("decision = %+v, want Block=true with deny reason", res)
+	}
+}
+
+func TestRunner_DefaultTimeoutFor_PermissionRequest(t *testing.T) {
+	t.Parallel()
+	if got, want := defaultTimeoutFor(EventPermissionRequest), permissionRequestTimeout; got != want {
+		t.Errorf("defaultTimeoutFor(EventPermissionRequest) = %s, want %s", got, want)
+	}
+	if got, want := defaultTimeoutFor(EventStop), defaultTimeout; got != want {
+		t.Errorf("defaultTimeoutFor(EventStop) = %s, want %s", got, want)
+	}
+}
+
 func TestRunner_DebugWriterEmitsLine(t *testing.T) {
 	t.Parallel()
 

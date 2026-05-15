@@ -62,19 +62,36 @@ var (
 // Codex hook event names. TOML keys are snake_case to match the
 // upstream config schema.
 const (
-	EventSessionStart     = "session_start"
-	EventUserPromptSubmit = "user_prompt_submit"
-	EventPreToolUse       = "pre_tool_use"
-	EventPostToolUse      = "post_tool_use"
-	EventStop             = "stop"
-	EventPreCompact       = "pre_compact"
-	EventPostCompact      = "post_compact"
+	EventSessionStart      = "session_start"
+	EventUserPromptSubmit  = "user_prompt_submit"
+	EventPreToolUse        = "pre_tool_use"
+	EventPostToolUse       = "post_tool_use"
+	EventStop              = "stop"
+	EventPreCompact        = "pre_compact"
+	EventPostCompact       = "post_compact"
+	EventPermissionRequest = "permission_request"
 )
 
 // defaultTimeout caps a synchronous matcher's wall-clock when the TOML
 // doesn't specify one. Mirrors the conservative default Claude's HTTP
 // hooks ship with.
 const defaultTimeout = 10 * time.Second
+
+// permissionRequestTimeout is the default per-matcher wall-clock for
+// permission_request, matching the 120s hold-open budget claude's
+// reference implementations use. Matchers may shorten via Timeout.
+const permissionRequestTimeout = 120 * time.Second
+
+// defaultTimeoutFor returns the per-matcher default wall-clock for
+// event. permission_request gets a longer ceiling because the hook
+// typically holds the connection open until the user resolves the
+// prompt; every other event uses the standard 10s default.
+func defaultTimeoutFor(event string) time.Duration {
+	if event == EventPermissionRequest {
+		return permissionRequestTimeout
+	}
+	return defaultTimeout
+}
 
 // shutdownGracePeriod caps how long Close waits for in-flight async
 // hook goroutines to finish their per-matcher timeout. Keeps process
@@ -245,6 +262,20 @@ func (r *Runner) OnPostCompact(ctx context.Context, trigger string) error {
 	return err
 }
 
+// OnPermissionRequest fires permission_request and waits for the
+// matcher script to return an allow/deny decision (default per-matcher
+// timeout 120s, matching the claude reference). The script returns its
+// decision via stdout JSON (exit 0) or via exit 2 with stderr as the
+// deny reason; see internal/hookresult for the contract. Aggregation
+// is any-deny-wins, otherwise last-allow-wins.
+func (r *Runner) OnPermissionRequest(ctx context.Context, toolUseID, toolName string, toolInput any) (hookresult.Result, error) {
+	return r.fire(ctx, EventPermissionRequest, map[string]string{
+		"CODEX_HOOK_TOOL_USE_ID": toolUseID,
+		"CODEX_HOOK_TOOL_NAME":   toolName,
+		"CODEX_HOOK_TOOL_INPUT":  jsonEncodeOrEmpty(toolInput),
+	})
+}
+
 // fire runs every matcher registered for event. Synchronous matchers
 // honor their timeout; async matchers fire-and-forget on a goroutine
 // (errors are logged via debugWriter only). Per-matcher errors are
@@ -312,7 +343,7 @@ func (r *Runner) runOne(ctx context.Context, event string, m Matcher, env []stri
 
 	timeout := time.Duration(m.Timeout) * time.Second
 	if timeout <= 0 {
-		timeout = defaultTimeout
+		timeout = defaultTimeoutFor(event)
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
