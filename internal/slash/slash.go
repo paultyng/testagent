@@ -402,12 +402,8 @@ func (h *Handler) cmdFakeTool(ctx context.Context, out io.Writer, rest string) {
 // ask), this short-circuits: a marker renders, the pending is restored,
 // and PostToolUse does not fire.
 func (h *Handler) cmdFakeToolResult(ctx context.Context, out io.Writer, rest string) {
-	// Take pending atomically; if it's awaiting permission, restore and
-	// short-circuit. Peeking under one lock then taking under another
-	// races against a concurrent /fake-tool replacing the entry.
-	pending := h.takePending()
-	if pending != nil && pending.awaitingPermission {
-		h.setPending(pending)
+	pending, kept := h.takePendingUnlessAwaiting()
+	if kept {
 		fmt.Fprintf(out, "%s\n", render.Lifecycle("still awaiting permission — pending preserved"))
 		return
 	}
@@ -470,6 +466,23 @@ func (h *Handler) takePending() *pendingToolCall {
 	p := h.pendingTool
 	h.pendingTool = nil
 	return p
+}
+
+// takePendingUnlessAwaiting atomically returns the current pending and
+// clears it, OR keeps it in place when awaitingPermission is set. The
+// second return value is true when the pending was kept (the caller
+// must NOT call setPending). Used by /fake-tool-result to short-circuit
+// without a check-then-act window that a concurrent /fake-tool could
+// race through.
+func (h *Handler) takePendingUnlessAwaiting() (*pendingToolCall, bool) {
+	h.pendingToolMu.Lock()
+	defer h.pendingToolMu.Unlock()
+	p := h.pendingTool
+	if p != nil && p.awaitingPermission {
+		return p, true
+	}
+	h.pendingTool = nil
+	return p, false
 }
 
 // firePendingHook posts PostToolUse for a captured /fake-tool. response is the

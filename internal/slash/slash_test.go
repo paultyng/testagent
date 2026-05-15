@@ -502,29 +502,33 @@ func TestSlash_FakeTool_BlockedByHook_FiresPostWithError(t *testing.T) {
 
 func TestSlash_FakeTool_BlockedWithPriorPending_FlushesPriorThenBlocks(t *testing.T) {
 	t.Parallel()
-	// /fake-tool A (default) → /fake-tool B (deny): expect 4 hooks in
-	// order — Pre-A, Post-A (flush of prior), Pre-B, Post-B (blocked).
-	// /pre-A allows (empty body), /pre-B denies; both /post path hits
-	// fall into the same handler.
+	// Exercises the flush-prior code path: /fake-tool A (allowed) lands
+	// in pending; /fake-tool B (denied) flushes A then short-circuits B.
+	// One PreToolUse matcher that branches on tool_name so the
+	// aggregation rule (any-block-wins) doesn't bleed B's deny into A.
 	var (
 		mu   sync.Mutex
 		hits []map[string]any
 	)
-	srv := decisionRouter(t, &hits, &mu, map[string]string{
-		"/pre-b": `{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"B denied"}}`,
-	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		body["__path"] = r.URL.Path
+		mu.Lock()
+		hits = append(hits, body)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		if r.URL.Path == "/pre" && body["tool_name"] == "B" {
+			_, _ = io.WriteString(w, `{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"B denied"}}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
 
 	out := &bytes.Buffer{}
 	h := newTestHandler(out)
 	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
-		"PreToolUse": {
-			// Two matchers — only the matching tool name should fire,
-			// but Phase 2 doesn't enforce matcher patterns (#84), so
-			// both fire on every Pre. Use distinct URLs and assert
-			// presence rather than exact ordering across them.
-			{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pre-a", Timeout: 1}}},
-			{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pre-b", Timeout: 1}}},
-		},
+		"PreToolUse":  {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pre", Timeout: 1}}}},
 		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/post", Timeout: 1}}}},
 	}, "sid-test", "/tmp", "", "default", nil)
 
@@ -534,29 +538,28 @@ func TestSlash_FakeTool_BlockedWithPriorPending_FlushesPriorThenBlocks(t *testin
 
 	mu.Lock()
 	defer mu.Unlock()
-	// Pre fires for both matchers per /fake-tool: 4 Pre + 1 Post (flush) + 1 Post (blocked) = 6.
-	if len(hits) != 6 {
-		t.Fatalf("got %d hooks, want 6:\n%v", len(hits), hits)
+	// Pre-A, Post-A (flush), Pre-B, Post-B (blocked) = 4 hits.
+	if len(hits) != 4 {
+		t.Fatalf("got %d hooks, want 4:\n%v", len(hits), hits)
 	}
-	// Walk and tally posts; assert the flush-Post used tool_name "A" and the blocked-Post used "B".
-	var posts []map[string]any
-	for _, h := range hits {
-		if h["__path"] == "/post" {
-			posts = append(posts, h)
+	wantPaths := []string{"/pre", "/post", "/pre", "/post"}
+	wantNames := []string{"A", "A", "B", "B"}
+	for i, h := range hits {
+		if h["__path"] != wantPaths[i] {
+			t.Errorf("hits[%d].__path = %v, want %v", i, h["__path"], wantPaths[i])
+		}
+		if h["tool_name"] != wantNames[i] {
+			t.Errorf("hits[%d].tool_name = %v, want %v", i, h["tool_name"], wantNames[i])
 		}
 	}
-	if len(posts) != 2 {
-		t.Fatalf("got %d Post hooks, want 2; all hits: %v", len(posts), hits)
+	// Post-A is the flush (nil response per the flush convention).
+	if _, ok := hits[1]["tool_response"]; ok && hits[1]["tool_response"] != nil {
+		t.Errorf("flush Post-A tool_response = %v, want nil", hits[1]["tool_response"])
 	}
-	if posts[0]["tool_name"] != "A" {
-		t.Errorf("first Post tool_name = %v, want A", posts[0]["tool_name"])
-	}
-	if posts[1]["tool_name"] != "B" {
-		t.Errorf("second Post tool_name = %v, want B", posts[1]["tool_name"])
-	}
-	resp, _ := posts[1]["tool_response"].(map[string]any)
+	// Post-B is the blocked synthetic.
+	resp, _ := hits[3]["tool_response"].(map[string]any)
 	if resp == nil || resp["error"] != "blocked" || resp["reason"] != "B denied" {
-		t.Errorf("blocked Post tool_response = %v, want {error:blocked, reason:B denied}", posts[1]["tool_response"])
+		t.Errorf("blocked Post-B tool_response = %v, want {error:blocked, reason:B denied}", hits[3]["tool_response"])
 	}
 }
 
