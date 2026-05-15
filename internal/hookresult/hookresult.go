@@ -80,6 +80,7 @@ func ParseBody(body []byte) Result {
 				return r
 			case "allow":
 				r.Allow = true
+				r.Reason = hso.Decision.Message
 				return r
 			}
 		}
@@ -95,6 +96,7 @@ func ParseBody(body []byte) Result {
 			return r
 		case "allow":
 			r.Allow = true
+			r.Reason = hso.PermissionDecisionReason
 			return r
 			// "defer" intentionally falls through to the legacy path below.
 		}

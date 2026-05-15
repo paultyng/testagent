@@ -28,18 +28,48 @@ const maxResponseBody = 64 << 10
 // Claude Code hook event names, exported so callers can build matcher maps
 // without stringly-typed event keys.
 const (
-	UserPromptSubmit = "UserPromptSubmit"
-	PreToolUse       = "PreToolUse"
-	PostToolUse      = "PostToolUse"
-	Stop             = "Stop"
-	SessionStart     = "SessionStart"
-	SessionEnd       = "SessionEnd"
-	PreCompact       = "PreCompact"
-	PostCompact      = "PostCompact"
+	UserPromptSubmit  = "UserPromptSubmit"
+	PreToolUse        = "PreToolUse"
+	PostToolUse       = "PostToolUse"
+	Stop              = "Stop"
+	SessionStart      = "SessionStart"
+	SessionEnd        = "SessionEnd"
+	PreCompact        = "PreCompact"
+	PostCompact       = "PostCompact"
+	Notification      = "Notification"
+	PermissionRequest = "PermissionRequest"
+)
+
+// Notification matcher values, mirroring Claude Code's documented set.
+// Orchestrators can configure hooks scoped to any subset; testagent
+// passes these through as the Matcher field in the event body.
+const (
+	NotificationPermissionPrompt    = "permission_prompt"
+	NotificationIdlePrompt          = "idle_prompt"
+	NotificationAuthSuccess         = "auth_success"
+	NotificationElicitationDialog   = "elicitation_dialog"
+	NotificationElicitationComplete = "elicitation_complete"
+	NotificationElicitationResponse = "elicitation_response"
 )
 
 // defaultTimeout is used when a Hook in settings does not specify Timeout.
 const defaultTimeout = 10 * time.Second
+
+// permissionRequestTimeout is the default per-hook wall-clock for
+// PermissionRequest, matching the 120s hold-open budget agentsd's
+// reference implementation uses. Hooks may shorten it via Hook.Timeout.
+const permissionRequestTimeout = 120 * time.Second
+
+// defaultTimeoutFor returns the per-hook default wall-clock for event.
+// PermissionRequest gets a longer ceiling because the server typically
+// holds the connection open until the user resolves the prompt; every
+// other event uses the standard 10s default.
+func defaultTimeoutFor(event string) time.Duration {
+	if event == PermissionRequest {
+		return permissionRequestTimeout
+	}
+	return defaultTimeout
+}
 
 // Matcher binds a matcher pattern to one or more http hooks. Mirrors the
 // shape Claude Code's settings.json uses under hooks.<event>[].
@@ -172,6 +202,39 @@ type compactBody struct {
 	Trigger        string `json:"trigger"`
 }
 
+// notificationBody is the JSON body for Notification. Claude Code fires
+// Notification fire-and-forget (idle prompts, permission UI events,
+// elicitation lifecycle); testagent posts the body but discards the
+// response. The Matcher field carries one of the documented values
+// (permission_prompt / idle_prompt / auth_success / elicitation_*) so
+// orchestrator hooks can branch.
+type notificationBody struct {
+	CWD            string `json:"cwd"`
+	HookEventName  string `json:"hook_event_name"`
+	Matcher        string `json:"matcher,omitempty"`
+	Message        string `json:"message"`
+	PermissionMode string `json:"permission_mode"`
+	SessionID      string `json:"session_id"`
+	Title          string `json:"title,omitempty"`
+	TranscriptPath string `json:"transcript_path"`
+}
+
+// permissionRequestBody is the JSON body for PermissionRequest. The
+// hook server holds the HTTP connection open until it decides allow
+// or deny; testagent waits up to permissionRequestTimeout for that
+// response and routes on the nested hookSpecificOutput.decision.behavior
+// shape via internal/hookresult.
+type permissionRequestBody struct {
+	CWD            string `json:"cwd"`
+	HookEventName  string `json:"hook_event_name"`
+	PermissionMode string `json:"permission_mode"`
+	SessionID      string `json:"session_id"`
+	ToolInput      any    `json:"tool_input"`
+	ToolName       string `json:"tool_name"`
+	ToolUseID      string `json:"tool_use_id"`
+	TranscriptPath string `json:"transcript_path"`
+}
+
 // OnPrompt fires UserPromptSubmit. sessionTitle is the human-facing label.
 func (s *Sender) OnPrompt(ctx context.Context, prompt, sessionTitle string) error {
 	body := userPromptSubmitBody{
@@ -294,6 +357,46 @@ func (s *Sender) OnPostCompact(ctx context.Context, trigger string) error {
 	return err
 }
 
+// OnNotification fires Notification. Claude Code uses this for idle
+// prompts, permission UI events, and the elicitation lifecycle — all
+// advisory. matcher is one of the documented values (use the
+// Notification* constants); message and title are user-facing strings.
+// Any decision returned by the hook is discarded (Notification does
+// not gate anything).
+func (s *Sender) OnNotification(ctx context.Context, matcher, message, title string) error {
+	body := notificationBody{
+		CWD:            s.cwd,
+		HookEventName:  Notification,
+		Matcher:        matcher,
+		Message:        message,
+		PermissionMode: s.permissionMode,
+		SessionID:      s.sessionID,
+		Title:          title,
+		TranscriptPath: s.transcriptPath,
+	}
+	_, err := s.fire(ctx, Notification, body)
+	return err
+}
+
+// OnPermissionRequest fires PermissionRequest and waits for the hook
+// server to return an allow/deny decision (default per-hook timeout
+// 120s, matching agentsd's reference). The returned hookresult.Result
+// carries the aggregated behavior; aggregation is any-deny-wins,
+// otherwise last-allow-wins (see internal/hookresult).
+func (s *Sender) OnPermissionRequest(ctx context.Context, toolUseID, toolName string, toolInput any) (hookresult.Result, error) {
+	body := permissionRequestBody{
+		CWD:            s.cwd,
+		HookEventName:  PermissionRequest,
+		PermissionMode: s.permissionMode,
+		SessionID:      s.sessionID,
+		ToolInput:      toolInput,
+		ToolName:       toolName,
+		ToolUseID:      toolUseID,
+		TranscriptPath: s.transcriptPath,
+	}
+	return s.fire(ctx, PermissionRequest, body)
+}
+
 // fire iterates every Matcher registered for event and dispatches each
 // hook to the runner for its Type ("http" or "command"). Per-hook errors
 // are aggregated via errors.Join; a failing hook does not prevent the
@@ -360,7 +463,7 @@ func (s *Sender) post(ctx context.Context, event string, hook Hook, payload []by
 
 	timeout := time.Duration(hook.Timeout) * time.Second
 	if timeout <= 0 {
-		timeout = defaultTimeout
+		timeout = defaultTimeoutFor(event)
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -410,7 +513,7 @@ func (s *Sender) runCommand(ctx context.Context, event string, hook Hook, payloa
 
 	timeout := time.Duration(hook.Timeout) * time.Second
 	if timeout <= 0 {
-		timeout = defaultTimeout
+		timeout = defaultTimeoutFor(event)
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
