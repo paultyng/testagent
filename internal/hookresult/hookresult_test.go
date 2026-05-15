@@ -32,6 +32,11 @@ func TestParseBody(t *testing.T) {
 			want: Result{Allow: true},
 		},
 		{
+			name: "permissionDecision allow with reason",
+			body: `{"hookSpecificOutput":{"permissionDecision":"allow","permissionDecisionReason":"in allowlist"}}`,
+			want: Result{Allow: true, Reason: "in allowlist"},
+		},
+		{
 			name: "permissionDecision deny with reason",
 			body: `{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"not in allowlist"}}`,
 			want: Result{Block: true, Reason: "not in allowlist"},
