@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/paultyng/testagent/internal/hookresult"
 	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/mcp"
 )
@@ -768,6 +769,35 @@ func TestSlash_FakeNotification_MatcherAndMessage(t *testing.T) {
 	}
 	if hits[0]["message"] != "session has been idle" {
 		t.Errorf("message = %v, want %q", hits[0]["message"], "session has been idle")
+	}
+}
+
+// toolOnlySender satisfies ToolHookSender but NOT NotificationSender,
+// modeling codex's Runner for the purposes of asserting that
+// /fake-notification rejects cleanly on vendors that don't expose
+// the event.
+type toolOnlySender struct{}
+
+func (toolOnlySender) OnPreToolUse(context.Context, string, string, any) (hookresult.Result, error) {
+	return hookresult.Result{}, nil
+}
+func (toolOnlySender) OnPostToolUse(context.Context, string, string, any, any, int64) error {
+	return nil
+}
+func (toolOnlySender) OnPermissionRequest(context.Context, string, string, any) (hookresult.Result, error) {
+	return hookresult.Result{}, nil
+}
+
+func TestSlash_FakeNotification_VendorWithoutNotificationSenderRejects(t *testing.T) {
+	t.Parallel()
+	out := &bytes.Buffer{}
+	h := New(toolOnlySender{}, mcp.NewClient(nil), out)
+	// stderr is the rejection channel; capture by replacing os.Stderr
+	// is invasive, so just assert that no /n hook hit fires and that
+	// out remains empty (rejection prints to stderr, not out).
+	h.Dispatch(context.Background(), `/fake-notification`)
+	if out.Len() != 0 {
+		t.Errorf("output not empty; got %q", out.String())
 	}
 }
 

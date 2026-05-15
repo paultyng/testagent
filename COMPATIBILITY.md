@@ -325,7 +325,7 @@ Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes
 | `Stop` | ✓ supported | Fires after each assistant response; emits `CODEX_HOOK_LAST_ASSISTANT_MESSAGE` |
 | `PreCompact` | ✓ supported | Fires before SessionEnd → SessionStart on `/compact` and `/fake-auto-compact`; emits `CODEX_HOOK_TRIGGER=manual\|auto` |
 | `PostCompact` | ✓ supported | Fires after SessionEnd → SessionStart on `/compact` and `/fake-auto-compact`; emits `CODEX_HOOK_TRIGGER=manual\|auto` |
-| `PermissionRequest` | ✓ supported | Fired by `/fake-permission-request <tool_name> [json-args]`; nested `decision.behavior` response shape from script stdout (exit 0) or stderr (exit 2); 120s default hold-open via per-matcher `timeout` |
+| `PermissionRequest` | ✓ supported | Fired by `/fake-permission-request <tool_name> [json-args]`; nested `decision.behavior` response from script stdout (exit 0) or stderr (exit 2); 120s default hold-open via per-matcher `timeout`; exit 0 with no stdout renders as `permission timed out: deny` |
 
 ### Config and conventions
 

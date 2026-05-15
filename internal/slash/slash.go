@@ -529,11 +529,9 @@ func (h *Handler) firePendingHook(ctx context.Context, p *pendingToolCall, respo
 	}
 }
 
-// /fake-notification [matcher] [-- message] — fires the claude Notification
-// event with the chosen matcher (defaults to permission_prompt). The
-// optional message follows a `--` separator so the matcher token can't
-// be confused with multi-word message text. Returns a no-op error on
-// vendors that don't implement NotificationSender (codex).
+// /fake-notification [matcher] [-- message] — claude-only. Message
+// follows a `--` separator so the matcher token isn't confused with
+// multi-word text.
 func (h *Handler) cmdFakeNotification(ctx context.Context, out io.Writer, rest string) {
 	ns, ok := h.hooks.(NotificationSender)
 	if !ok {
@@ -559,11 +557,9 @@ func (h *Handler) cmdFakeNotification(ctx context.Context, out io.Writer, rest s
 }
 
 // /fake-permission-request <tool_name> [json-args] — fires PermissionRequest
-// and waits for the hook server to return allow/deny. The render reflects
-// the aggregated decision: [permission granted], [permission denied: …],
-// or [permission timed out: deny] when the request errors out (e.g.
-// per-hook timeout exceeded). PostToolUse is NOT fired here; this slash
-// drives the permission lifecycle independently of /fake-tool.
+// and waits for the aggregated allow/deny decision. PostToolUse is NOT
+// fired here — this slash drives the permission lifecycle independently
+// of /fake-tool.
 func (h *Handler) cmdFakePermissionRequest(ctx context.Context, out io.Writer, rest string) {
 	name, jsonArgs := splitFirstWord(rest)
 	if name == "" {
@@ -575,8 +571,12 @@ func (h *Handler) cmdFakePermissionRequest(ctx context.Context, out io.Writer, r
 	res, err := h.hooks.OnPermissionRequest(ctx, toolUseID, name, args)
 	switch {
 	case err != nil:
+		// Transport / hook-execution failure; the err itself is logged
+		// to stderr. Distinguish from the no-decision path so
+		// orchestrators can tell a flaky hook server from a hook that
+		// returned 200 with no body.
 		fmt.Fprintf(os.Stderr, "testagent: hook OnPermissionRequest: %v\n", err)
-		fmt.Fprintf(out, "%s\n", render.LifecycleWarn("permission timed out: deny"))
+		fmt.Fprintf(out, "%s\n", render.LifecycleWarn("permission error: deny"))
 	case res.Block:
 		marker := "permission denied"
 		if res.Reason != "" {
@@ -590,8 +590,9 @@ func (h *Handler) cmdFakePermissionRequest(ctx context.Context, out io.Writer, r
 		}
 		fmt.Fprintf(out, "%s\n", render.Lifecycle(marker))
 	default:
-		// No matcher returned a decision: treat as a hold-open that
-		// never resolved within the per-hook timeout, surface as deny.
+		// Hook returned but produced no decision (200 with empty body,
+		// or no matchers registered). Treat as a hold-open that never
+		// resolved; surface as deny.
 		fmt.Fprintf(out, "%s\n", render.LifecycleWarn("permission timed out: deny"))
 	}
 }
