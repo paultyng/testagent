@@ -939,7 +939,12 @@ func TestSender_CommandHook_TimeoutHonored(t *testing.T) {
 			},
 		},
 	}
-	sender := newCmdTestSender(t, matchers)
+	// Use os.TempDir() rather than t.TempDir() for the cwd: the test
+	// force-kills the shell on timeout, and on Windows the kill doesn't
+	// release the dir's file handles in time for t.TempDir's cleanup,
+	// which then fails the test. The shell here doesn't write to cwd, so
+	// the global tmp dir is a safe stand-in that needs no cleanup.
+	sender := NewSender(matchers, "session-xyz", os.TempDir(), "/tmp/transcript.jsonl", "auto", nil)
 	start := time.Now()
 	err := sender.OnStop(context.Background(), "msg", false)
 	elapsed := time.Since(start)
