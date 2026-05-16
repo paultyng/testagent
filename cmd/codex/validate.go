@@ -101,7 +101,7 @@ func validateConfigFile(path string, strict bool, col *configvalidate.Collector)
 		col.Addf(path, 0, "unknown key %q", k.String())
 	}
 	for event, groups := range c.Hooks {
-		if !containsStr(knownCodexEvents, event) {
+		if !configvalidate.ContainsStr(knownCodexEvents, event) {
 			col.Addf(path, 0, "unknown hook event %q (%s)", event, configvalidate.Suggest(event, knownCodexEvents))
 		}
 		if len(groups) == 0 {
@@ -114,7 +114,7 @@ func validateConfigFile(path string, strict bool, col *configvalidate.Collector)
 				continue
 			}
 			for j, h := range g.Hooks {
-				if !containsStr(knownCodexHookTypes, h.Type) {
+				if !configvalidate.ContainsStr(knownCodexHookTypes, h.Type) {
 					col.Addf(path, 0, "hooks.%s[%d].hooks[%d] unknown type %q (%s)",
 						event, i, j, h.Type, configvalidate.Suggest(h.Type, knownCodexHookTypes))
 					continue
@@ -138,11 +138,3 @@ func validateConfigFile(path string, strict bool, col *configvalidate.Collector)
 	}
 }
 
-func containsStr(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
-}

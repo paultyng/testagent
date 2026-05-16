@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -158,6 +159,13 @@ func Suggest(input string, valid []string) string {
 	copy(sorted, valid)
 	sort.Strings(sorted)
 	return "valid: " + strings.Join(sorted, ", ")
+}
+
+// ContainsStr is a small membership helper shared across vendor
+// validate packages. Wraps slices.Contains so callers stay readable
+// at the rule-check sites.
+func ContainsStr(haystack []string, needle string) bool {
+	return slices.Contains(haystack, needle)
 }
 
 // levenshtein returns the edit distance between a and b using the

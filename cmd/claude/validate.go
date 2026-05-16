@@ -62,7 +62,7 @@ zero hooks.`,
 
 // runValidate is the testable body. Reports issues to stderr and
 // returns an ExitError carrying the documented exit code.
-func runValidate(stderr interface{ Write([]byte) (int, error) }, settingsPath, mcpPath string, strict bool) error {
+func runValidate(stderr io.Writer, settingsPath, mcpPath string, strict bool) error {
 	if settingsPath == "" && mcpPath == "" {
 		fmt.Fprintln(stderr, "validate: supply at least one of --settings, --mcp-config")
 		return &ExitError{Code: configvalidate.ExitUsageError}
@@ -75,7 +75,7 @@ func runValidate(stderr interface{ Write([]byte) (int, error) }, settingsPath, m
 		}
 	}
 	if mcpPath != "" {
-		if err := validateMCPConfigFile(mcpPath, strict, &col); err != nil && usageErr == nil {
+		if err := validateMCPConfigFile(mcpPath, &col); err != nil && usageErr == nil {
 			usageErr = err
 		}
 	}
@@ -120,7 +120,7 @@ func validateSettingsRules(path string, s *Settings, strict bool, col *configval
 		return
 	}
 	for event, matchers := range s.Hooks {
-		if !containsStr(knownClaudeEvents, event) {
+		if !configvalidate.ContainsStr(knownClaudeEvents, event) {
 			col.Addf(path, 0, "unknown hook event %q (%s)", event, configvalidate.Suggest(event, knownClaudeEvents))
 		}
 		if len(matchers) == 0 {
@@ -133,7 +133,7 @@ func validateSettingsRules(path string, s *Settings, strict bool, col *configval
 				continue
 			}
 			for j, h := range m.Hooks {
-				if !containsStr(knownClaudeHookTypes, h.Type) {
+				if !configvalidate.ContainsStr(knownClaudeHookTypes, h.Type) {
 					col.Addf(path, 0, "hooks.%s[%d].hooks[%d] unknown type %q (%s)",
 						event, i, j, h.Type, configvalidate.Suggest(h.Type, knownClaudeHookTypes))
 					continue
@@ -153,10 +153,10 @@ func validateSettingsRules(path string, s *Settings, strict bool, col *configval
 	}
 }
 
-// validateMCPConfigFile is a placeholder for now — the issue scope
-// covers hook validation only. MCP config validation is a separate
-// follow-up; today we just confirm the file parses.
-func validateMCPConfigFile(path string, _ bool, col *configvalidate.Collector) error {
+// validateMCPConfigFile is parse-only today; per-server schema rules
+// are tracked in #93. Drop the strict flag from the signature so a
+// future reader doesn't think the lax/strict split is already wired.
+func validateMCPConfigFile(path string, col *configvalidate.Collector) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("reading %s: %w", path, err)
@@ -193,13 +193,3 @@ func addJSONDecodeIssue(col *configvalidate.Collector, path string, data []byte,
 	}
 }
 
-// containsStr is a small generic membership helper. Kept inline rather
-// than adding slices.Contains import for this single call site.
-func containsStr(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
-}
