@@ -167,6 +167,8 @@ Unknown `type` values decode cleanly and are silently skipped at dispatch.
 
 For tool-scoped events (`PreToolUse`, `PostToolUse`, `PermissionRequest`) testagent filters matchers against the active `tool_name`. For `Notification`, the matcher field filters against the documented subtype value (`permission_prompt`, `idle_prompt`, etc.). Other events ignore the matcher field — every registered matcher fires.
 
+**Behavior change (upgrading from ≤ v0.5.0)**: matchers on tool-scoped events were previously fired unconditionally regardless of pattern. Configs that registered `matcher: "Bash"` and relied on the buggy fire-all behavior will now correctly only fire on `Bash` calls. Use `""` or `"*"` for an explicit catch-all.
+
 Pattern grammar (matches Claude Code's documented set):
 
 - `""` or `"*"` — catch-all.

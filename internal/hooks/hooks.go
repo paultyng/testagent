@@ -365,6 +365,11 @@ func (s *Sender) OnPostCompact(ctx context.Context, trigger string) error {
 // Notification* constants); message and title are user-facing strings.
 // Any decision returned by the hook is discarded (Notification does
 // not gate anything).
+//
+// matcher doubles as the filter axis: every Notification matcher whose
+// pattern matches this value fires. An empty matcher broadcasts to all
+// Notification matchers — callers should normally pass one of the
+// documented values.
 func (s *Sender) OnNotification(ctx context.Context, matcher, message, title string) error {
 	body := notificationBody{
 		CWD:            s.cwd,
