@@ -45,10 +45,10 @@ prompt = "ignored-by-testagent"
 	got := matchersFromConfig(&c)
 	want := map[string][]codexhooks.Matcher{
 		"SessionStart": {
-			{Command: "echo session-started", Timeout: 5},
+			{Pattern: "*", Command: "echo session-started", Timeout: 5},
 		},
 		"UserPromptSubmit": {
-			{Command: "echo got-prompt", Async: true},
+			{Pattern: "", Command: "echo got-prompt", Async: true},
 		},
 	}
 	if !reflect.DeepEqual(got, want) {

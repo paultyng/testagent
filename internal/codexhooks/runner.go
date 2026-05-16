@@ -36,7 +36,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -99,10 +101,13 @@ func defaultTimeoutFor(event string) time.Duration {
 const shutdownGracePeriod = 5 * time.Second
 
 // Matcher is one runnable command-type hook entry, post-flattening
-// from cmd/codex.Config's MatcherGroup + hooks[] schema. Only the
-// fields the Runner consumes appear here (the on-disk schema has
-// more — see cmd/codex/config.go).
+// from cmd/codex.Config's MatcherGroup + hooks[] schema. Pattern is
+// the MatcherGroup's tool-name filter (empty/`*` = match all; literal
+// = exact; `A|B|C` = any-of; otherwise regex). Only consulted for
+// tool-scoped events (pre_tool_use / post_tool_use / permission_request);
+// every other event ignores it.
 type Matcher struct {
+	Pattern string
 	Command string
 	Async   bool
 	Timeout int // seconds; 0 → defaultTimeout
@@ -184,7 +189,7 @@ func (r *Runner) Close(ctx context.Context) error {
 
 // OnPrompt fires user_prompt_submit hooks.
 func (r *Runner) OnPrompt(ctx context.Context, prompt, sessionTitle string) error {
-	_, err := r.fire(ctx, EventUserPromptSubmit, map[string]string{
+	_, err := r.fire(ctx, EventUserPromptSubmit, "", map[string]string{
 		"CODEX_HOOK_PROMPT":        prompt,
 		"CODEX_HOOK_SESSION_TITLE": sessionTitle,
 	})
@@ -197,7 +202,7 @@ func (r *Runner) OnPrompt(ctx context.Context, prompt, sessionTitle string) erro
 // returned hookresult.Result carries the aggregated decision; see the
 // claude OnPreToolUse doc for the contract.
 func (r *Runner) OnPreToolUse(ctx context.Context, toolUseID, toolName string, toolInput any) (hookresult.Result, error) {
-	return r.fire(ctx, EventPreToolUse, map[string]string{
+	return r.fire(ctx, EventPreToolUse, toolName, map[string]string{
 		"CODEX_HOOK_TOOL_USE_ID": toolUseID,
 		"CODEX_HOOK_TOOL_NAME":   toolName,
 		"CODEX_HOOK_TOOL_INPUT":  jsonEncodeOrEmpty(toolInput),
@@ -206,7 +211,7 @@ func (r *Runner) OnPreToolUse(ctx context.Context, toolUseID, toolName string, t
 
 // OnPostToolUse fires post_tool_use after the tool completes.
 func (r *Runner) OnPostToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error {
-	_, err := r.fire(ctx, EventPostToolUse, map[string]string{
+	_, err := r.fire(ctx, EventPostToolUse, toolName, map[string]string{
 		"CODEX_HOOK_TOOL_USE_ID":   toolUseID,
 		"CODEX_HOOK_TOOL_NAME":     toolName,
 		"CODEX_HOOK_TOOL_INPUT":    jsonEncodeOrEmpty(toolInput),
@@ -218,7 +223,7 @@ func (r *Runner) OnPostToolUse(ctx context.Context, toolUseID, toolName string, 
 
 // OnStop fires stop hooks.
 func (r *Runner) OnStop(ctx context.Context, lastAssistantMessage string, stopHookActive bool) error {
-	_, err := r.fire(ctx, EventStop, map[string]string{
+	_, err := r.fire(ctx, EventStop, "", map[string]string{
 		"CODEX_HOOK_LAST_ASSISTANT_MESSAGE": lastAssistantMessage,
 		"CODEX_HOOK_STOP_HOOK_ACTIVE":       boolToString(stopHookActive),
 	})
@@ -227,7 +232,7 @@ func (r *Runner) OnStop(ctx context.Context, lastAssistantMessage string, stopHo
 
 // OnSessionStart fires session_start hooks.
 func (r *Runner) OnSessionStart(ctx context.Context, source string) error {
-	_, err := r.fire(ctx, EventSessionStart, map[string]string{
+	_, err := r.fire(ctx, EventSessionStart, "", map[string]string{
 		"CODEX_HOOK_SOURCE": source,
 	})
 	return err
@@ -247,7 +252,7 @@ func (r *Runner) OnSessionEnd(ctx context.Context, reason string) error {
 // lifecycle); it lands in CODEX_HOOK_TRIGGER so a config matcher on
 // `trigger = "manual"` or `trigger = "auto"` can branch.
 func (r *Runner) OnPreCompact(ctx context.Context, trigger string) error {
-	_, err := r.fire(ctx, EventPreCompact, map[string]string{
+	_, err := r.fire(ctx, EventPreCompact, "", map[string]string{
 		"CODEX_HOOK_TRIGGER": trigger,
 	})
 	return err
@@ -256,7 +261,7 @@ func (r *Runner) OnPreCompact(ctx context.Context, trigger string) error {
 // OnPostCompact fires post_compact after the SessionStart that follows
 // compaction. trigger matches the PreCompact value.
 func (r *Runner) OnPostCompact(ctx context.Context, trigger string) error {
-	_, err := r.fire(ctx, EventPostCompact, map[string]string{
+	_, err := r.fire(ctx, EventPostCompact, "", map[string]string{
 		"CODEX_HOOK_TRIGGER": trigger,
 	})
 	return err
@@ -269,7 +274,7 @@ func (r *Runner) OnPostCompact(ctx context.Context, trigger string) error {
 // deny reason; see internal/hookresult for the contract. Aggregation
 // is any-deny-wins, otherwise last-allow-wins.
 func (r *Runner) OnPermissionRequest(ctx context.Context, toolUseID, toolName string, toolInput any) (hookresult.Result, error) {
-	return r.fire(ctx, EventPermissionRequest, map[string]string{
+	return r.fire(ctx, EventPermissionRequest, toolName, map[string]string{
 		"CODEX_HOOK_TOOL_USE_ID": toolUseID,
 		"CODEX_HOOK_TOOL_NAME":   toolName,
 		"CODEX_HOOK_TOOL_INPUT":  jsonEncodeOrEmpty(toolInput),
@@ -281,11 +286,15 @@ func (r *Runner) OnPermissionRequest(ctx context.Context, toolUseID, toolName st
 // (errors are logged via debugWriter only). Per-matcher errors are
 // aggregated via errors.Join — one bad matcher does not stop the rest.
 //
+// filterAxis is the tool name for tool-scoped events; empty for events
+// with no scoping axis (every matcher fires). See hooks.matchesMatcher
+// in internal/hooks for the supported pattern grammar.
+//
 // Synchronous matchers' stdout/stderr + exit code feed hookresult.Aggregate
 // for the event; async matchers never contribute to the decision (their
 // result is observed only via debugWriter, since by definition the agent
 // has already moved on).
-func (r *Runner) fire(ctx context.Context, event string, extraEnv map[string]string) (hookresult.Result, error) {
+func (r *Runner) fire(ctx context.Context, event, filterAxis string, extraEnv map[string]string) (hookresult.Result, error) {
 	matchers, ok := r.matchers[event]
 	if !ok || len(matchers) == 0 {
 		return hookresult.Result{}, nil
@@ -296,6 +305,9 @@ func (r *Runner) fire(ctx context.Context, event string, extraEnv map[string]str
 		results []hookresult.Result
 	)
 	for _, m := range matchers {
+		if filterAxis != "" && !matchesMatcher(m.Pattern, filterAxis) {
+			continue
+		}
 		if m.Async {
 			r.mu.Lock()
 			if r.closed {
@@ -374,6 +386,38 @@ func (r *Runner) runOne(ctx context.Context, event string, m Matcher, env []stri
 		}
 	}
 	return hookresult.ParseCommand(exitCode, stdout.Bytes(), stderr.Bytes()), nil
+}
+
+// matchesMatcher mirrors hooks.matchesMatcher for codex's matcher
+// patterns. Duplicated rather than imported because codex shouldn't
+// depend on the claude-vendor package; the grammar is small enough
+// that occasional drift is easier to spot than a cross-import.
+//
+//   - "" or "*"  → catch-all
+//   - "shell"    → exact match
+//   - "A|B|C"    → any-of alternation (segments are exact)
+//   - other      → regex (unanchored substring)
+func matchesMatcher(pattern, value string) bool {
+	switch pattern {
+	case "", "*":
+		return true
+	}
+	if strings.Contains(pattern, "|") && !strings.ContainsAny(pattern, "().[]*+?^$\\{}") {
+		for _, seg := range strings.Split(pattern, "|") {
+			if seg == value {
+				return true
+			}
+		}
+		return false
+	}
+	if !strings.ContainsAny(pattern, "().[]*+?^$\\{}|") {
+		return pattern == value
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return false
+	}
+	return re.FindString(value) != ""
 }
 
 // limitedWriter caps memory growth from a hook that emits unbounded

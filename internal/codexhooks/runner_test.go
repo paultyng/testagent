@@ -315,6 +315,62 @@ func TestRunner_DefaultTimeoutFor_PermissionRequest(t *testing.T) {
 	}
 }
 
+func TestRunner_MatchesMatcher(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		pattern, value string
+		want           bool
+	}{
+		{"", "shell", true},
+		{"*", "shell", true},
+		{"shell", "shell", true},
+		{"shell", "read", false},
+		{"shell|read", "read", true},
+		{"shell|read", "edit", false},
+		{"^sh.*", "shell", true},
+		{"^sh.*", "read", false},
+		{"[", "shell", false}, // malformed regex
+	}
+	for _, tc := range cases {
+		t.Run(tc.pattern+"_vs_"+tc.value, func(t *testing.T) {
+			t.Parallel()
+			if got := matchesMatcher(tc.pattern, tc.value); got != tc.want {
+				t.Errorf("matchesMatcher(%q, %q) = %v, want %v", tc.pattern, tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunner_OnPreToolUse_PatternFilters(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("relies on Unix touch + file presence")
+	}
+	dir := t.TempDir()
+	matchers := map[string][]Matcher{
+		EventPreToolUse: {
+			{Pattern: "shell", Command: "touch " + filepath.Join(dir, "fired"), Timeout: hookTestTimeout},
+		},
+	}
+	r := NewRunner(matchers, "sid", dir, "", "default", nil)
+
+	// "read" tool name should not match the "shell" pattern.
+	if _, err := r.OnPreToolUse(context.Background(), "tu_1", "read", nil); err != nil {
+		t.Fatalf("OnPreToolUse read: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "fired")); err == nil {
+		t.Errorf("shell-pattern matcher fired for read tool")
+	}
+
+	// "shell" tool name should match.
+	if _, err := r.OnPreToolUse(context.Background(), "tu_2", "shell", nil); err != nil {
+		t.Fatalf("OnPreToolUse shell: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "fired")); err != nil {
+		t.Errorf("shell-pattern matcher missed shell tool: %v", err)
+	}
+}
+
 func TestRunner_DebugWriterEmitsLine(t *testing.T) {
 	t.Parallel()
 

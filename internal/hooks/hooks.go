@@ -14,6 +14,8 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/paultyng/testagent/internal/hookresult"
@@ -246,7 +248,7 @@ func (s *Sender) OnPrompt(ctx context.Context, prompt, sessionTitle string) erro
 		SessionTitle:   sessionTitle,
 		TranscriptPath: s.transcriptPath,
 	}
-	_, err := s.fire(ctx, UserPromptSubmit, body)
+	_, err := s.fire(ctx, UserPromptSubmit, "", body)
 	return err
 }
 
@@ -266,7 +268,7 @@ func (s *Sender) OnPreToolUse(ctx context.Context, toolUseID, toolName string, t
 		ToolUseID:      toolUseID,
 		TranscriptPath: s.transcriptPath,
 	}
-	return s.fire(ctx, PreToolUse, body)
+	return s.fire(ctx, PreToolUse, toolName, body)
 }
 
 // OnPostToolUse fires PostToolUse after the tool completes.
@@ -283,7 +285,7 @@ func (s *Sender) OnPostToolUse(ctx context.Context, toolUseID, toolName string, 
 		ToolUseID:      toolUseID,
 		TranscriptPath: s.transcriptPath,
 	}
-	_, err := s.fire(ctx, PostToolUse, body)
+	_, err := s.fire(ctx, PostToolUse, toolName, body)
 	return err
 }
 
@@ -298,7 +300,7 @@ func (s *Sender) OnStop(ctx context.Context, lastAssistantMessage string, stopHo
 		StopHookActive:       stopHookActive,
 		TranscriptPath:       s.transcriptPath,
 	}
-	_, err := s.fire(ctx, Stop, body)
+	_, err := s.fire(ctx, Stop, "", body)
 	return err
 }
 
@@ -312,7 +314,7 @@ func (s *Sender) OnSessionStart(ctx context.Context, source string) error {
 		Source:         source,
 		TranscriptPath: s.transcriptPath,
 	}
-	_, err := s.fire(ctx, SessionStart, body)
+	_, err := s.fire(ctx, SessionStart, "", body)
 	return err
 }
 
@@ -325,7 +327,7 @@ func (s *Sender) OnSessionEnd(ctx context.Context, reason string) error {
 		SessionID:      s.sessionID,
 		TranscriptPath: s.transcriptPath,
 	}
-	_, err := s.fire(ctx, SessionEnd, body)
+	_, err := s.fire(ctx, SessionEnd, "", body)
 	return err
 }
 
@@ -339,7 +341,7 @@ func (s *Sender) OnPreCompact(ctx context.Context, trigger string) error {
 		TranscriptPath: s.transcriptPath,
 		Trigger:        trigger,
 	}
-	_, err := s.fire(ctx, PreCompact, body)
+	_, err := s.fire(ctx, PreCompact, "", body)
 	return err
 }
 
@@ -353,7 +355,7 @@ func (s *Sender) OnPostCompact(ctx context.Context, trigger string) error {
 		TranscriptPath: s.transcriptPath,
 		Trigger:        trigger,
 	}
-	_, err := s.fire(ctx, PostCompact, body)
+	_, err := s.fire(ctx, PostCompact, "", body)
 	return err
 }
 
@@ -374,7 +376,7 @@ func (s *Sender) OnNotification(ctx context.Context, matcher, message, title str
 		Title:          title,
 		TranscriptPath: s.transcriptPath,
 	}
-	_, err := s.fire(ctx, Notification, body)
+	_, err := s.fire(ctx, Notification, matcher, body)
 	return err
 }
 
@@ -394,7 +396,7 @@ func (s *Sender) OnPermissionRequest(ctx context.Context, toolUseID, toolName st
 		ToolUseID:      toolUseID,
 		TranscriptPath: s.transcriptPath,
 	}
-	return s.fire(ctx, PermissionRequest, body)
+	return s.fire(ctx, PermissionRequest, toolName, body)
 }
 
 // fire iterates every Matcher registered for event and dispatches each
@@ -403,11 +405,18 @@ func (s *Sender) OnPermissionRequest(ctx context.Context, toolUseID, toolName st
 // rest from firing. Unknown Types are silently skipped (forward-compat
 // with hooks-config readers that downgrade to a no-op rather than fail).
 //
+// filterAxis is the value matchers are filtered against — `tool_name`
+// for tool-scoped events (PreToolUse / PostToolUse / PermissionRequest)
+// or the documented Notification matcher value for Notification. Empty
+// string disables filtering (every matcher fires; the legacy behavior
+// for events with no scoping axis: UserPromptSubmit, Stop, Session*,
+// PreCompact, PostCompact).
+//
 // Per-hook decision bodies are parsed via hookresult and aggregated
 // using the event-specific rule. The aggregated result is returned to
 // the caller; callers that gate on decisions (slash dispatcher) consult
 // Block / Ask / Allow, others discard it.
-func (s *Sender) fire(ctx context.Context, event string, body any) (hookresult.Result, error) {
+func (s *Sender) fire(ctx context.Context, event, filterAxis string, body any) (hookresult.Result, error) {
 	if len(s.matchers) == 0 {
 		return hookresult.Result{}, nil
 	}
@@ -424,6 +433,9 @@ func (s *Sender) fire(ctx context.Context, event string, body any) (hookresult.R
 		results []hookresult.Result
 	)
 	for _, m := range matchers {
+		if filterAxis != "" && !matchesMatcher(m.Matcher, filterAxis) {
+			continue
+		}
 		for _, hook := range m.Hooks {
 			switch hook.Type {
 			case "http":
@@ -444,6 +456,49 @@ func (s *Sender) fire(ctx context.Context, event string, body any) (hookresult.R
 		}
 	}
 	return hookresult.Aggregate(event, results), errors.Join(errs...)
+}
+
+// matchesMatcher returns true when value matches the Claude Code matcher
+// pattern. Per https://code.claude.com/docs/en/hooks:
+//
+//   - "" or "*"             → catch-all
+//   - "Bash"                → exact-string match (case-sensitive)
+//   - "Read|Edit|MultiEdit" → any-of alternation (segments are exact)
+//   - any other string      → regex (anchored implicitly by Go's regexp
+//     semantics on FindString — i.e. unanchored substring match;
+//     callers wanting an exact match should write "^Bash$" or the
+//     literal segment form)
+//
+// unsure: real Claude's docs do not pin down whether the regex form is
+// anchored. Testagent uses unanchored to match Go's typical regexp
+// behavior. If a real-Claude capture clarifies the contract, this
+// helper is the single place to adjust.
+func matchesMatcher(pattern, value string) bool {
+	switch pattern {
+	case "", "*":
+		return true
+	}
+	// Alternation: only treat as alternation if every segment is a
+	// literal (no regex metacharacters). Otherwise fall through to
+	// regex below so "A|B[0-9]" is treated as a regex.
+	if strings.Contains(pattern, "|") && !strings.ContainsAny(pattern, "().[]*+?^$\\{}") {
+		for _, seg := range strings.Split(pattern, "|") {
+			if seg == value {
+				return true
+			}
+		}
+		return false
+	}
+	// No regex metacharacters → exact match.
+	if !strings.ContainsAny(pattern, "().[]*+?^$\\{}|") {
+		return pattern == value
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		// Malformed pattern: skip the matcher rather than panic.
+		return false
+	}
+	return re.FindString(value) != ""
 }
 
 // post POSTs payload as application/json to hook.URL with hook.Headers applied.

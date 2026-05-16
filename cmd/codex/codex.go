@@ -211,7 +211,9 @@ func ctxOrBackground(cmd *cobra.Command) context.Context {
 // MatcherGroup's hooks[] and selects only `type = "command"` entries
 // (the only handler kind the runner currently fires). `prompt` and
 // `agent` types are accepted by the TOML decoder for forward compat
-// but silently skipped at this layer. Returns nil when no command
+// but silently skipped at this layer. The MatcherGroup's pattern
+// rides along on each emitted Matcher so the runner can filter on
+// tool_name for tool-scoped events. Returns nil when no command
 // hooks are configured.
 func matchersFromConfig(cfg *Config) map[string][]codexhooks.Matcher {
 	if cfg == nil || len(cfg.Hooks) == 0 {
@@ -226,6 +228,7 @@ func matchersFromConfig(cfg *Config) map[string][]codexhooks.Matcher {
 					continue
 				}
 				conv = append(conv, codexhooks.Matcher{
+					Pattern: g.Matcher,
 					Command: h.Command,
 					Async:   h.Async,
 					Timeout: h.Timeout,
