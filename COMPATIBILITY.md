@@ -119,6 +119,7 @@ The `/fake-*` namespace is reserved for emulation-only commands — slash comman
 | `/fake-auto-compact` | Drives the compact lifecycle with `trigger=auto` (emulates upstream's internal context-fill compaction trigger) |
 | `/fake-notification [matcher] [-- message]` | Fires `Notification` (claude-only) with the chosen matcher value; defaults to `permission_prompt` |
 | `/fake-permission-request <tool_name> [json-args]` | Fires `PermissionRequest`, waits for the hook's allow/deny decision, renders the outcome |
+| `/fake-permission-resolve allow\|deny [reason]` | Resolves an outstanding PreToolUse `ask` state (claude-only); `allow` lets `/fake-tool-result` complete normally, `deny` fires `PostToolUse` with a blocked synthetic response |
 | `/fake-tool <name> <json-args>` | Renders a fake tool-use block and fires `PreToolUse`; pair with `/fake-tool-result` to fire `PostToolUse` |
 | `/fake-tool-result <json-or-text>` | Completes a pending `/fake-tool`; fires `PostToolUse` hook with the captured input + supplied response + measured duration |
 | `/link <url> [text]` | Renders an OSC 8 hyperlink (clickable in supporting terminals); text defaults to URL |
