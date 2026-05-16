@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/paultyng/testagent/internal/hookresult"
 	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/mcp"
 )
@@ -710,6 +711,164 @@ func TestSlash_FakeTool_AwaitingPermission_FlushOnShutdown(t *testing.T) {
 	resp, _ := post["tool_response"].(map[string]any)
 	if resp == nil || resp["error"] != "blocked" {
 		t.Errorf("flush PostToolUse tool_response = %v, want {error:blocked, ...}", post["tool_response"])
+	}
+}
+
+func TestSlash_FakeNotification_FiresWithDefaultMatcher(t *testing.T) {
+	t.Parallel()
+	var (
+		mu   sync.Mutex
+		hits []map[string]any
+	)
+	srv := decisionRouter(t, &hits, &mu, nil)
+
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"Notification": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/n", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
+
+	h.Dispatch(context.Background(), `/fake-notification`)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hits) != 1 {
+		t.Fatalf("got %d hooks, want 1", len(hits))
+	}
+	if hits[0]["matcher"] != "permission_prompt" {
+		t.Errorf("matcher = %v, want permission_prompt (default)", hits[0]["matcher"])
+	}
+	if !strings.Contains(out.String(), "notification: permission_prompt") {
+		t.Errorf("output missing render; got %q", out.String())
+	}
+}
+
+func TestSlash_FakeNotification_MatcherAndMessage(t *testing.T) {
+	t.Parallel()
+	var (
+		mu   sync.Mutex
+		hits []map[string]any
+	)
+	srv := decisionRouter(t, &hits, &mu, nil)
+
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"Notification": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/n", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
+
+	h.Dispatch(context.Background(), `/fake-notification idle_prompt -- session has been idle`)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hits) != 1 {
+		t.Fatalf("got %d hooks, want 1", len(hits))
+	}
+	if hits[0]["matcher"] != "idle_prompt" {
+		t.Errorf("matcher = %v, want idle_prompt", hits[0]["matcher"])
+	}
+	if hits[0]["message"] != "session has been idle" {
+		t.Errorf("message = %v, want %q", hits[0]["message"], "session has been idle")
+	}
+}
+
+// toolOnlySender satisfies ToolHookSender but NOT NotificationSender,
+// modeling codex's Runner for the purposes of asserting that
+// /fake-notification rejects cleanly on vendors that don't expose
+// the event.
+type toolOnlySender struct{}
+
+func (toolOnlySender) OnPreToolUse(context.Context, string, string, any) (hookresult.Result, error) {
+	return hookresult.Result{}, nil
+}
+func (toolOnlySender) OnPostToolUse(context.Context, string, string, any, any, int64) error {
+	return nil
+}
+func (toolOnlySender) OnPermissionRequest(context.Context, string, string, any) (hookresult.Result, error) {
+	return hookresult.Result{}, nil
+}
+
+func TestSlash_FakeNotification_VendorWithoutNotificationSenderRejects(t *testing.T) {
+	t.Parallel()
+	out := &bytes.Buffer{}
+	h := New(toolOnlySender{}, mcp.NewClient(nil), out)
+	// stderr is the rejection channel; capture by replacing os.Stderr
+	// is invasive, so just assert that no /n hook hit fires and that
+	// out remains empty (rejection prints to stderr, not out).
+	h.Dispatch(context.Background(), `/fake-notification`)
+	if out.Len() != 0 {
+		t.Errorf("output not empty; got %q", out.String())
+	}
+}
+
+func TestSlash_FakePermissionRequest_AllowGrants(t *testing.T) {
+	t.Parallel()
+	var (
+		mu   sync.Mutex
+		hits []map[string]any
+	)
+	srv := decisionRouter(t, &hits, &mu, map[string]string{
+		"/pr": `{"hookSpecificOutput":{"decision":{"behavior":"allow","message":"approved"}}}`,
+	})
+
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"PermissionRequest": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pr", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
+
+	h.Dispatch(context.Background(), `/fake-permission-request Bash {"command":"ls"}`)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hits) != 1 {
+		t.Fatalf("got %d hooks, want 1", len(hits))
+	}
+	if hits[0]["tool_name"] != "Bash" {
+		t.Errorf("tool_name = %v, want Bash", hits[0]["tool_name"])
+	}
+	if !strings.Contains(out.String(), "permission granted: approved") {
+		t.Errorf("output missing granted marker; got %q", out.String())
+	}
+}
+
+func TestSlash_FakePermissionRequest_DenyShowsReason(t *testing.T) {
+	t.Parallel()
+	var (
+		mu   sync.Mutex
+		hits []map[string]any
+	)
+	srv := decisionRouter(t, &hits, &mu, map[string]string{
+		"/pr": `{"hookSpecificOutput":{"decision":{"behavior":"deny","message":"unsafe path"}}}`,
+	})
+
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"PermissionRequest": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pr", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
+
+	h.Dispatch(context.Background(), `/fake-permission-request rm {}`)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hits) != 1 {
+		t.Fatalf("got %d hooks, want 1", len(hits))
+	}
+	if !strings.Contains(out.String(), "permission denied: unsafe path") {
+		t.Errorf("output missing denied marker; got %q", out.String())
+	}
+}
+
+func TestSlash_FakePermissionRequest_NoMatchersShowsTimeout(t *testing.T) {
+	t.Parallel()
+	// No matchers registered for PermissionRequest → fire returns zero
+	// result with no error → render renders the timed-out marker.
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.Dispatch(context.Background(), `/fake-permission-request Bash {}`)
+	if !strings.Contains(out.String(), "permission timed out: deny") {
+		t.Errorf("output missing timeout marker; got %q", out.String())
 	}
 }
 

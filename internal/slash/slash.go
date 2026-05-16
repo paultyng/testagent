@@ -27,19 +27,30 @@ import (
 )
 
 // ToolHookSender is the slash dispatcher's interface to vendor-specific
-// PreToolUse / PostToolUse hook delivery. Defined at the consumer site per
-// Go conventions; engine.HookSender is a superset (so values held there
+// tool-scoped hook delivery. Defined at the consumer site per Go
+// conventions; engine.HookSender is a superset (so values held there
 // satisfy this directly), and both internal/hooks.Sender (claude HTTP)
 // and internal/codexhooks.Runner (codex shell-command) implement it.
 type ToolHookSender interface {
 	OnPreToolUse(ctx context.Context, toolUseID, toolName string, toolInput any) (hookresult.Result, error)
 	OnPostToolUse(ctx context.Context, toolUseID, toolName string, toolInput, toolResponse any, durationMs int64) error
+	OnPermissionRequest(ctx context.Context, toolUseID, toolName string, toolInput any) (hookresult.Result, error)
+}
+
+// NotificationSender is an optional capability for vendors that expose
+// an advisory Notification event. Claude implements it; codex does
+// not. /fake-notification type-asserts before invoking.
+type NotificationSender interface {
+	OnNotification(ctx context.Context, matcher, message, title string) error
 }
 
 // Compile-time assertion that the canonical claude HTTP sender
 // satisfies the slash interface. internal/codexhooks.Runner has its
 // own assertion in that package.
-var _ ToolHookSender = (*hooks.Sender)(nil)
+var (
+	_ ToolHookSender     = (*hooks.Sender)(nil)
+	_ NotificationSender = (*hooks.Sender)(nil)
+)
 
 // Handler dispatches slash commands and renders their output.
 type Handler struct {
@@ -163,6 +174,10 @@ func (h *Handler) dispatchTo(ctx context.Context, line string, out io.Writer) Ou
 		h.cmdFakeTool(ctx, out, rest)
 	case "fake-tool-result":
 		h.cmdFakeToolResult(ctx, out, rest)
+	case "fake-notification":
+		h.cmdFakeNotification(ctx, out, rest)
+	case "fake-permission-request":
+		h.cmdFakePermissionRequest(ctx, out, rest)
 	case "mcp-call":
 		h.cmdMCP(ctx, out, rest)
 	case "clear":
@@ -208,6 +223,8 @@ func (h *Handler) cmdHelp(out io.Writer) {
 		{"/compact", "fires PreCompact, SessionEnd, SessionStart, PostCompact with trigger=manual"},
 		{"/exit [code]", "exits testagent (default code 0; alias /quit)"},
 		{"/fake-auto-compact", "same lifecycle as /compact but with trigger=auto (emulates upstream's internal context-fill trigger)"},
+		{`/fake-notification [matcher] [-- message]`, "fires Notification (claude-only); matcher defaults to permission_prompt"},
+		{`/fake-permission-request <tool_name> [json-args]`, "fires PermissionRequest, waits up to 120s for an allow/deny decision, renders the outcome"},
 		{`/fake-tool <name> <json-args>`, "prints a fake tool-use block and fires PreToolUse; pair with /fake-tool-result to fire PostToolUse"},
 		{`/fake-tool-result <json-or-text>`, "completes the pending /fake-tool and fires PostToolUse with the response"},
 		{"/help", "prints this list"},
@@ -509,6 +526,74 @@ func (h *Handler) firePendingHook(ctx context.Context, p *pendingToolCall, respo
 	dur := time.Since(p.startedAt).Milliseconds()
 	if err := h.hooks.OnPostToolUse(ctx, p.toolUseID, p.name, p.input, response, dur); err != nil {
 		fmt.Fprintf(os.Stderr, "testagent: hook OnPostToolUse: %v\n", err)
+	}
+}
+
+// /fake-notification [matcher] [-- message] — claude-only. Message
+// follows a `--` separator so the matcher token isn't confused with
+// multi-word text.
+func (h *Handler) cmdFakeNotification(ctx context.Context, out io.Writer, rest string) {
+	ns, ok := h.hooks.(NotificationSender)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "testagent: /fake-notification is claude-only (current vendor does not implement NotificationSender)")
+		return
+	}
+	matcher := hooks.NotificationPermissionPrompt
+	message := ""
+	if rest != "" {
+		if before, after, ok := strings.Cut(rest, "--"); ok {
+			if b := strings.TrimSpace(before); b != "" {
+				matcher = b
+			}
+			message = strings.TrimSpace(after)
+		} else {
+			matcher = strings.TrimSpace(rest)
+		}
+	}
+	fmt.Fprintf(out, "%s\n", render.Lifecycle("notification: "+matcher))
+	if err := ns.OnNotification(ctx, matcher, message, ""); err != nil {
+		fmt.Fprintf(os.Stderr, "testagent: hook OnNotification: %v\n", err)
+	}
+}
+
+// /fake-permission-request <tool_name> [json-args] — fires PermissionRequest
+// and waits for the aggregated allow/deny decision. PostToolUse is NOT
+// fired here — this slash drives the permission lifecycle independently
+// of /fake-tool.
+func (h *Handler) cmdFakePermissionRequest(ctx context.Context, out io.Writer, rest string) {
+	name, jsonArgs := splitFirstWord(rest)
+	if name == "" {
+		fmt.Fprintln(os.Stderr, "testagent: /fake-permission-request requires a tool name")
+		return
+	}
+	args := parseJSONOr(jsonArgs, map[string]any{})
+	toolUseID := "toolu_" + randomHex(12)
+	res, err := h.hooks.OnPermissionRequest(ctx, toolUseID, name, args)
+	switch {
+	case err != nil:
+		// Transport / hook-execution failure; the err itself is logged
+		// to stderr. Distinguish from the no-decision path so
+		// orchestrators can tell a flaky hook server from a hook that
+		// returned 200 with no body.
+		fmt.Fprintf(os.Stderr, "testagent: hook OnPermissionRequest: %v\n", err)
+		fmt.Fprintf(out, "%s\n", render.LifecycleWarn("permission error: deny"))
+	case res.Block:
+		marker := "permission denied"
+		if res.Reason != "" {
+			marker += ": " + res.Reason
+		}
+		fmt.Fprintf(out, "%s\n", render.LifecycleWarn(marker))
+	case res.Allow:
+		marker := "permission granted"
+		if res.Reason != "" {
+			marker += ": " + res.Reason
+		}
+		fmt.Fprintf(out, "%s\n", render.Lifecycle(marker))
+	default:
+		// Hook returned but produced no decision (200 with empty body,
+		// or no matchers registered). Treat as a hold-open that never
+		// resolved; surface as deny.
+		fmt.Fprintf(out, "%s\n", render.LifecycleWarn("permission timed out: deny"))
 	}
 }
 

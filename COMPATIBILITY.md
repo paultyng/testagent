@@ -117,6 +117,8 @@ The `/fake-*` namespace is reserved for emulation-only commands — slash comman
 | Command | Purpose |
 |---------|---------|
 | `/fake-auto-compact` | Drives the compact lifecycle with `trigger=auto` (emulates upstream's internal context-fill compaction trigger) |
+| `/fake-notification [matcher] [-- message]` | Fires `Notification` (claude-only) with the chosen matcher value; defaults to `permission_prompt` |
+| `/fake-permission-request <tool_name> [json-args]` | Fires `PermissionRequest`, waits for the hook's allow/deny decision, renders the outcome |
 | `/fake-tool <name> <json-args>` | Renders a fake tool-use block and fires `PreToolUse`; pair with `/fake-tool-result` to fire `PostToolUse` |
 | `/fake-tool-result <json-or-text>` | Completes a pending `/fake-tool`; fires `PostToolUse` hook with the captured input + supplied response + measured duration |
 | `/link <url> [text]` | Renders an OSC 8 hyperlink (clickable in supporting terminals); text defaults to URL |
@@ -172,8 +174,8 @@ Unknown `type` values decode cleanly and are silently skipped at dispatch.
 | `Stop` | ✓ supported | Fired after each assistant response; `stop_hook_active=true` on `Esc` cancel |
 | `PreCompact` | ✓ supported | Fired before the SessionEnd → SessionStart pair for `/compact` (`trigger=manual`) and `/fake-auto-compact` (`trigger=auto`) |
 | `PostCompact` | ✓ supported | Fired after the SessionEnd → SessionStart pair for `/compact` and `/fake-auto-compact`; trigger matches the PreCompact value |
-| `Notification` | partial | Wire ready (`OnNotification` with matcher/message/title); no slash command surface yet (#70 phase 4) |
-| `PermissionRequest` | partial | Wire ready (`OnPermissionRequest`; nested `decision.behavior` response shape; 120s default hold-open); no slash command surface yet (#70 phase 4) |
+| `Notification` | ✓ supported | Fired by `/fake-notification [matcher] [-- message]`; matcher defaults to `permission_prompt` |
+| `PermissionRequest` | ✓ supported | Fired by `/fake-permission-request <tool_name> [json-args]`; nested `decision.behavior` response shape; 120s default hold-open; renders the aggregated decision |
 | `Setup` | `✗ planned` | |
 
 ---
@@ -323,7 +325,7 @@ Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes
 | `Stop` | ✓ supported | Fires after each assistant response; emits `CODEX_HOOK_LAST_ASSISTANT_MESSAGE` |
 | `PreCompact` | ✓ supported | Fires before SessionEnd → SessionStart on `/compact` and `/fake-auto-compact`; emits `CODEX_HOOK_TRIGGER=manual\|auto` |
 | `PostCompact` | ✓ supported | Fires after SessionEnd → SessionStart on `/compact` and `/fake-auto-compact`; emits `CODEX_HOOK_TRIGGER=manual\|auto` |
-| `PermissionRequest` | partial | Wire ready (`OnPermissionRequest`; nested `decision.behavior` response shape; 120s default hold-open via per-matcher `timeout`); no slash command surface yet (#70 phase 4) |
+| `PermissionRequest` | ✓ supported | Fired by `/fake-permission-request <tool_name> [json-args]`; nested `decision.behavior` response from script stdout (exit 0) or stderr (exit 2); 120s default hold-open via per-matcher `timeout`; exit 0 with no stdout renders as `permission timed out: deny` |
 
 ### Config and conventions
 
