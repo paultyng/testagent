@@ -1101,6 +1101,181 @@ func TestSender_OnPreToolUse_CommandHookExit0ParsesStdout(t *testing.T) {
 	}
 }
 
+func TestMatchesMatcher(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		pattern, value string
+		want           bool
+	}{
+		// Catch-all.
+		{"", "Bash", true},
+		{"*", "Bash", true},
+		{"", "", true},
+		// Exact.
+		{"Bash", "Bash", true},
+		{"Bash", "bash", false},
+		{"Bash", "Read", false},
+		// Alternation.
+		{"Read|Edit|MultiEdit", "Read", true},
+		{"Read|Edit|MultiEdit", "Edit", true},
+		{"Read|Edit|MultiEdit", "MultiEdit", true},
+		{"Read|Edit|MultiEdit", "Bash", false},
+		{"Read|Edit|MultiEdit", "read", false},
+		// Regex (unanchored substring).
+		{"^Bash$", "Bash", true},
+		{"^Bash$", "Bashful", false},
+		{"^B.*", "Bash", true},
+		{"^B.*", "Read", false},
+		// Pattern with both `|` and regex metacharacters → regex, not alternation.
+		{"A|B[0-9]", "B5", true},
+		{"A|B[0-9]", "A", true},
+		{"A|B[0-9]", "C", false},
+		// Malformed regex → no match (not panic).
+		{"[", "Bash", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.pattern+"_vs_"+tc.value, func(t *testing.T) {
+			t.Parallel()
+			if got := matchesMatcher(tc.pattern, tc.value); got != tc.want {
+				t.Errorf("matchesMatcher(%q, %q) = %v, want %v", tc.pattern, tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSender_OnPreToolUse_MatcherFiltersByToolName(t *testing.T) {
+	t.Parallel()
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(srv.Close)
+
+	matchers := map[string][]Matcher{
+		PreToolUse: {
+			{Matcher: "Bash", Hooks: []Hook{{Type: "http", URL: srv.URL}}},
+		},
+	}
+	sender := newTestSender(t, matchers)
+
+	// Read does NOT match "Bash" — hook must not fire.
+	if _, err := sender.OnPreToolUse(context.Background(), "tu_1", "Read", nil); err != nil {
+		t.Fatalf("OnPreToolUse Read: %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 0 {
+		t.Errorf("Bash-matcher fired for Read tool; hits=%d, want 0", got)
+	}
+
+	// Bash matches — hook fires.
+	if _, err := sender.OnPreToolUse(context.Background(), "tu_2", "Bash", nil); err != nil {
+		t.Fatalf("OnPreToolUse Bash: %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Errorf("Bash-matcher missed Bash tool; hits=%d, want 1", got)
+	}
+}
+
+func TestSender_OnPreToolUse_MatcherAlternation(t *testing.T) {
+	t.Parallel()
+	var (
+		mu   sync.Mutex
+		seen []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		seen = append(seen, body["tool_name"].(string))
+		mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(srv.Close)
+
+	matchers := map[string][]Matcher{
+		PreToolUse: {
+			{Matcher: "Read|Edit", Hooks: []Hook{{Type: "http", URL: srv.URL}}},
+		},
+	}
+	sender := newTestSender(t, matchers)
+
+	for _, tool := range []string{"Read", "Edit", "Bash", "MultiEdit"} {
+		if _, err := sender.OnPreToolUse(context.Background(), "tu", tool, nil); err != nil {
+			t.Fatalf("OnPreToolUse %s: %v", tool, err)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"Read", "Edit"}
+	if len(seen) != len(want) {
+		t.Fatalf("seen = %v, want %v", seen, want)
+	}
+	for i, w := range want {
+		if seen[i] != w {
+			t.Errorf("seen[%d] = %q, want %q", i, seen[i], w)
+		}
+	}
+}
+
+func TestSender_OnNotification_MatcherFiltersBySubtype(t *testing.T) {
+	t.Parallel()
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(srv.Close)
+
+	matchers := map[string][]Matcher{
+		Notification: {
+			{Matcher: NotificationPermissionPrompt, Hooks: []Hook{{Type: "http", URL: srv.URL}}},
+		},
+	}
+	sender := newTestSender(t, matchers)
+
+	// idle_prompt should NOT match a permission_prompt matcher.
+	if err := sender.OnNotification(context.Background(), NotificationIdlePrompt, "msg", ""); err != nil {
+		t.Fatalf("OnNotification idle: %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 0 {
+		t.Errorf("permission_prompt-matcher fired for idle_prompt; hits=%d, want 0", got)
+	}
+
+	// permission_prompt matches.
+	if err := sender.OnNotification(context.Background(), NotificationPermissionPrompt, "msg", ""); err != nil {
+		t.Fatalf("OnNotification permission: %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Errorf("permission_prompt-matcher missed permission_prompt; hits=%d, want 1", got)
+	}
+}
+
+func TestSender_NonToolEvent_IgnoresMatcher(t *testing.T) {
+	t.Parallel()
+	// Stop has no scoping axis — every matcher should fire regardless of
+	// its pattern. Verify Stop with a "Bash" matcher (which would filter
+	// out everything for a tool-scoped event) still fires.
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(srv.Close)
+
+	matchers := map[string][]Matcher{
+		Stop: {{Matcher: "Bash", Hooks: []Hook{{Type: "http", URL: srv.URL}}}},
+	}
+	sender := newTestSender(t, matchers)
+
+	if err := sender.OnStop(context.Background(), "done", false); err != nil {
+		t.Fatalf("OnStop: %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Errorf("non-tool event filtered by matcher; hits=%d, want 1", got)
+	}
+}
+
 func TestFormatBytes(t *testing.T) {
 	t.Parallel()
 

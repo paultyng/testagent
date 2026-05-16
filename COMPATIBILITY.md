@@ -163,6 +163,19 @@ Each hook entry in `settings.json` under `hooks.<event>[].hooks[]` carries a `ty
 
 Unknown `type` values decode cleanly and are silently skipped at dispatch.
 
+### Matcher patterns
+
+For tool-scoped events (`PreToolUse`, `PostToolUse`, `PermissionRequest`) testagent filters matchers against the active `tool_name`. For `Notification`, the matcher field filters against the documented subtype value (`permission_prompt`, `idle_prompt`, etc.). Other events ignore the matcher field — every registered matcher fires.
+
+**Behavior change (upgrading from ≤ v0.5.0)**: matchers on tool-scoped events were previously fired unconditionally regardless of pattern. Configs that registered `matcher: "Bash"` and relied on the buggy fire-all behavior will now correctly only fire on `Bash` calls. Use `""` or `"*"` for an explicit catch-all.
+
+Pattern grammar (matches Claude Code's documented set):
+
+- `""` or `"*"` — catch-all.
+- `"Bash"` — exact-string match (case-sensitive).
+- `"Read|Edit|MultiEdit"` — any-of alternation (each segment is an exact literal; only used when no segment contains regex metacharacters).
+- anything containing regex metacharacters (`.()[]*+?^$\{}|`) — Go regexp, unanchored substring match. Anchor explicitly via `^…$` for exact matching of patterns that also use regex.
+
 ### Hook events
 
 | Event | testagent | Notes |
@@ -315,7 +328,7 @@ Visible release commands from the `SlashCommand` enum in `codex-rs/tui/src/slash
 
 ### Hook events
 
-Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes an array of `MatcherGroup` objects: `{matcher: string, hooks: []Hook}`. Each `Hook` carries a `type` discriminator — `command`, `prompt`, or `agent` — plus type-specific fields (`command`, `timeout`, `async` for the command type). testagent currently fires the `command` type only; `prompt` and `agent` entries decode cleanly but are silently skipped at dispatch time. Hook handler shape differs from Claude Code (shell command vs HTTP POST). Commands run via `$SHELL -lc <cmd>` on Unix and `%COMSPEC% /C <cmd>` on Windows, mirroring upstream codex's `default_shell_command`.
+Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes an array of `MatcherGroup` objects: `{matcher: string, hooks: []Hook}`. Each `Hook` carries a `type` discriminator — `command`, `prompt`, or `agent` — plus type-specific fields (`command`, `timeout`, `async` for the command type). testagent currently fires the `command` type only; `prompt` and `agent` entries decode cleanly but are silently skipped at dispatch time. Hook handler shape differs from Claude Code (shell command vs HTTP POST). Commands run via `$SHELL -lc <cmd>` on Unix and `%COMSPEC% /C <cmd>` on Windows, mirroring upstream codex's `default_shell_command`. The `matcher` field follows the same grammar as the claude side (`""`/`"*"` catch-all, exact, `A|B|C` alternation, otherwise regex) and is consulted for tool-scoped events (`pre_tool_use`, `post_tool_use`, `permission_request`).
 
 | Event | testagent | Notes |
 |-------|-----------|-------|
