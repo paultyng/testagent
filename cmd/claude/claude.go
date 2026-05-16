@@ -30,6 +30,10 @@ func (s *stringSlice) Type() string       { return "stringSlice" }
 // NewCommand returns the "claude" subcommand wired against the given root
 // flags. RunE constructs hooks/mcp/slash deps and dispatches to either
 // runPrint (--print/-p) or engine.Run.
+//
+// --settings and --mcp-config live on PersistentFlags so the `validate`
+// subcommand (and any future children) share the same closure-bound
+// variables without duplicating the flag declarations.
 func NewCommand(rf *rootflags.Flags) *cobra.Command {
 	var (
 		addDirs      stringSlice
@@ -138,16 +142,21 @@ Bare invocation (testagent <flags>) defaults to this subcommand.`,
 		},
 	}
 
+	// Persistent flags shared with subcommands (e.g. `claude validate`).
+	pf := cmd.PersistentFlags()
+	pf.StringVar(&settingsPath, "settings", "", "path to Claude Code settings.json (hooks)")
+	pf.StringVar(&mcpPath, "mcp-config", "", "path to Claude Code MCP config JSON")
+
 	f := cmd.Flags()
 	f.StringVar(&sessionID, "session-id", "", "session ID (new session)")
 	f.StringVar(&resume, "resume", "", "session ID to resume")
-	f.StringVar(&settingsPath, "settings", "", "path to Claude Code settings.json (hooks)")
-	f.StringVar(&mcpPath, "mcp-config", "", "path to Claude Code MCP config JSON")
 	f.StringVar(&systemPrompt, "append-system-prompt", "", "system prompt text to append")
 	f.StringVar(&outputFormat, "output-format", "text", "output format: text|json|stream-json (used with --print)")
 	f.StringVarP(&name, "name", "n", "test-agent", "session name for the banner")
 	f.BoolVarP(&printMode, "print", "p", false, "non-interactive mode (one-shot)")
 	f.Var(&addDirs, "add-dir", "additional directory (repeatable)")
+
+	cmd.AddCommand(newValidateCommand(&settingsPath, &mcpPath))
 	return cmd
 }
 
