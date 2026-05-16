@@ -39,6 +39,13 @@ testagent's CI matrix runs on linux, macOS, and Windows on both amd64 and arm64 
 
 ## Claude
 
+### Subcommands
+
+| Subcommand | testagent | Notes |
+|------------|-----------|-------|
+| `claude` (no subcommand) | ✓ supported | Interactive session or `--print` one-shot |
+| `claude validate` | ✓ supported (testagent-only) | Validates `--settings` and/or `--mcp-config` without booting a session. Exit `0` clean, `1` validation errors on stderr, `2` usage error. `--strict` adds unknown-field, unknown-event, and unknown-hook-type checks. No real-Claude equivalent — testagent extension for CI use |
+
 ### Flags
 
 Alphabetical by long name. Short flags shown inline. Global flags (common across all subcommands) are marked *(global)*.
@@ -213,6 +220,7 @@ Codex's user-facing surface is divided across multiple subcommands; orchestrator
 | `codex login` | `✗ planned` | Tracked in [#35](https://github.com/paultyng/testagent/issues/35) |
 | `codex logout` | `✗ planned` | Tracked in [#35](https://github.com/paultyng/testagent/issues/35) |
 | `codex mcp add/list/remove` | `✗ planned` | Tracked in [#37](https://github.com/paultyng/testagent/issues/37) |
+| `codex validate` | ✓ supported (testagent-only) | Validates `$CODEX_HOME/config.toml` (or `~/.codex/config.toml`) without booting a session. Exit `0` clean, `1` validation errors on stderr, `2` usage error. `--strict` adds unknown-key, unknown-event, and unknown-hook-type checks. No real-codex equivalent — testagent extension for CI use |
 
 #### codex exec
 

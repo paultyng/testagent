@@ -37,6 +37,8 @@ cmd/codex/                  # codex subcommand: TOML config + AGENTS.md surfacin
 internal/engine/            # Globals + Deps + Run; TUI + scanner + spinner + token-stream helper; HookSender interface
 internal/hooks/             # Sender (HTTP + command hooks — claude-shaped)
 internal/codexhooks/        # Runner (TOML shell-command hooks — codex-shaped)
+internal/configvalidate/    # Shared collector + line resolver + Levenshtein for `validate` subcommands
+internal/hookresult/        # Parser + per-event aggregation for hook decision bodies
 internal/shellrun/          # DefaultShellCommand + process-tree teardown (shared by hooks/codexhooks)
 internal/mcp/               # Client (MCP HTTP handshake + tools/call)
 internal/slash/             # Handler (slash-command grammar)

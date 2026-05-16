@@ -98,6 +98,7 @@ Subcommands:
 
 	cmd.AddCommand(newResumeCommand(rf, cf))
 	cmd.AddCommand(newExecCommand(rf, cf))
+	cmd.AddCommand(newValidateCommand())
 	return cmd
 }
 
