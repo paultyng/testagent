@@ -801,6 +801,130 @@ func TestSlash_FakeNotification_VendorWithoutNotificationSenderRejects(t *testin
 	}
 }
 
+func TestSlash_FakePermissionResolve_AllowCompletesLifecycle(t *testing.T) {
+	t.Parallel()
+	// Pre returns ask; A enters awaitingPermission. /fake-permission-resolve allow
+	// flips the flag so /fake-tool-result completes the cycle normally.
+	var (
+		mu   sync.Mutex
+		hits []map[string]any
+	)
+	srv := decisionRouter(t, &hits, &mu, map[string]string{
+		"/pre": `{"hookSpecificOutput":{"permissionDecision":"ask","permissionDecisionReason":"please confirm"}}`,
+	})
+
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"PreToolUse":  {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pre", Timeout: 1}}}},
+		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/post", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
+
+	ctx := context.Background()
+	h.Dispatch(ctx, `/fake-tool Bash {}`)
+	h.Dispatch(ctx, `/fake-permission-resolve allow`)
+	h.Dispatch(ctx, `/fake-tool-result {"ok":true}`)
+
+	mu.Lock()
+	defer mu.Unlock()
+	// Pre, Post (from /fake-tool-result completing normally) = 2 hits.
+	if len(hits) != 2 {
+		t.Fatalf("got %d hooks, want 2 (Pre then Post):\n%v", len(hits), hits)
+	}
+	if hits[1]["__path"] != "/post" {
+		t.Fatalf("second hook path = %v, want /post", hits[1]["__path"])
+	}
+	resp, _ := hits[1]["tool_response"].(map[string]any)
+	if resp == nil || resp["ok"] != true {
+		t.Errorf("Post tool_response = %v, want {ok:true}", hits[1]["tool_response"])
+	}
+	if !strings.Contains(out.String(), "permission resolved: allow") {
+		t.Errorf("output missing resolved-allow marker; got %q", out.String())
+	}
+}
+
+func TestSlash_FakePermissionResolve_DenyFiresBlockedPost(t *testing.T) {
+	t.Parallel()
+	var (
+		mu   sync.Mutex
+		hits []map[string]any
+	)
+	srv := decisionRouter(t, &hits, &mu, map[string]string{
+		"/pre": `{"hookSpecificOutput":{"permissionDecision":"ask"}}`,
+	})
+
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.hooks = hooks.NewSender(map[string][]hooks.Matcher{
+		"PreToolUse":  {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/pre", Timeout: 1}}}},
+		"PostToolUse": {{Hooks: []hooks.Hook{{Type: "http", URL: srv.URL + "/post", Timeout: 1}}}},
+	}, "sid-test", "/tmp", "", "default", nil)
+
+	ctx := context.Background()
+	h.Dispatch(ctx, `/fake-tool Bash {}`)
+	h.Dispatch(ctx, `/fake-permission-resolve deny user said no`)
+
+	mu.Lock()
+	defer mu.Unlock()
+	// Pre, Post (synthetic blocked) = 2 hits.
+	if len(hits) != 2 {
+		t.Fatalf("got %d hooks, want 2 (Pre then synthetic Post):\n%v", len(hits), hits)
+	}
+	post := hits[1]
+	if post["__path"] != "/post" {
+		t.Fatalf("second hook path = %v, want /post", post["__path"])
+	}
+	resp, _ := post["tool_response"].(map[string]any)
+	if resp == nil || resp["error"] != "blocked" {
+		t.Errorf("synthetic Post tool_response = %v, want {error:blocked, ...}", post["tool_response"])
+	}
+	if reason, _ := resp["reason"].(string); !strings.Contains(reason, "user said no") {
+		t.Errorf("synthetic Post reason = %q, want substring %q", reason, "user said no")
+	}
+	if !strings.Contains(out.String(), "permission resolved: deny: user said no") {
+		t.Errorf("output missing resolved-deny marker; got %q", out.String())
+	}
+}
+
+func TestSlash_FakePermissionResolve_NoPendingNoOp(t *testing.T) {
+	t.Parallel()
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.Dispatch(context.Background(), `/fake-permission-resolve allow`)
+	h.Dispatch(context.Background(), `/fake-permission-resolve deny`)
+	// No pending → both calls log to stderr, render nothing on out.
+	if out.Len() != 0 {
+		t.Errorf("output not empty; got %q", out.String())
+	}
+}
+
+func TestSlash_FakePermissionResolve_PendingButNotAwaitingNoOp(t *testing.T) {
+	t.Parallel()
+	// A normal /fake-tool (no Pre hook configured, so no ask state) leaves
+	// pending with awaitingPermission=false. /fake-permission-resolve
+	// allow/deny must reject without firing any Post or replacing pending.
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.Dispatch(context.Background(), `/fake-tool Bash {}`)
+	startLen := out.Len()
+	h.Dispatch(context.Background(), `/fake-permission-resolve allow`)
+	h.Dispatch(context.Background(), `/fake-permission-resolve deny`)
+	// Neither resolve should add any render output; both log to stderr.
+	if out.Len() != startLen {
+		t.Errorf("output grew after no-op resolves; got %q (suffix)", out.String()[startLen:])
+	}
+}
+
+func TestSlash_FakePermissionResolve_RejectsBadDecision(t *testing.T) {
+	t.Parallel()
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.Dispatch(context.Background(), `/fake-permission-resolve maybe`)
+	if out.Len() != 0 {
+		t.Errorf("output not empty; got %q", out.String())
+	}
+}
+
 func TestSlash_FakePermissionRequest_AllowGrants(t *testing.T) {
 	t.Parallel()
 	var (

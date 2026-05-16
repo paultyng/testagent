@@ -178,6 +178,8 @@ func (h *Handler) dispatchTo(ctx context.Context, line string, out io.Writer) Ou
 		h.cmdFakeNotification(ctx, out, rest)
 	case "fake-permission-request":
 		h.cmdFakePermissionRequest(ctx, out, rest)
+	case "fake-permission-resolve":
+		h.cmdFakePermissionResolve(ctx, out, rest)
 	case "mcp-call":
 		h.cmdMCP(ctx, out, rest)
 	case "clear":
@@ -225,6 +227,7 @@ func (h *Handler) cmdHelp(out io.Writer) {
 		{"/fake-auto-compact", "same lifecycle as /compact but with trigger=auto (emulates upstream's internal context-fill trigger)"},
 		{`/fake-notification [matcher] [-- message]`, "fires Notification (claude-only); matcher defaults to permission_prompt"},
 		{`/fake-permission-request <tool_name> [json-args]`, "fires PermissionRequest, waits up to 120s for an allow/deny decision, renders the outcome"},
+		{`/fake-permission-resolve allow|deny [reason]`, "resolves an outstanding PreToolUse ask state (claude-only); allow clears the flag, deny fires PostToolUse with a blocked response"},
 		{`/fake-tool <name> <json-args>`, "prints a fake tool-use block and fires PreToolUse; pair with /fake-tool-result to fire PostToolUse"},
 		{`/fake-tool-result <json-or-text>`, "completes the pending /fake-tool and fires PostToolUse with the response"},
 		{"/help", "prints this list"},
@@ -519,6 +522,38 @@ func (h *Handler) takePendingUnlessAwaiting() (*pendingToolCall, bool) {
 	return p, false
 }
 
+// clearAwaitingPermission flips the in-place pending's awaitingPermission
+// flag off. Returns the tool name for rendering and true on success, or
+// "" / false when no pending is in the awaiting state. The pointer to
+// the pending is intentionally NOT returned — fields would otherwise be
+// mutable outside the lock.
+func (h *Handler) clearAwaitingPermission() (string, bool) {
+	h.pendingToolMu.Lock()
+	defer h.pendingToolMu.Unlock()
+	if h.pendingTool == nil || !h.pendingTool.awaitingPermission {
+		return "", false
+	}
+	h.pendingTool.awaitingPermission = false
+	h.pendingTool.permissionReason = ""
+	return h.pendingTool.name, true
+}
+
+// takePendingIfAwaiting atomically takes the current pending and returns
+// it, but only when awaitingPermission is set. Returns nil when no
+// pending exists or the pending is not in the awaiting state. Used by
+// /fake-permission-resolve deny so the check-and-clear lands under a
+// single lock acquisition.
+func (h *Handler) takePendingIfAwaiting() *pendingToolCall {
+	h.pendingToolMu.Lock()
+	defer h.pendingToolMu.Unlock()
+	if h.pendingTool == nil || !h.pendingTool.awaitingPermission {
+		return nil
+	}
+	p := h.pendingTool
+	h.pendingTool = nil
+	return p
+}
+
 // firePendingHook posts PostToolUse for a captured /fake-tool. response is the
 // /fake-tool-result body (parsed JSON or raw string) or nil when flushing a
 // dangling /fake-tool. Errors are logged to stderr and do not abort the session.
@@ -594,6 +629,46 @@ func (h *Handler) cmdFakePermissionRequest(ctx context.Context, out io.Writer, r
 		// or no matchers registered). Treat as a hold-open that never
 		// resolved; surface as deny.
 		fmt.Fprintf(out, "%s\n", render.LifecycleWarn("permission timed out: deny"))
+	}
+}
+
+// /fake-permission-resolve allow|deny [reason] — resolves an outstanding
+// PreToolUse ask state. testagent-specific: there is no real Claude wire
+// event for the resolution side of the ask flow; this slash gives
+// orchestrators a way to drive the full Pre→ask→resolve→fake-tool-result
+// lifecycle in tests. On `allow`, the pending entry's awaitingPermission
+// flag is cleared and the dispatcher returns to its normal state. On
+// `deny`, PostToolUse fires with the blocked synthetic shape and the
+// pending is cleared.
+func (h *Handler) cmdFakePermissionResolve(ctx context.Context, out io.Writer, rest string) {
+	decision, reason := splitFirstWord(rest)
+	reason = strings.TrimSpace(reason)
+	switch decision {
+	case "allow":
+		if _, ok := h.clearAwaitingPermission(); !ok {
+			fmt.Fprintln(os.Stderr, "testagent: /fake-permission-resolve: no /fake-tool awaiting permission")
+			return
+		}
+		marker := "permission resolved: allow"
+		if reason != "" {
+			marker += " (" + reason + ")"
+		}
+		fmt.Fprintf(out, "%s\n", render.Lifecycle(marker))
+	case "deny":
+		pending := h.takePendingIfAwaiting()
+		if pending == nil {
+			fmt.Fprintln(os.Stderr, "testagent: /fake-permission-resolve: no /fake-tool awaiting permission")
+			return
+		}
+		denyReason := reason
+		if denyReason == "" {
+			denyReason = "permission denied by orchestrator"
+		}
+		marker := "permission resolved: deny: " + denyReason
+		fmt.Fprintf(out, "%s\n", render.LifecycleWarn(marker))
+		h.flushPendingAsBlocked(ctx, pending, denyReason)
+	default:
+		fmt.Fprintln(os.Stderr, "testagent: /fake-permission-resolve requires 'allow' or 'deny' as first arg")
 	}
 }
 
