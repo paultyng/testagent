@@ -898,6 +898,23 @@ func TestSlash_FakePermissionResolve_NoPendingNoOp(t *testing.T) {
 	}
 }
 
+func TestSlash_FakePermissionResolve_PendingButNotAwaitingNoOp(t *testing.T) {
+	t.Parallel()
+	// A normal /fake-tool (no Pre hook configured, so no ask state) leaves
+	// pending with awaitingPermission=false. /fake-permission-resolve
+	// allow/deny must reject without firing any Post or replacing pending.
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	h.Dispatch(context.Background(), `/fake-tool Bash {}`)
+	startLen := out.Len()
+	h.Dispatch(context.Background(), `/fake-permission-resolve allow`)
+	h.Dispatch(context.Background(), `/fake-permission-resolve deny`)
+	// Neither resolve should add any render output; both log to stderr.
+	if out.Len() != startLen {
+		t.Errorf("output grew after no-op resolves; got %q (suffix)", out.String()[startLen:])
+	}
+}
+
 func TestSlash_FakePermissionResolve_RejectsBadDecision(t *testing.T) {
 	t.Parallel()
 	out := &bytes.Buffer{}
