@@ -67,6 +67,16 @@ func TestRunValidate_Settings(t *testing.T) {
 			wantSubstrs: []string{`unknown hook event "PreToolUze"`, `did you mean "PreToolUse"`},
 		},
 		{
+			// Events Claude Code documents but testagent doesn't fire
+			// (subagent / task / elicitation lifecycle) must still pass
+			// --strict: the validate subcommand's contract is schema
+			// conformance, not runtime support.
+			name:     "strict accepts documented-but-unmodeled events",
+			body:     `{"hooks":{"SubagentStart":[{"matcher":"","hooks":[{"type":"http","url":"u"}]}],"ElicitationResult":[{"matcher":"","hooks":[{"type":"http","url":"u"}]}]}}`,
+			strict:   true,
+			wantCode: configvalidate.ExitOK,
+		},
+		{
 			name:        "strict rejects unknown event with far-off name (lists valid)",
 			body:        `{"hooks":{"NoSuchEvent":[{"matcher":"","hooks":[{"type":"http","url":"u"}]}]}}`,
 			strict:      true,

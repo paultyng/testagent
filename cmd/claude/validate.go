@@ -14,11 +14,13 @@ import (
 	"github.com/paultyng/testagent/internal/hooks"
 )
 
-// Known Claude Code hook event names. Used by --strict to reject typos.
-// Mirrors the constants in internal/hooks; kept inline here so the
-// strict allowlist evolves with this file rather than requiring the
-// vendor's runtime package to expose a registry.
+// Known Claude Code hook event names. The validate subcommand's job is
+// "does this config match Claude Code's documented schema?" — orthogonal
+// to whether testagent models the event at runtime. Events fired by
+// testagent reuse the constants from internal/hooks; events Claude Code
+// documents but testagent does not yet model are listed as bare strings.
 var knownClaudeEvents = []string{
+	// Events testagent fires + accepts.
 	hooks.UserPromptSubmit,
 	hooks.PreToolUse,
 	hooks.PostToolUse,
@@ -29,6 +31,17 @@ var knownClaudeEvents = []string{
 	hooks.PostCompact,
 	hooks.Notification,
 	hooks.PermissionRequest,
+	// Documented by Claude Code, not yet modeled by testagent. Accepted
+	// in --strict so configs subscribing to them validate without
+	// forcing a runtime upgrade.
+	"PostToolUseFailure",
+	"StopFailure",
+	"SubagentStart",
+	"SubagentStop",
+	"TaskCreated",
+	"TaskCompleted",
+	"Elicitation",
+	"ElicitationResult",
 }
 
 // Known hook handler types for Claude. testagent dispatches "http" and
