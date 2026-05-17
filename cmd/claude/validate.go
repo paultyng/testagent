@@ -25,39 +25,39 @@ import (
 // Code release (or whenever a user surfaces a config that --strict
 // wrongly rejects).
 var knownClaudeEvents = []string{
-	// Events testagent fires + accepts.
-	hooks.UserPromptSubmit,
-	hooks.PreToolUse,
-	hooks.PostToolUse,
-	hooks.Stop,
-	hooks.SessionStart,
-	hooks.SessionEnd,
-	hooks.PreCompact,
-	hooks.PostCompact,
+	// Events testagent fires + accepts. Alphabetical by constant name.
 	hooks.Notification,
 	hooks.PermissionRequest,
+	hooks.PostCompact,
+	hooks.PostToolUse,
+	hooks.PreCompact,
+	hooks.PreToolUse,
+	hooks.SessionEnd,
+	hooks.SessionStart,
+	hooks.Stop,
+	hooks.UserPromptSubmit,
 	// Documented by Claude Code, not yet modeled by testagent. Accepted
 	// in --strict so configs subscribing to them validate without
-	// forcing a runtime upgrade. Grouped roughly by lifecycle area.
-	"Setup",
-	"UserPromptExpansion",
+	// forcing a runtime upgrade. Alphabetical.
+	"ConfigChange",
+	"CwdChanged",
+	"Elicitation",
+	"ElicitationResult",
+	"FileChanged",
+	"InstructionsLoaded",
 	"PermissionDenied",
-	"PostToolUseFailure",
 	"PostToolBatch",
+	"PostToolUseFailure",
+	"Setup",
 	"StopFailure",
 	"SubagentStart",
 	"SubagentStop",
-	"TaskCreated",
 	"TaskCompleted",
+	"TaskCreated",
 	"TeammateIdle",
-	"InstructionsLoaded",
-	"ConfigChange",
-	"CwdChanged",
-	"FileChanged",
+	"UserPromptExpansion",
 	"WorktreeCreate",
 	"WorktreeRemove",
-	"Elicitation",
-	"ElicitationResult",
 }
 
 // Known hook handler types for Claude. testagent dispatches "http" and
