@@ -1,4 +1,4 @@
-# Sources for research-cursor-coverage
+# Sources — cursor vendor
 
 ## Local binary recipes
 

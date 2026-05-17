@@ -1,4 +1,4 @@
-# Sources for research-codex-coverage
+# Sources — codex vendor
 
 ## Local binary recipes
 
