@@ -1,4 +1,4 @@
-# Sources for research-claude-coverage
+# Sources — claude vendor
 
 ## Doc URLs
 

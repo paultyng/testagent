@@ -80,10 +80,11 @@ task dumpcli:codex
 ```
 
 If either dump differs from what `COMPATIBILITY.md` claims, **flag
-before tagging** and hand off to the appropriate research skill:
+before tagging** and hand off to the `update-compatibility` skill
+with the affected vendor:
 
-- Claude drift → invoke `research-claude-coverage`
-- Codex drift → invoke `research-codex-coverage`
+- Claude drift → `update-compatibility` (vendor: claude)
+- Codex drift → `update-compatibility` (vendor: codex)
 
 Do **not** auto-fix matrix rows from this skill. Wait for the user
 to drive the matrix update (or explicitly waive the check) before
