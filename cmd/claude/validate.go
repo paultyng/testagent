@@ -14,21 +14,50 @@ import (
 	"github.com/paultyng/testagent/internal/hooks"
 )
 
-// Known Claude Code hook event names. Used by --strict to reject typos.
-// Mirrors the constants in internal/hooks; kept inline here so the
-// strict allowlist evolves with this file rather than requiring the
-// vendor's runtime package to expose a registry.
+// Known Claude Code hook event names. The validate subcommand's job is
+// "does this config match Claude Code's documented schema?" — orthogonal
+// to whether testagent models the event at runtime. Events fired by
+// testagent reuse the constants from internal/hooks; events Claude Code
+// documents but testagent does not yet model are listed as bare strings.
+//
+// Source of record: https://code.claude.com/docs/en/hooks
+// Refresh via the research-claude-coverage skill after each Claude
+// Code release (or whenever a user surfaces a config that --strict
+// wrongly rejects).
 var knownClaudeEvents = []string{
-	hooks.UserPromptSubmit,
-	hooks.PreToolUse,
-	hooks.PostToolUse,
-	hooks.Stop,
-	hooks.SessionStart,
-	hooks.SessionEnd,
-	hooks.PreCompact,
-	hooks.PostCompact,
+	// Events testagent fires + accepts. Alphabetical by constant name.
 	hooks.Notification,
 	hooks.PermissionRequest,
+	hooks.PostCompact,
+	hooks.PostToolUse,
+	hooks.PreCompact,
+	hooks.PreToolUse,
+	hooks.SessionEnd,
+	hooks.SessionStart,
+	hooks.Stop,
+	hooks.UserPromptSubmit,
+	// Documented by Claude Code, not yet modeled by testagent. Accepted
+	// in --strict so configs subscribing to them validate without
+	// forcing a runtime upgrade. Alphabetical.
+	"ConfigChange",
+	"CwdChanged",
+	"Elicitation",
+	"ElicitationResult",
+	"FileChanged",
+	"InstructionsLoaded",
+	"PermissionDenied",
+	"PostToolBatch",
+	"PostToolUseFailure",
+	"Setup",
+	"StopFailure",
+	"SubagentStart",
+	"SubagentStop",
+	"TaskCompleted",
+	"TaskCreated",
+	"TeammateIdle",
+	"UserPromptExpansion",
+	"WorktreeCreate",
+	"WorktreeRemove",
 }
 
 // Known hook handler types for Claude. testagent dispatches "http" and
