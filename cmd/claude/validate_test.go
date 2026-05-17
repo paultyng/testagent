@@ -68,11 +68,27 @@ func TestRunValidate_Settings(t *testing.T) {
 		},
 		{
 			// Events Claude Code documents but testagent doesn't fire
-			// (subagent / task / elicitation lifecycle) must still pass
-			// --strict: the validate subcommand's contract is schema
-			// conformance, not runtime support.
-			name:     "strict accepts documented-but-unmodeled events",
-			body:     `{"hooks":{"SubagentStart":[{"matcher":"","hooks":[{"type":"http","url":"u"}]}],"ElicitationResult":[{"matcher":"","hooks":[{"type":"http","url":"u"}]}]}}`,
+			// (subagent / task / elicitation lifecycle, workspace and
+			// config sentinels, etc.) must still pass --strict: the
+			// validate subcommand's contract is schema conformance, not
+			// runtime support. One sample per lifecycle area.
+			name: "strict accepts documented-but-unmodeled events",
+			body: `{"hooks":{
+				"Setup":[{"matcher":"","hooks":[{"type":"http","url":"u"}]}],
+				"UserPromptExpansion":[{"matcher":"","hooks":[{"type":"http","url":"u"}]}],
+				"PermissionDenied":[{"matcher":"","hooks":[{"type":"http","url":"u"}]}],
+				"PostToolBatch":[{"matcher":"","hooks":[{"type":"http","url":"u"}]}],
+				"SubagentStart":[{"matcher":"","hooks":[{"type":"http","url":"u"}]}],
+				"TaskCreated":[{"matcher":"","hooks":[{"type":"http","url":"u"}]}],
+				"TeammateIdle":[{"matcher":"","hooks":[{"type":"http","url":"u"}]}],
+				"InstructionsLoaded":[{"matcher":"","hooks":[{"type":"http","url":"u"}]}],
+				"ConfigChange":[{"matcher":"","hooks":[{"type":"http","url":"u"}]}],
+				"CwdChanged":[{"matcher":"","hooks":[{"type":"http","url":"u"}]}],
+				"FileChanged":[{"matcher":"","hooks":[{"type":"http","url":"u"}]}],
+				"WorktreeCreate":[{"matcher":"","hooks":[{"type":"http","url":"u"}]}],
+				"WorktreeRemove":[{"matcher":"","hooks":[{"type":"http","url":"u"}]}],
+				"ElicitationResult":[{"matcher":"","hooks":[{"type":"http","url":"u"}]}]
+			}}`,
 			strict:   true,
 			wantCode: configvalidate.ExitOK,
 		},

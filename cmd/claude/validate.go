@@ -19,6 +19,11 @@ import (
 // to whether testagent models the event at runtime. Events fired by
 // testagent reuse the constants from internal/hooks; events Claude Code
 // documents but testagent does not yet model are listed as bare strings.
+//
+// Source of record: https://code.claude.com/docs/en/hooks
+// Refresh via the research-claude-coverage skill after each Claude
+// Code release (or whenever a user surfaces a config that --strict
+// wrongly rejects).
 var knownClaudeEvents = []string{
 	// Events testagent fires + accepts.
 	hooks.UserPromptSubmit,
@@ -33,13 +38,24 @@ var knownClaudeEvents = []string{
 	hooks.PermissionRequest,
 	// Documented by Claude Code, not yet modeled by testagent. Accepted
 	// in --strict so configs subscribing to them validate without
-	// forcing a runtime upgrade.
+	// forcing a runtime upgrade. Grouped roughly by lifecycle area.
+	"Setup",
+	"UserPromptExpansion",
+	"PermissionDenied",
 	"PostToolUseFailure",
+	"PostToolBatch",
 	"StopFailure",
 	"SubagentStart",
 	"SubagentStop",
 	"TaskCreated",
 	"TaskCompleted",
+	"TeammateIdle",
+	"InstructionsLoaded",
+	"ConfigChange",
+	"CwdChanged",
+	"FileChanged",
+	"WorktreeCreate",
+	"WorktreeRemove",
 	"Elicitation",
 	"ElicitationResult",
 }
