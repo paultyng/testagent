@@ -185,19 +185,39 @@ Pattern grammar (matches Claude Code's documented set):
 
 ### Hook events
 
+Rows marked `✓ supported` are fired at runtime by testagent. Rows marked `accepted` are in the `claude validate --strict` allowlist (`cmd/claude/validate.go: knownClaudeEvents`) — testagent accepts the config keys without error but does not fire those events. The full set mirrors [code.claude.com/docs/en/hooks](https://code.claude.com/docs/en/hooks).
+
 | Event | testagent | Notes |
 |-------|-----------|-------|
-| `SessionStart` | ✓ supported | Fired at boot (`source=startup`) or resume (`source=resume`); `/clear` and `/compact` fire with `source=clear` or `source=compact` |
-| `SessionEnd` | ✓ supported | Fired on exit; `/clear` and `/compact` fire before the next `SessionStart` |
-| `UserPromptSubmit` | ✓ supported | Fired per user input line and `/think` |
-| `PreToolUse` | ✓ supported | Fired when `/fake-tool` opens a tool-use block (before `/fake-tool-result`); body carries `tool_input` but no `tool_response` or `duration_ms` |
-| `PostToolUse` | ✓ supported | Fired when `/fake-tool-result` completes a `/fake-tool` block |
-| `Stop` | ✓ supported | Fired after each assistant response; `stop_hook_active=true` on `Esc` cancel |
-| `PreCompact` | ✓ supported | Fired before the SessionEnd → SessionStart pair for `/compact` (`trigger=manual`) and `/fake-auto-compact` (`trigger=auto`) |
-| `PostCompact` | ✓ supported | Fired after the SessionEnd → SessionStart pair for `/compact` and `/fake-auto-compact`; trigger matches the PreCompact value |
+| `ConfigChange` | accepted | Documented Claude event; testagent does not fire it |
+| `CwdChanged` | accepted | Documented Claude event; testagent does not fire it |
+| `Elicitation` | accepted | Documented Claude event; testagent does not fire it |
+| `ElicitationResult` | accepted | Documented Claude event; testagent does not fire it |
+| `FileChanged` | accepted | Documented Claude event; testagent does not fire it |
+| `InstructionsLoaded` | accepted | Documented Claude event; testagent does not fire it |
 | `Notification` | ✓ supported | Fired by `/fake-notification [matcher] [-- message]`; matcher defaults to `permission_prompt` |
+| `PermissionDenied` | accepted | Documented Claude event; testagent does not fire it |
 | `PermissionRequest` | ✓ supported | Fired by `/fake-permission-request <tool_name> [json-args]`; nested `decision.behavior` response shape; 120s default hold-open; renders the aggregated decision |
-| `Setup` | `✗ planned` | |
+| `PostCompact` | ✓ supported | Fired after the SessionEnd → SessionStart pair for `/compact` and `/fake-auto-compact`; trigger matches the PreCompact value |
+| `PostToolBatch` | accepted | Documented Claude event; testagent does not fire it |
+| `PostToolUse` | ✓ supported | Fired when `/fake-tool-result` completes a `/fake-tool` block |
+| `PostToolUseFailure` | accepted | Documented Claude event; testagent does not fire it |
+| `PreCompact` | ✓ supported | Fired before the SessionEnd → SessionStart pair for `/compact` (`trigger=manual`) and `/fake-auto-compact` (`trigger=auto`) |
+| `PreToolUse` | ✓ supported | Fired when `/fake-tool` opens a tool-use block (before `/fake-tool-result`); body carries `tool_input` but no `tool_response` or `duration_ms` |
+| `SessionEnd` | ✓ supported | Fired on exit; `/clear` and `/compact` fire before the next `SessionStart` |
+| `SessionStart` | ✓ supported | Fired at boot (`source=startup`) or resume (`source=resume`); `/clear` and `/compact` fire with `source=clear` or `source=compact` |
+| `Setup` | accepted | Documented Claude event; testagent does not fire it |
+| `Stop` | ✓ supported | Fired after each assistant response; `stop_hook_active=true` on `Esc` cancel |
+| `StopFailure` | accepted | Documented Claude event; testagent does not fire it |
+| `SubagentStart` | accepted | Documented Claude event; testagent does not fire it |
+| `SubagentStop` | accepted | Documented Claude event; testagent does not fire it |
+| `TaskCompleted` | accepted | Documented Claude event; testagent does not fire it |
+| `TaskCreated` | accepted | Documented Claude event; testagent does not fire it |
+| `TeammateIdle` | accepted | Documented Claude event; testagent does not fire it |
+| `UserPromptExpansion` | accepted | Documented Claude event; testagent does not fire it |
+| `UserPromptSubmit` | ✓ supported | Fired per user input line and `/think` |
+| `WorktreeCreate` | accepted | Documented Claude event; testagent does not fire it |
+| `WorktreeRemove` | accepted | Documented Claude event; testagent does not fire it |
 
 ---
 
@@ -353,7 +373,154 @@ Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes
 
 | Feature | testagent | Notes |
 |---------|-----------|-------|
-| `~/.codex/config.toml` | partial | Loaded if present; `$CODEX_HOME` honored; `[hooks]` table consumed for SessionStart/UserPromptSubmit/PreToolUse/PostToolUse/Stop/PreCompact/PostCompact; `[mcp_servers]` parsed but not yet consumed |
+| `~/.codex/config.toml` | partial | Loaded if present; `$CODEX_HOME` honored; `[hooks]` table consumed for `session_start`/`user_prompt_submit`/`pre_tool_use`/`post_tool_use`/`stop`/`pre_compact`/`post_compact`/`permission_request`; `[mcp_servers]` parsed but not yet consumed |
 | `AGENTS.md` project instructions | partial | Presence surfaced in status line; content not interpreted (testagent has no model) |
 | `[mcp_servers]` in config.toml | `✗ planned` | Parsed by config skeleton; not yet consumed by the MCP client (tracked in [#13](https://github.com/paultyng/testagent/issues/13)) |
 | `codex mcp add/remove/list` | `not relevant` | Subcommands managing `[mcp_servers]`; no config management in stub |
+
+---
+
+## Cursor
+
+**Upstream version researched:** Cursor CLI 2026.05.09-0afadcc
+**Local binary version:** `cursor agent --version` → 2026.05.09-0afadcc
+
+Note: testagent does not yet ship a `cursor` subcommand. All rows below are `✗ planned` (tracked in the vendor-adapters umbrella [#14](https://github.com/paultyng/testagent/issues/14)) or `not relevant`. The skeleton mirrors the per-vendor template under `.claude/skills/update-compatibility/vendors/cursor/template.md`.
+
+### Subcommands
+
+Cursor's user-facing surface is under `cursor agent`; bare `cursor agent [prompt...]` is the interactive REPL.
+
+| Subcommand | testagent | Notes |
+|------------|-----------|-------|
+| `cursor agent` (no subcommand) | `✗ planned` | Interactive REPL; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `cursor agent --print` | `✗ planned` | Non-interactive one-shot; `--output-format text\|json\|stream-json`; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `cursor agent about` | `✗ planned` | Canned version + account info; `--format text\|json`; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `cursor agent create-chat` | `✗ planned` | Returns a generated chat ID; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `cursor agent generate-rule` | `not relevant` | Interactive rule-authoring wizard; requires model |
+| `cursor agent install-shell-integration` | `not relevant` | Writes to `~/.zshrc`; not in scope for a fake agent |
+| `cursor agent login` | `✗ planned` | Auth no-op stub; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `cursor agent logout` | `✗ planned` | Auth no-op stub; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `cursor agent ls` | `✗ planned` | Resume picker; stub returns empty list; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `cursor agent mcp list` | `✗ planned` | Interactive MCP browser; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `cursor agent mcp list-tools <id>` | `✗ planned` | List tools per server; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `cursor agent mcp login <id>` | `✗ planned` | OAuth handshake; stub returns canned success; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `cursor agent mcp enable <id>` | `✗ planned` | Add to local approved list; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `cursor agent mcp disable <id>` | `✗ planned` | Disable server; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `cursor agent models` | `✗ planned` | Canned model list; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `cursor agent resume` | `✗ planned` | Resume latest; stub returns "no session"; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `cursor agent status\|whoami` | `✗ planned` | Canned auth status; `--format text\|json`; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `cursor agent uninstall-shell-integration` | `not relevant` | Symmetric to install-shell-integration |
+| `cursor agent update` | `not relevant` | Self-update; testagent has its own release cadence |
+
+### Flags (global / interactive)
+
+Alphabetical by long name. Short flags shown inline.
+
+| Flag | testagent | Notes |
+|------|-----------|-------|
+| `--api-key <key>` | `✗ planned` | Auth key; will be parsed and discarded |
+| `--approve-mcps` | `✗ planned` | Auto-approve MCP servers; will be `accepted` (no permission engine) |
+| `--continue` | `✗ planned` | Continue previous session; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `-f` / `--force` / `--yolo` | `✗ planned` | Approval bypass; will be `accepted` |
+| `-H` / `--header <header>` | `✗ planned` | Custom HTTP header; will be `accepted` |
+| `--list-models` | `✗ planned` | Print model list and exit; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `-m` / `--model <name>` | `✗ planned` | Model name; will be `accepted` |
+| `--mode <plan\|ask>` | `✗ planned` | Start in plan/Q&A mode; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `--output-format <text\|json\|stream-json>` | `✗ planned` | Output formatter for `--print`; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `-p` / `--print` | `✗ planned` | Non-interactive one-shot; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `--plan` | `✗ planned` | Shorthand for `--mode=plan`; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `--plugin-dir <path>` | `✗ planned` | Local plugin dir; will be `accepted` (no plugin engine) |
+| `--resume [chatId]` | `✗ planned` | Resume session by ID; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `--sandbox <enabled\|disabled>` | `✗ planned` | Sandbox override; will be `accepted` |
+| `--skip-worktree-setup` | `✗ planned` | Skip worktree setup scripts; will be `accepted` |
+| `--stream-partial-output` | `✗ planned` | Token-level deltas in `stream-json`; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `--trust` | `✗ planned` | Trust workspace without prompting (headless only); will be `accepted` |
+| `-v` / `--version` | `not relevant` | testagent uses its own `--version` |
+| `--workspace <path>` | `✗ planned` | Workspace dir override; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `-w` / `--worktree [name]` | `✗ planned` | Worktree creation flag; will be `accepted` |
+| `--worktree-base <branch>` | `✗ planned` | Worktree base ref; will be `accepted` |
+
+### Slash commands
+
+> **Naming collision:** Cursor's `/mcp list` opens an interactive MCP browser; testagent uses `/mcp-call` for tool dispatch to avoid the collision. Cursor has no top-level `/exit` slash — Ctrl+D (double-press) exits; Ctrl+C also exits. Source: [cursor.com/docs/cli/using](https://cursor.com/docs/cli/using).
+
+#### Built-in
+
+Alphabetical.
+
+| Command | testagent | Notes |
+|---------|-----------|-------|
+| `/about` | `✗ planned` | Environment and account info; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `/ask` | `✗ planned` | Switch to Q&A mode (read-only); tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `/compress` | `✗ planned` | Reduce context window usage; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `/mcp list` | `not relevant` | Interactive MCP browser; testagent uses `/mcp-call` |
+| `/model` | `not relevant` | Model selector; no model |
+| `/plan` | `✗ planned` | Switch to plan mode (read-only/planning); tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `/resume` | `✗ planned` | Continue prior conversation; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `/setup-terminal` | `not relevant` | Configures keybindings on host shell; TUI-internal |
+| `/usage` | `not relevant` | Usage statistics; requires upstream API |
+
+#### Plugin-contributed (skills)
+
+| Pattern | testagent | Notes |
+|---------|-----------|-------|
+| Plugin-contributed slashes | `not relevant` | Dynamic; depend on installed plugin set; no plugin system |
+
+### REPL behaviors
+
+| Behavior | testagent | Notes |
+|----------|-----------|-------|
+| `Ctrl+C` / `Ctrl+D` (exit) | `✗ planned` | Cursor has no `/exit` slash; Ctrl+D (double-press) is documented exit; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| Inline `--print` deltas (`--stream-partial-output`) | `✗ planned` | NDJSON text-deltas in stream-json; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| Alternate screen / TUI mode | `not relevant` | TUI-internal |
+| Vim composer mode | `not relevant` | TUI-internal |
+
+### Hook events
+
+Hooks are configured in `.cursor/hooks.json` with a 4-level priority cascade (enterprise > team > project > user). testagent's MVP will cover project-level only; other tiers are out of scope. Response wire is **top-level** `{"permission": "allow"|"deny"|"ask", "user_message": "...", "agent_message": "..."}` — distinct from claude/codex's nested shape. Source: [cursor.com/docs/hooks](https://cursor.com/docs/hooks).
+
+| Event | testagent | Notes |
+|-------|-----------|-------|
+| `afterAgentResponse` | `✗ planned` | Fires after each assistant message completes; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `afterAgentThought` | `not relevant` | Tied to model thinking internals |
+| `afterFileEdit` | `✗ planned` | After a file edit lands; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `afterMCPExecution` | `✗ planned` | After an MCP tool call; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `afterShellExecution` | `✗ planned` | After a shell command runs; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `afterTabFileEdit` | `not relevant` | IDE-tab inline-completion event; no IDE integration |
+| `beforeMCPExecution` | `✗ planned` | Before an MCP tool call; can allow/deny; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `beforeReadFile` | `✗ planned` | Before a file read; can block; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `beforeShellExecution` | `✗ planned` | Before a shell command; can allow/deny; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `beforeSubmitPrompt` | `✗ planned` | Before model receives user prompt; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `beforeTabFileRead` | `not relevant` | IDE-tab inline-completion event; no IDE integration |
+| `postToolUse` | `✗ planned` | After a tool call succeeds; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `postToolUseFailure` | `✗ planned` | After a tool call fails or is denied; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `preCompact` | `✗ planned` | Before context compaction; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `preToolUse` | `✗ planned` | Before any tool call; can allow/deny/ask; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `sessionEnd` | `✗ planned` | Session terminates; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `sessionStart` | `✗ planned` | Session begins; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `stop` | `✗ planned` | Agent loop ends (analog of claude's `Stop`); tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `subagentStart` | `✗ planned` | Before spawning a Task tool subagent; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `subagentStop` | `✗ planned` | After a Task tool subagent completes; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `workspaceOpen` | `not relevant` | App-lifecycle event; fires on workspace folder change; no app shell |
+
+### Config and conventions
+
+| Feature | testagent | Notes |
+|---------|-----------|-------|
+| `.cursor/hooks.json` (project) | `✗ planned` | Project-scoped hook config; MVP covers this level only; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `~/.cursor/hooks.json` (user) | `not relevant` | User-scoped tier of the priority cascade; out of scope for MVP |
+| Team-scoped hooks | `not relevant` | Distributed via Cursor dashboard; no central server |
+| Enterprise-scoped hooks | `not relevant` | `/Library/Application Support/Cursor/hooks.json`; out of scope |
+| `~/.cursor/mcp.json` (global) | `✗ planned` | Global MCP server config; identical shape to claude's `--mcp-config`; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `.cursor/mcp.json` (project) | `✗ planned` | Project-level override; project config wins; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `cursor agent mcp` subcommands | `✗ planned` | list/list-tools/login/enable/disable surface; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `~/.cursor/cli-config.json` | `✗ planned` | `approvalMode`, sandbox, permissions; will be `accepted` (parsed, not enforced) |
+| `approvalMode` token grammar | `not relevant` | Allowlist tokens (`Shell(...)`, `Read(...)`, `Mcp(server:tool)`); no permission engine |
+| `sandbox.json` | `not relevant` | Sandbox mode picker; no sandbox; source: [cursor.com/docs/reference/sandbox](https://cursor.com/docs/reference/sandbox) |
+| `AGENTS.md` project instructions | `✗ planned` | Same file codex reads; surface in banner/status; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `.cursor/rules/*.mdc` | `✗ planned` | YAML-frontmattered rules (`description`/`alwaysApply`/`globs`); tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `.cursorrules` (legacy) | `not relevant` | Deprecated; not loaded by current agent CLI |
+| Plugins (`~/.cursor/plugins/local/<name>`) | `not relevant` | Dynamic; depend on installed plugin set |
+| `--plugin-dir <path>` | `✗ planned` | Local plugin discovery flag; will be `accepted` |
+| Worktree integration (`--worktree` / `--worktree-base`) | `✗ planned` | Flags will be `accepted`; no worktree management in stub |
