@@ -5,11 +5,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/paultyng/testagent/internal/rootflags"
 )
 
 // newLsCommand returns the "cursor ls" stub subcommand.
-func newLsCommand(_ *rootflags.Flags) *cobra.Command {
+func newLsCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:          "ls",
 		Short:        "Stub: list Cursor chat sessions",

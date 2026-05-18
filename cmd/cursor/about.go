@@ -6,11 +6,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/paultyng/testagent/internal/rootflags"
 )
 
 // newAboutCommand returns the "cursor about" stub subcommand.
-func newAboutCommand(_ *rootflags.Flags) *cobra.Command {
+func newAboutCommand() *cobra.Command {
 	var format string
 
 	cmd := &cobra.Command{

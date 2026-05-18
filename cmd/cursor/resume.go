@@ -5,13 +5,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/paultyng/testagent/internal/rootflags"
 )
 
 // newResumeCommand returns the "cursor resume" stub subcommand.
 // An optional positional <chat-id> selects which chat to resume;
 // omitting it resumes the most recent stub chat.
-func newResumeCommand(_ *rootflags.Flags) *cobra.Command {
+func newResumeCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:          "resume [chat-id]",
 		Short:        "Stub: resume a Cursor chat session",

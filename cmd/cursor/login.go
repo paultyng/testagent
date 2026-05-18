@@ -5,11 +5,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/paultyng/testagent/internal/rootflags"
 )
 
 // newLoginCommand returns the "cursor login" stub subcommand.
-func newLoginCommand(_ *rootflags.Flags) *cobra.Command {
+func newLoginCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:          "login",
 		Short:        "Stub: authenticate with Cursor (no real login)",

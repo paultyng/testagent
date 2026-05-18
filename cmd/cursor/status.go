@@ -6,11 +6,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/paultyng/testagent/internal/rootflags"
 )
 
 // newStatusCommand returns the "cursor status" stub subcommand.
-func newStatusCommand(_ *rootflags.Flags) *cobra.Command {
+func newStatusCommand() *cobra.Command {
 	var format string
 
 	cmd := &cobra.Command{

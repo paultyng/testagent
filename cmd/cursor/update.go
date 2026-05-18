@@ -5,11 +5,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/paultyng/testagent/internal/rootflags"
 )
 
 // newUpdateCommand returns the "cursor update" stub subcommand.
-func newUpdateCommand(_ *rootflags.Flags) *cobra.Command {
+func newUpdateCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:          "update",
 		Short:        "Stub: update Cursor (always up to date)",

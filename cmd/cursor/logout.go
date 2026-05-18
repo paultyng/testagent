@@ -5,11 +5,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/paultyng/testagent/internal/rootflags"
 )
 
 // newLogoutCommand returns the "cursor logout" stub subcommand.
-func newLogoutCommand(_ *rootflags.Flags) *cobra.Command {
+func newLogoutCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:          "logout",
 		Short:        "Stub: clear Cursor session (no real logout)",

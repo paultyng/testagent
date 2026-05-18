@@ -5,11 +5,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/paultyng/testagent/internal/rootflags"
 )
 
 // newModelsCommand returns the "cursor models" stub subcommand.
-func newModelsCommand(_ *rootflags.Flags) *cobra.Command {
+func newModelsCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:          "models",
 		Short:        "Stub: list available Cursor models",
