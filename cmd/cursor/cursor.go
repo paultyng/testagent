@@ -83,6 +83,16 @@ func NewCommand(rf *rootflags.Flags) *cobra.Command {
 	pf.StringVar(&cf.Resume, "resume", "", "resume session by ID (parsed; not modeled — later batch)")
 	pf.BoolVar(&cf.Continue, "continue", false, "continue most recent session (parsed; not modeled)")
 
+	cmd.AddCommand(newLoginCommand(rf))
+	cmd.AddCommand(newLogoutCommand(rf))
+	cmd.AddCommand(newStatusCommand(rf))
+	cmd.AddCommand(newAboutCommand(rf))
+	cmd.AddCommand(newModelsCommand(rf))
+	cmd.AddCommand(newUpdateCommand(rf))
+	cmd.AddCommand(newCreateChatCommand(rf))
+	cmd.AddCommand(newResumeCommand(rf))
+	cmd.AddCommand(newLsCommand(rf))
+
 	return cmd
 }
 
