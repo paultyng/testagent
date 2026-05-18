@@ -1,9 +1,11 @@
 // Package cursor implements testagent's "cursor" subcommand — the v1
 // drop-in fake for Cursor CLI (cursor agent). Vendor-specific knobs
-// (cursor-shaped flags, the .cursor/{mcp,hooks}.json loaders, AGENTS.md
-// surfacing) live here; the shared engine loop in internal/engine drives
-// the actual session. Stream-json output (Phase 4) and .cursor/rules/*.mdc
-// surfacing (Phase 5) are deferred — see cursor-adapter-plan.md.
+// (cursor-shaped flags, the .cursor/{mcp,hooks}.json loaders,
+// .cursor/rules/*.mdc surfacing, AGENTS.md surfacing, stream-json
+// emission) live here; the shared engine loop in internal/engine drives
+// the actual interactive session. Typed tool_call frames in stream-json
+// and internal/mcp stdio support remain follow-ups — see
+// cursor-adapter-plan.md.
 package cursor
 
 import (
@@ -29,11 +31,11 @@ import (
 // Fields tagged "argv-only" are parsed for upstream-argv compatibility
 // but have no behavioral effect in Phase 1.
 type flags struct {
-	Print        bool   // argv-only (Phase 4 stream-json)
-	OutputFormat string // argv-only (Phase 4 stream-json)
+	Print        bool   // supported (routes to runPrintMode)
+	OutputFormat string // supported (text|json|stream-json honored in runPrint)
 	Model        string // argv-only
-	Mode         string // parsed; affects banner in Phase 3
-	Workspace    string // parsed; changes cwd if set
+	Mode         string // argv-only (banner-state toggle stubbed in /plan, /ask)
+	Workspace    string // supported (resolved in resolveWorkspace; chdirs the bare REPL entrypoint)
 	Force        bool   // argv-only
 	Yolo         bool   // argv-only
 	Sandbox      string // argv-only
@@ -44,7 +46,7 @@ type flags struct {
 	PluginDir    stringSlice
 	APIKey       string      // argv-only
 	Header       stringSlice // argv-only
-	Resume       string      // argv-only (resume subcommand handles in later batch)
+	Resume       string      // argv-only (persistent flag; positional-arg form handled by the resume subcommand)
 	Continue     bool        // argv-only
 }
 
@@ -76,10 +78,10 @@ func NewCommand(rf *rootflags.Flags) *cobra.Command {
 	}
 
 	pf := cmd.PersistentFlags()
-	pf.BoolVar(&cf.Print, "print", false, "non-interactive print mode (parsed; not modeled — Phase 4)")
-	pf.StringVar(&cf.OutputFormat, "output-format", "", "output format: text|json|stream-json (parsed; not modeled — Phase 4)")
+	pf.BoolVar(&cf.Print, "print", false, "non-interactive print mode; emit one turn and exit")
+	pf.StringVar(&cf.OutputFormat, "output-format", "", "output format: text|json|stream-json (honored when --print is set)")
 	pf.StringVarP(&cf.Model, "model", "m", "", "model name (parsed; not modeled)")
-	pf.StringVar(&cf.Mode, "mode", "", "agent mode: plan|ask (parsed; not modeled — Phase 3)")
+	pf.StringVar(&cf.Mode, "mode", "", "agent mode: plan|ask (parsed; banner-state toggle stubbed in /plan, /ask)")
 	pf.StringVar(&cf.Workspace, "workspace", "", "change working directory before launch")
 	pf.BoolVar(&cf.Force, "force", false, "skip confirmation prompts (parsed; not modeled)")
 	pf.BoolVar(&cf.Yolo, "yolo", false, "skip all confirmations (parsed; not modeled)")
@@ -91,7 +93,7 @@ func NewCommand(rf *rootflags.Flags) *cobra.Command {
 	pf.Var(&cf.PluginDir, "plugin-dir", "plugin directory (parsed; not modeled, repeatable)")
 	pf.StringVar(&cf.APIKey, "api-key", "", "Cursor API key (parsed; not modeled)")
 	pf.VarP(&cf.Header, "header", "H", "HTTP header K=V (parsed; not modeled, repeatable)")
-	pf.StringVar(&cf.Resume, "resume", "", "resume session by ID (parsed; not modeled — later batch)")
+	pf.StringVar(&cf.Resume, "resume", "", "resume session by ID (persistent flag; positional-arg form handled by the resume subcommand)")
 	pf.BoolVar(&cf.Continue, "continue", false, "continue most recent session (parsed; not modeled)")
 
 	cmd.AddCommand(newLoginCommand())
@@ -152,6 +154,7 @@ func runPrintMode(cmd *cobra.Command, rf *rootflags.Flags, cf *flags, args []str
 		resumed:      cf.Resume != "",
 		hooks:        runner,
 		mcp:          mcpClient,
+		stderr:       cmd.ErrOrStderr(),
 	}, cmd.InOrStdin(), cmd.OutOrStdout())
 	if code != 0 {
 		return &claude.ExitError{Code: code}

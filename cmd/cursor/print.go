@@ -10,10 +10,10 @@
 // typed variants (readToolCall, writeToolCall, shellToolCall, editToolCall,
 // or a function fallback) rather than claude's flat tool_use shape.
 //
-// Tool-call frames are not emitted in Phase 4 — testagent's --print echo
-// path doesn't dispatch tools. The system/init → user → assistant → result
-// sequence is complete on its own; future phases may add tool emissions
-// when /fake-tool can drive the print path.
+// Tool-call frames are not emitted: testagent's --print echo path doesn't
+// dispatch tools, so the system/init → user → assistant → result sequence
+// is complete on its own. Tool emission can land when /fake-tool drives
+// the print path in a follow-up.
 
 package cursor
 
@@ -31,6 +31,10 @@ import (
 )
 
 // printOptions bundles the inputs runPrint needs from the cursor RunE.
+// stderr is the destination for lifecycle-error messages (hook errors,
+// stdin-read errors, MCP close errors). Threaded from cmd.ErrOrStderr()
+// so callers that redirect stderr via cobra's SetErr (test helpers,
+// orchestrators wrapping the binary) see those messages.
 type printOptions struct {
 	name         string
 	sessionID    string
@@ -41,6 +45,7 @@ type printOptions struct {
 	resumed      bool
 	hooks        *cursorhooks.Runner
 	mcp          *mcp.Client
+	stderr       io.Writer // optional; falls back to os.Stderr when nil
 }
 
 // runPrint executes one non-interactive turn and returns the exit code.
@@ -48,32 +53,47 @@ type printOptions struct {
 // Lifecycle (cursor): OnSessionStart (no-op — cursor has no event) → read
 // prompt → OnPrompt (no-op for the same reason) → echo response → emit per
 // --output-format → OnStop ("stop" event fires) → OnSessionEnd (no-op) →
-// close MCP. Hook errors land on stderr and don't affect the exit code.
+// close MCP. Hook errors land on opt.stderr (or os.Stderr fallback) and
+// don't affect the exit code.
 func runPrint(ctx context.Context, opt printOptions, stdin io.Reader, stdout io.Writer) int {
+	stderr := opt.stderr
+	if stderr == nil {
+		stderr = os.Stderr
+	}
+
+	// Deferred so the two early-exit paths (stdin read error, empty-prompt
+	// guard) still release the MCP connection that runPrintMode opened
+	// for us before entering this function.
+	defer func() {
+		if err := opt.mcp.Close(); err != nil {
+			fmt.Fprintf(stderr, "testagent: mcp Close: %v\n", err)
+		}
+	}()
+
 	startSource := "startup"
 	if opt.resumed {
 		startSource = "resume"
 	}
 	if err := opt.hooks.OnSessionStart(ctx, startSource); err != nil {
-		fmt.Fprintf(os.Stderr, "testagent: hook OnSessionStart: %v\n", err)
+		fmt.Fprintf(stderr, "testagent: hook OnSessionStart: %v\n", err)
 	}
 
 	prompt := strings.TrimSpace(strings.Join(opt.positional, " "))
 	if prompt == "" {
 		b, err := io.ReadAll(stdin)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "testagent: read prompt: %v\n", err)
+			fmt.Fprintf(stderr, "testagent: read prompt: %v\n", err)
 			return 1
 		}
 		prompt = strings.TrimSpace(string(b))
 	}
 	if prompt == "" {
-		fmt.Fprintln(os.Stderr, "testagent: --print requires a prompt (positional arg or stdin)")
+		fmt.Fprintln(stderr, "testagent: --print requires a prompt (positional arg or stdin)")
 		return 1
 	}
 
 	if err := opt.hooks.OnPrompt(ctx, prompt, opt.name); err != nil {
-		fmt.Fprintf(os.Stderr, "testagent: hook OnPrompt: %v\n", err)
+		fmt.Fprintf(stderr, "testagent: hook OnPrompt: %v\n", err)
 	}
 
 	start := time.Now()
@@ -94,14 +114,15 @@ func runPrint(ctx context.Context, opt printOptions, stdin io.Reader, stdout io.
 		fmt.Fprintln(stdout, response)
 	}
 
-	if err := opt.hooks.OnStop(ctx, response, false); err != nil {
-		fmt.Fprintf(os.Stderr, "testagent: hook OnStop: %v\n", err)
+	// Teardown uses a fresh background context so SIGINT-cancelled cobra
+	// contexts don't silently skip stop-hook execution. mcp.Close runs via
+	// the deferred cleanup above.
+	teardownCtx := context.Background()
+	if err := opt.hooks.OnStop(teardownCtx, response, false); err != nil {
+		fmt.Fprintf(stderr, "testagent: hook OnStop: %v\n", err)
 	}
-	if err := opt.hooks.OnSessionEnd(ctx, "logout"); err != nil {
-		fmt.Fprintf(os.Stderr, "testagent: hook OnSessionEnd: %v\n", err)
-	}
-	if err := opt.mcp.Close(); err != nil {
-		fmt.Fprintf(os.Stderr, "testagent: mcp Close: %v\n", err)
+	if err := opt.hooks.OnSessionEnd(teardownCtx, "logout"); err != nil {
+		fmt.Fprintf(stderr, "testagent: hook OnSessionEnd: %v\n", err)
 	}
 	return 0
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
 
@@ -265,8 +266,11 @@ func setServerDisabled(raw map[string]any, path, serverName string, disabled boo
 }
 
 // writeUserMCPAtomic marshals raw and writes it to path via a temp-file +
-// rename. Removes the temp file on rename failure so we never leave behind a
-// stale `.tmp` next to the real config.
+// rename. Uses os.CreateTemp with a random suffix (rather than a predictable
+// path+".tmp") so a hostile pre-existing symlink cannot redirect the write
+// to an arbitrary file. The temp file is created in the same directory as
+// path so the final Rename is on-device. On any failure after creation, the
+// temp file is removed so we never leave behind a stale half-write.
 func writeUserMCPAtomic(path string, raw map[string]any) error {
 	out, err := json.MarshalIndent(raw, "", "  ")
 	if err != nil {
@@ -274,12 +278,28 @@ func writeUserMCPAtomic(path string, raw map[string]any) error {
 	}
 	out = append(out, '\n')
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, out, 0o600); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(path), "mcp-*.json")
+	if err != nil {
+		return fmt.Errorf("creating temp file in %s: %w", filepath.Dir(path), err)
+	}
+	tmp := f.Name()
+	cleanup := func() { _ = os.Remove(tmp) }
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		cleanup()
+		return fmt.Errorf("chmod %s: %w", tmp, err)
+	}
+	if _, err := f.Write(out); err != nil {
+		_ = f.Close()
+		cleanup()
 		return fmt.Errorf("writing %s: %w", tmp, err)
 	}
+	if err := f.Close(); err != nil {
+		cleanup()
+		return fmt.Errorf("closing %s: %w", tmp, err)
+	}
 	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+		cleanup()
 		return fmt.Errorf("replacing %s: %w", path, err)
 	}
 	return nil

@@ -518,9 +518,9 @@ Hooks are configured in `.cursor/hooks.json` with a 4-level priority cascade (en
 | `~/.cursor/cli-config.json` | `✗ planned` | `approvalMode`, sandbox, permissions; will be `accepted` (parsed, not enforced) |
 | `approvalMode` token grammar | `not relevant` | Allowlist tokens (`Shell(...)`, `Read(...)`, `Mcp(server:tool)`); no permission engine |
 | `sandbox.json` | `not relevant` | Sandbox mode picker; no sandbox; source: [cursor.com/docs/reference/sandbox](https://cursor.com/docs/reference/sandbox) |
-| `AGENTS.md` project instructions | `✗ planned` | Same file codex reads; surface in banner/status; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `AGENTS.md` project instructions | `partial` | Same file codex reads; size surfaced in status line; content not interpreted (testagent has no model) |
 | `.cursor/rules/*.mdc` | `partial` | Walks `.cursor/rules/*.mdc` and surfaces a `rules: N (a always, g glob, i intelligent, m manual)` line in the banner. Rule body content is not interpreted (testagent has no model) — orchestrator-parity surfacing only. |
 | `.cursorrules` (legacy) | `not relevant` | Deprecated; not loaded by current agent CLI |
 | Plugins (`~/.cursor/plugins/local/<name>`) | `not relevant` | Dynamic; depend on installed plugin set |
-| `--plugin-dir <path>` | `✗ planned` | Local plugin discovery flag; will be `accepted` |
-| Worktree integration (`--worktree` / `--worktree-base`) | `✗ planned` | Flags will be `accepted`; no worktree management in stub |
+| `--plugin-dir <path>` | `accepted` | Local plugin discovery flag; parsed and discarded (no plugin engine) |
+| Worktree integration (`--worktree` / `--worktree-base`) | `accepted` | Both flags parsed and discarded; no worktree management in stub |
