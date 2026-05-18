@@ -151,7 +151,11 @@ func newMCPListToolsCommand(_ *rootflags.Flags, cf *flags) *cobra.Command {
 			if err := client.Connect(ctx); err != nil {
 				return fmt.Errorf("connecting to server %q: %w", serverName, err)
 			}
-			defer client.Close()
+			defer func() {
+				if cerr := client.Close(); cerr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "cursor: mcp client close: %v\n", cerr)
+				}
+			}()
 
 			tools := client.Tools()
 			sort.Slice(tools, func(i, j int) bool {
@@ -202,21 +206,39 @@ func toggleMCPServer(serverName string, disabled bool) error {
 	if err != nil {
 		return err
 	}
+	raw, err := readUserMCPRaw(path)
+	if err != nil {
+		return err
+	}
+	if err := setServerDisabled(raw, path, serverName, disabled); err != nil {
+		return err
+	}
+	return writeUserMCPAtomic(path, raw)
+}
 
+// readUserMCPRaw reads path as a JSON object into a generic map so unknown
+// top-level keys survive the round-trip. Returns a specific not-found error
+// when the file is absent so callers can offer the user a remediation hint.
+func readUserMCPRaw(path string) (map[string]any, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("%s does not exist; create it with at least {\"mcpServers\":{}} before toggling servers", path)
+			return nil, fmt.Errorf("%s does not exist; create it with at least {\"mcpServers\":{}} before toggling servers", path)
 		}
-		return fmt.Errorf("reading %s: %w", path, err)
+		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
-
-	// Use map[string]any to survive unknown top-level keys.
 	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return fmt.Errorf("parsing %s: %w", path, err)
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
+	return raw, nil
+}
 
+// setServerDisabled mutates raw in place: sets entry["disabled"] = true when
+// disabled is true, or removes the key when false. path is only used in error
+// messages. Errors when mcpServers is absent / wrong type, or the named server
+// is missing / wrong type.
+func setServerDisabled(raw map[string]any, path, serverName string, disabled bool) error {
 	serversAny, ok := raw["mcpServers"]
 	if !ok {
 		return fmt.Errorf("server %q not found in user mcp.json", serverName)
@@ -225,7 +247,6 @@ func toggleMCPServer(serverName string, disabled bool) error {
 	if !ok {
 		return fmt.Errorf("mcpServers in %s is not an object", path)
 	}
-
 	entryAny, ok := servers[serverName]
 	if !ok {
 		return fmt.Errorf("server %q not found in user mcp.json", serverName)
@@ -234,14 +255,19 @@ func toggleMCPServer(serverName string, disabled bool) error {
 	if !ok {
 		return fmt.Errorf("server %q in %s is not an object", serverName, path)
 	}
-
 	if disabled {
 		entry["disabled"] = true
 	} else {
 		delete(entry, "disabled")
 	}
 	servers[serverName] = entry
+	return nil
+}
 
+// writeUserMCPAtomic marshals raw and writes it to path via a temp-file +
+// rename. Removes the temp file on rename failure so we never leave behind a
+// stale `.tmp` next to the real config.
+func writeUserMCPAtomic(path string, raw map[string]any) error {
 	out, err := json.MarshalIndent(raw, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling %s: %w", path, err)

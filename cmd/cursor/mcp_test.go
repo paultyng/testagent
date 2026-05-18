@@ -229,6 +229,110 @@ func assertDisabledFlag(t *testing.T, raw map[string]any, serverName string, wan
 	}
 }
 
+// TestSetServerDisabled covers the in-memory mutation step in isolation so the
+// disable/enable mapping is testable without filesystem setup. The end-to-end
+// round-trip lives in TestMCPEnableDisable_RoundTrip.
+func TestSetServerDisabled(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		raw        map[string]any
+		serverName string
+		disabled   bool
+		wantErr    string
+		wantKey    *bool // nil means key absent after mutation
+	}{
+		{
+			name: "disable sets flag true",
+			raw: map[string]any{
+				"mcpServers": map[string]any{"x": map[string]any{}},
+			},
+			serverName: "x",
+			disabled:   true,
+			wantKey:    boolPtr(true),
+		},
+		{
+			name: "enable removes flag",
+			raw: map[string]any{
+				"mcpServers": map[string]any{"x": map[string]any{"disabled": true}},
+			},
+			serverName: "x",
+			disabled:   false,
+			wantKey:    nil,
+		},
+		{
+			name:       "missing mcpServers errors",
+			raw:        map[string]any{},
+			serverName: "x",
+			disabled:   true,
+			wantErr:    "not found",
+		},
+		{
+			name: "mcpServers wrong type errors",
+			raw: map[string]any{
+				"mcpServers": "oops",
+			},
+			serverName: "x",
+			disabled:   true,
+			wantErr:    "not an object",
+		},
+		{
+			name: "missing server errors",
+			raw: map[string]any{
+				"mcpServers": map[string]any{"other": map[string]any{}},
+			},
+			serverName: "x",
+			disabled:   true,
+			wantErr:    "not found",
+		},
+		{
+			name: "server entry wrong type errors",
+			raw: map[string]any{
+				"mcpServers": map[string]any{"x": "oops"},
+			},
+			serverName: "x",
+			disabled:   true,
+			wantErr:    "not an object",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := setServerDisabled(tc.raw, "fake.json", tc.serverName, tc.disabled)
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("want error containing %q, got nil", tc.wantErr)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("error %q does not contain %q", err.Error(), tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			servers := tc.raw["mcpServers"].(map[string]any)
+			entry := servers[tc.serverName].(map[string]any)
+			got, present := entry["disabled"]
+			if tc.wantKey == nil {
+				if present {
+					t.Fatalf("disabled key should be absent, got %v", got)
+				}
+				return
+			}
+			if !present {
+				t.Fatalf("disabled key absent, want %v", *tc.wantKey)
+			}
+			if b, _ := got.(bool); b != *tc.wantKey {
+				t.Fatalf("disabled = %v, want %v", got, *tc.wantKey)
+			}
+		})
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
 // assertPreservedKey checks that a top-level key retains its expected value.
 func assertPreservedKey(t *testing.T, raw map[string]any, key, want string) {
 	t.Helper()
