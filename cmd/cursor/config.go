@@ -17,14 +17,40 @@ type Config struct {
 	Hooks *HooksConfig
 }
 
+// cursorMCPServer is the on-disk shape of one entry under .cursor/mcp.json's
+// "mcpServers" map. Strictly richer than internal/mcp.Server — captures stdio
+// transport fields (Command/Args/Env) and the Cursor-specific Disabled toggle
+// that mcp enable/disable round-trip. Convert to mcp.Server via toCoreServer()
+// at the launch boundary; stdio servers are skipped at that boundary today
+// (mcp.Client is HTTP-only) — tracked in the plan's Phase 2 follow-up.
+type cursorMCPServer struct {
+	Type     string            `json:"type,omitempty"`
+	URL      string            `json:"url,omitempty"`
+	Headers  map[string]string `json:"headers,omitempty"`
+	Command  string            `json:"command,omitempty"`
+	Args     []string          `json:"args,omitempty"`
+	Env      map[string]string `json:"env,omitempty"`
+	Disabled bool              `json:"disabled,omitempty"`
+}
+
+// toCoreServer projects a cursorMCPServer into the shared internal/mcp.Server
+// shape. Used when handing off to mcp.Client. Stdio servers (Command set, no
+// URL) return a zero-value Server today; callers must filter those out before
+// connecting until internal/mcp grows stdio support.
+func (s cursorMCPServer) toCoreServer() mcp.Server {
+	return mcp.Server{
+		Type:    s.Type,
+		URL:     s.URL,
+		Headers: s.Headers,
+	}
+}
+
 // MCPConfig is the on-disk shape of .cursor/mcp.json and ~/.cursor/mcp.json.
-// The schema is identical to Claude Code's --mcp-config format. Note that
-// mcp.Server only carries HTTP transport fields (Type, URL, Headers); stdio
-// servers parsed from disk will have Type="stdio" but Command/Args/Env are
-// silently dropped — Phase 2 should extend mcp.Server if stdio support is
-// needed.
+// Uses cursorMCPServer to capture the full on-disk field set including stdio
+// transport fields and the Disabled toggle. Conversion to mcp.Server happens
+// at the launch boundary via toCoreServer().
 type MCPConfig struct {
-	MCPServers map[string]mcp.Server `json:"mcpServers"`
+	MCPServers map[string]cursorMCPServer `json:"mcpServers"`
 }
 
 // HooksConfig is the on-disk shape of .cursor/hooks.json.
@@ -147,7 +173,7 @@ func mergeMCPConfigs(base, overlay *MCPConfig) *MCPConfig {
 		return nil
 	}
 	merged := &MCPConfig{
-		MCPServers: make(map[string]mcp.Server),
+		MCPServers: make(map[string]cursorMCPServer),
 	}
 	if base != nil {
 		for k, v := range base.MCPServers {
