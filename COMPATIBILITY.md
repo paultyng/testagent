@@ -434,7 +434,7 @@ Alphabetical by long name. Short flags shown inline.
 | `--resume [chatId]` | `accepted` | Persistent flag parsed; positional-arg subcommand stub returns canned output |
 | `--sandbox <enabled\|disabled>` | `accepted` | Sandbox override; parsed and discarded |
 | `--skip-worktree-setup` | `✗ planned` | Skip worktree setup scripts; not yet wired |
-| `--stream-partial-output` | `✗ planned` | Token-level deltas in `stream-json`; Phase 4 ([#14](https://github.com/paultyng/testagent/issues/14)) |
+| `--stream-partial-output` | `✗ planned` | Token-level deltas in `stream-json`; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
 | `--trust` | `accepted` | Trust workspace without prompting; parsed and discarded |
 | `-v` / `--version` | `not relevant` | testagent uses its own `--version` |
 | `--workspace <path>` | `✓ supported` | Chdirs before the skeleton banner prints (mirrors codex `--cd`) |
@@ -452,11 +452,11 @@ Alphabetical.
 | Command | testagent | Notes |
 |---------|-----------|-------|
 | `/about` | `accepted` | Stub: prints testagent + cursor adapter identity |
-| `/ask` | `accepted` | Stub: prints "entering ask mode"; real banner-state toggle is engine work (Phase 4) |
+| `/ask` | `accepted` | Stub: prints "entering ask mode"; real banner-state toggle is engine work (tracked in [#14](https://github.com/paultyng/testagent/issues/14)) |
 | `/compress` | `✓ supported` | Alias for `/compact` — fires PreCompact → SessionEnd → SessionStart → PostCompact (trigger=manual) |
 | `/mcp` / `/mcp list` | `accepted` | Stub: prints connected MCP server names + tool counts (real upstream is an interactive browser) |
 | `/model` | `accepted` | Stub: prints "model: testagent-stub" |
-| `/plan` | `accepted` | Stub: prints "entering plan mode"; real banner-state toggle is engine work (Phase 4) |
+| `/plan` | `accepted` | Stub: prints "entering plan mode"; real banner-state toggle is engine work (tracked in [#14](https://github.com/paultyng/testagent/issues/14)) |
 | `/resume` | `accepted` | Stub: prints "no prior session" (real REPL resume is `cursor resume <id>` subcommand) |
 | `/setup-terminal` | `accepted` | Stub: prints "terminal integration: already configured" |
 | `/usage` | `accepted` | Stub: prints zeros (testagent never calls an LLM) |
