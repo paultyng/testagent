@@ -156,9 +156,16 @@ func loadConfig(workspace string) (*Config, error) {
 	}, nil
 }
 
-// userMCPConfigPath returns the path to ~/.cursor/mcp.json. Honors the
-// CURSOR_HOME environment variable when set (mirrors codex's CODEX_HOME
-// pattern).
+// userMCPConfigPath returns the path to ~/.cursor/mcp.json.
+//
+// CURSOR_HOME, when set, replaces the user home directory in the resolution:
+//
+//	$CURSOR_HOME/.cursor/mcp.json
+//
+// Tests typically point CURSOR_HOME at t.TempDir() with a `.cursor/mcp.json`
+// underneath. This is intentionally different from codex's CODEX_HOME, which
+// names the config directory itself ($CODEX_HOME/config.toml). The cursor
+// convention follows upstream cursor — the CLI also resolves $HOME/.cursor/.
 func userMCPConfigPath() (string, error) {
 	if home := os.Getenv("CURSOR_HOME"); home != "" {
 		return filepath.Join(home, ".cursor", "mcp.json"), nil
