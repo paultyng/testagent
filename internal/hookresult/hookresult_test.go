@@ -81,6 +81,36 @@ func TestParseBody(t *testing.T) {
 			body: `{"decision":"maybe"}`,
 			want: Result{},
 		},
+		{
+			name: "cursor permission allow",
+			body: `{"permission":"allow"}`,
+			want: Result{Allow: true},
+		},
+		{
+			name: "cursor permission allow with agent_message",
+			body: `{"permission":"allow","agent_message":"ok"}`,
+			want: Result{Allow: true, Reason: "ok"},
+		},
+		{
+			name: "cursor permission deny with agent_message wins over user_message",
+			body: `{"permission":"deny","user_message":"shown to user","agent_message":"shown to model"}`,
+			want: Result{Block: true, Reason: "shown to model"},
+		},
+		{
+			name: "cursor permission deny falls back to user_message when agent_message empty",
+			body: `{"permission":"deny","user_message":"shown to user"}`,
+			want: Result{Block: true, Reason: "shown to user"},
+		},
+		{
+			name: "cursor permission ask",
+			body: `{"permission":"ask","agent_message":"please confirm"}`,
+			want: Result{Ask: true, Reason: "please confirm"},
+		},
+		{
+			name: "cursor permission unknown falls through",
+			body: `{"permission":"maybe","decision":"block","reason":"legacy fallback"}`,
+			want: Result{Block: true, Reason: "legacy fallback"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -237,6 +267,38 @@ func TestAggregate(t *testing.T) {
 		{
 			name:    "non-decision event returns zero result",
 			event:   "Stop",
+			results: []Result{{Block: true, Reason: "ignored"}},
+			want:    Result{},
+		},
+		{
+			name:  "cursor beforeShellExecution routes to PreToolUse aggregation",
+			event: "beforeShellExecution",
+			results: []Result{
+				{Allow: true},
+				{Block: true, Reason: "deny rm -rf"},
+			},
+			want: Result{Block: true, Reason: "deny rm -rf"},
+		},
+		{
+			name:  "cursor beforeReadFile ask beats allow",
+			event: "beforeReadFile",
+			results: []Result{
+				{Allow: true},
+				{Ask: true, Reason: "review the path"},
+			},
+			want: Result{Ask: true, Reason: "review the path"},
+		},
+		{
+			name:  "cursor preToolUse single allow",
+			event: "preToolUse",
+			results: []Result{
+				{Allow: true, Reason: "in allowlist"},
+			},
+			want: Result{Allow: true, Reason: "in allowlist"},
+		},
+		{
+			name:    "cursor advisory afterFileEdit returns zero",
+			event:   "afterFileEdit",
 			results: []Result{{Block: true, Reason: "ignored"}},
 			want:    Result{},
 		},

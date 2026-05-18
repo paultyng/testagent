@@ -1,17 +1,22 @@
 // Package hookresult parses and aggregates hook responses across vendors.
-// Both internal/hooks (claude HTTP+command) and internal/codexhooks (codex
-// command-only) call into this package after invoking a hook target, so
-// the wire shapes are decoded in one place.
+// Three vendor packages call into this package after invoking a hook target,
+// so the wire shapes are decoded in one place:
+//   - internal/hooks       claude HTTP + command
+//   - internal/codexhooks  codex command-only
+//   - internal/cursorhooks cursor command (and "prompt" no-op)
 //
-// Three wire shapes are handled:
+// Four wire shapes are handled:
 //
-//  1. PreToolUse, two paths in one body:
+//  1. PreToolUse, two paths in one body (claude/codex):
 //     - preferred: {"hookSpecificOutput":{"permissionDecision":"allow|deny|ask|defer","permissionDecisionReason":"..."}}
 //     - legacy:    {"decision":"approve|block","reason":"..."}
-//  2. PermissionRequest (nested):
+//  2. PermissionRequest, nested (claude/codex):
 //     {"hookSpecificOutput":{"decision":{"behavior":"allow|deny","message":"..."}}}
-//  3. Command-hook exit codes (per the documented contract on both vendors):
-//     - exit 0: parse stdout as a JSON body using (1) or (2) above
+//  3. Cursor top-level (cursor.com/docs/hooks):
+//     {"permission":"allow|deny|ask","user_message":"...","agent_message":"..."}
+//     Reason takes agent_message if non-empty, else user_message.
+//  4. Command-hook exit codes (per the documented contract on all three vendors):
+//     - exit 0: parse stdout as a JSON body using (1)-(3) above
 //     - exit 2: blocking denial, message taken from stderr
 //     - other:  non-blocking error, logged by caller, returns zero result
 //
@@ -66,6 +71,24 @@ func ParseBody(body []byte) Result {
 	}
 	var wire wireBody
 	if err := json.Unmarshal(body, &wire); err != nil {
+		return r
+	}
+
+	// Path 0: cursor top-level. Distinct field name ("permission") means
+	// claude/codex bodies never collide here. agent_message wins over
+	// user_message for Reason — agent_message is what the model sees.
+	switch wire.Permission {
+	case "deny":
+		r.Block = true
+		r.Reason = cursorReason(wire.AgentMessage, wire.UserMessage)
+		return r
+	case "allow":
+		r.Allow = true
+		r.Reason = cursorReason(wire.AgentMessage, wire.UserMessage)
+		return r
+	case "ask":
+		r.Ask = true
+		r.Reason = cursorReason(wire.AgentMessage, wire.UserMessage)
 		return r
 	}
 
@@ -138,17 +161,23 @@ func ParseCommand(exitCode int, stdout, stderr []byte) Result {
 // deny wins; otherwise last allow wins) is distinct from the PreToolUse
 // rule (any deny/block wins; ask beats allow; otherwise the latest
 // reason carries). Events with no decision semantics (UserPromptSubmit,
-// Stop, Notification, etc.) return the zero Result.
+// Stop, Notification, after*, etc.) return the zero Result.
 //
-// The event argument is the wire event name (claude: "PreToolUse" /
-// "PermissionRequest"; codex: "pre_tool_use" / "permission_request").
-// Both vocabularies are recognized.
+// The event argument is the wire event name. All three vendor vocabularies
+// are recognized:
+//   - claude: "PreToolUse" / "PermissionRequest"
+//   - codex:  "pre_tool_use" / "permission_request"
+//   - cursor: "beforeShellExecution" / "beforeReadFile" / "beforeMCPExecution" /
+//     "preToolUse" / "subagentStart" — all gating events route to PreToolUse
+//     aggregation.
 func Aggregate(event string, results []Result) Result {
 	if len(results) == 0 {
 		return Result{}
 	}
 	switch event {
-	case "PreToolUse", "pre_tool_use":
+	case "PreToolUse", "pre_tool_use",
+		"beforeShellExecution", "beforeReadFile", "beforeMCPExecution",
+		"preToolUse", "subagentStart":
 		return aggregatePreToolUse(results)
 	case "PermissionRequest", "permission_request":
 		return aggregatePermissionRequest(results)
@@ -203,16 +232,32 @@ func aggregatePermissionRequest(results []Result) Result {
 	return out
 }
 
-// wireBody is the union of all decision-bearing fields across the three
-// supported wire shapes. Optional pointers distinguish absent-vs-zero on
-// the nested objects.
+// cursorReason returns agentMessage when non-empty, else userMessage.
+// Mirrors cursor.com/docs/hooks' rule that agent_message is the model-facing
+// reason and user_message is the human-facing one; testagent surfaces the
+// model-facing message into the engine since that's what the run consumes.
+func cursorReason(agentMessage, userMessage string) string {
+	if agentMessage != "" {
+		return agentMessage
+	}
+	return userMessage
+}
+
+// wireBody is the union of all decision-bearing fields across the supported
+// wire shapes. Optional pointers distinguish absent-vs-zero on the nested
+// objects.
 type wireBody struct {
-	// Top-level legacy shape.
+	// Top-level legacy shape (claude/codex).
 	Decision string `json:"decision"`
 	Reason   string `json:"reason"`
 
-	// Nested shape.
+	// Nested shape (claude/codex).
 	HookSpecificOutput *hookSpecificOutput `json:"hookSpecificOutput"`
+
+	// Cursor top-level shape.
+	Permission   string `json:"permission"`
+	UserMessage  string `json:"user_message"`
+	AgentMessage string `json:"agent_message"`
 }
 
 type hookSpecificOutput struct {
