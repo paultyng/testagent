@@ -5,7 +5,6 @@
 package codex
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"os"
@@ -161,7 +160,7 @@ func runInteractive(cmd *cobra.Command, rf *rootflags.Flags, cf *flags, sid stri
 		MCP:   mcpClient,
 		Slash: slashHandler,
 	}
-	if code := engine.Run(ctxOrBackground(cmd), g, d); code != 0 {
+	if code := engine.Run(cmd.Context(), g, d); code != 0 {
 		return &claude.ExitError{Code: code}
 	}
 	return nil
@@ -198,14 +197,6 @@ func buildStatusLine(cf *flags, agentsLine string, cfg *Config) string {
 	return strings.Join(parts, " | ")
 }
 
-// ctxOrBackground returns cmd.Context() if set, else context.Background().
-// Mirrors cmd/claude's helper.
-func ctxOrBackground(cmd *cobra.Command) context.Context {
-	if c := cmd.Context(); c != nil {
-		return c
-	}
-	return context.Background()
-}
 
 // matchersFromConfig flattens the cmd/codex.Config's HooksTable into
 // the codexhooks.Runner's per-event matcher list. Walks each

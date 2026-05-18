@@ -1,0 +1,6 @@
+---
+description: "RPC service conventions"
+alwaysApply: false
+---
+
+- Validate inputs at the service boundary.

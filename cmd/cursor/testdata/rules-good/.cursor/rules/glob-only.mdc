@@ -1,0 +1,5 @@
+---
+globs: src/**/*.ts
+---
+
+- TypeScript files use strict mode.

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -192,6 +193,46 @@ func (h *Handler) dispatchTo(ctx context.Context, line string, out io.Writer) Ou
 		// testagent wraps SessionEnd → SessionStart with PreCompact and
 		// PostCompact carrying trigger="manual".
 		return h.cmdCompact(out, "manual")
+	case "compress":
+		// Cursor's `/compress` is the compact equivalent — alias to the
+		// same lifecycle so cursor orchestrators see PreCompact/PostCompact
+		// hooks fire on /compress just like /compact does for claude/codex.
+		return h.cmdCompact(out, "manual")
+	case "plan":
+		// Cursor's `/plan` toggles plan mode in the upstream agent.
+		// testagent stubs it to a banner write; real banner-state cycling
+		// is engine work (Phase 4).
+		h.cmdCursorBanner(out, "plan")
+	case "ask":
+		// Cursor's `/ask` toggles ask mode. Same stub story as /plan.
+		h.cmdCursorBanner(out, "ask")
+	case "resume":
+		// Cursor's `/resume` opens a session picker. testagent stub: print
+		// a one-liner. Real resume goes through the `cursor resume <id>`
+		// subcommand, not the REPL slash.
+		fmt.Fprintln(out, "resume: no prior session (stub)")
+	case "model":
+		// Cursor's `/model` picks a model. testagent has no model — stub
+		// with the current --model flag value if any, else the placeholder.
+		fmt.Fprintln(out, "model: testagent-stub (use --model to override)")
+	case "usage":
+		// Cursor's `/usage` shows token/request stats. testagent never
+		// calls an LLM — stub with zeros.
+		fmt.Fprintln(out, "usage: 0 prompts, 0 tokens (stub)")
+	case "about":
+		// Cursor's `/about` shows version + account. testagent stub: vendor
+		// + emulator name.
+		fmt.Fprintln(out, "testagent — cursor adapter (stub)")
+	case "setup-terminal":
+		// Cursor's `/setup-terminal` writes shell-integration hooks.
+		// testagent stub: no-op message.
+		fmt.Fprintln(out, "terminal integration: already configured (stub)")
+	case "mcp":
+		// Cursor's `/mcp` (and `/mcp list`) opens an interactive server
+		// browser. testagent stub: print the connected server names from
+		// the MCP client. Same surface for any vendor; sibling `/mcp-call`
+		// remains the tool-dispatch path.
+		h.cmdMCPList(out)
 	case "fake-auto-compact":
 		// Emulation-only command (no upstream equivalent): drives the
 		// compact lifecycle with trigger="auto" so orchestrators can
@@ -232,10 +273,19 @@ func (h *Handler) cmdHelp(out io.Writer) {
 		{`/fake-tool-result <json-or-text>`, "completes the pending /fake-tool and fires PostToolUse with the response"},
 		{"/help", "prints this list"},
 		{"/link <url> [text]", "prints an OSC 8 hyperlink (clickable in supporting terminals); text defaults to url"},
+		{"/about", "cursor-aligned: print testagent + adapter identity (stub)"},
+		{"/ask", "cursor-aligned: stub for ask-mode toggle"},
+		{"/compress", "cursor-aligned alias for /compact"},
+		{"/mcp", "cursor-aligned: list connected MCP servers (alias: /mcp list)"},
 		{`/mcp-call <server.tool> <json-args>`, "calls a connected MCP tool and prints its result"},
+		{"/model", "cursor-aligned: print current model (stub)"},
 		{"/panel <text>", "prints text in a rounded-border box"},
+		{"/plan", "cursor-aligned: stub for plan-mode toggle"},
 		{"/quit [code]", "alias of /exit"},
+		{"/resume", "cursor-aligned: session resume stub (real resume is `cursor resume <id>`)"},
+		{"/setup-terminal", "cursor-aligned: terminal-integration stub"},
 		{`/stream <duration> <message>`, "prompts as if typed raw, with the per-token stream interval overridden"},
+		{"/usage", "cursor-aligned: print prompt/token usage (stub)"},
 		{`/think <duration> <message>`, "prompts as if typed raw, with the thinking-spinner duration overridden"},
 	} {
 		fmt.Fprintf(out, "  %-40s %s\n",
@@ -700,6 +750,38 @@ func (h *Handler) cmdMCP(ctx context.Context, out io.Writer, rest string) {
 		} else {
 			fmt.Fprintf(out, "%s %s\n", mark, render.MuteSoftStyle.Render("("+c.Type+" content)"))
 		}
+	}
+}
+
+// cmdCursorBanner is the shared stub for cursor's /plan and /ask. Real
+// upstream cursor switches the agent into the named mode; testagent stubs
+// the toggle since the engine doesn't yet model mode state mid-session.
+// mode is "plan" or "ask".
+func (h *Handler) cmdCursorBanner(out io.Writer, mode string) {
+	fmt.Fprintf(out, "entering %s mode (stub)\n", mode)
+}
+
+// cmdMCPList implements the stub for cursor's /mcp (and /mcp list). Prints
+// one line per connected server with the count of its exposed tools. The
+// MCP client may not be connected yet — render the configured set in that
+// case so the user can see something useful.
+func (h *Handler) cmdMCPList(out io.Writer) {
+	tools := h.mcp.Tools()
+	if len(tools) == 0 {
+		fmt.Fprintln(out, "mcp: no servers connected (stub)")
+		return
+	}
+	byServer := make(map[string]int, len(tools))
+	for _, t := range tools {
+		byServer[t.Server]++
+	}
+	names := make([]string, 0, len(byServer))
+	for n := range byServer {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		fmt.Fprintf(out, "%s\t%d tools\n", n, byServer[n])
 	}
 }
 
