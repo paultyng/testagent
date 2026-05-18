@@ -36,7 +36,7 @@ func runMCPCmd(t *testing.T, wsDir string, args ...string) (string, error) {
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
 	cmd.SetArgs(append([]string{"--workspace", wsDir}, args...))
-	execErr := cmd.Execute()
+	execErr := cmd.ExecuteContext(t.Context())
 	return buf.String(), execErr
 }
 

@@ -5,7 +5,6 @@
 package claude
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"os"
@@ -96,7 +95,7 @@ Bare invocation (testagent <flags>) defaults to this subcommand.`,
 
 			// Non-interactive mode (--print / -p): one-shot, exit when done.
 			if printMode {
-				ctx := ctxOrBackground(cmd)
+				ctx := cmd.Context()
 				if err := mcpClient.Connect(ctx); err != nil {
 					fmt.Fprintf(os.Stderr, "testagent: mcp Connect: %v\n", err)
 				}
@@ -135,7 +134,7 @@ Bare invocation (testagent <flags>) defaults to this subcommand.`,
 				MCP:   mcpClient,
 				Slash: slashHandler,
 			}
-			if code := engine.Run(ctxOrBackground(cmd), g, d); code != 0 {
+			if code := engine.Run(cmd.Context(), g, d); code != 0 {
 				return &ExitError{Code: code}
 			}
 			return nil
@@ -160,12 +159,3 @@ Bare invocation (testagent <flags>) defaults to this subcommand.`,
 	return cmd
 }
 
-// ctxOrBackground returns cmd.Context() if set, else context.Background().
-// Cobra threads context through Execute; subcommand RunE gets the inherited
-// one when callers used ExecuteContext.
-func ctxOrBackground(cmd *cobra.Command) context.Context {
-	if c := cmd.Context(); c != nil {
-		return c
-	}
-	return context.Background()
-}

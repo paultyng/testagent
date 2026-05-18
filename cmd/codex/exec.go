@@ -84,13 +84,13 @@ func newExecCommand(rf *rootflags.Flags, cf *flags) *cobra.Command {
 				debugW = os.Stderr
 			}
 			runner := codexhooks.NewRunner(matchersFromConfig(cfg), sid, cwd, transcriptPath, permissionMode, debugW)
-			defer func() { _ = runner.Close(ctxOrBackground(cmd)) }()
+			defer func() { _ = runner.Close(cmd.Context()) }()
 
 			format := ef.OutputFormat
 			if format == "" {
 				format = "text"
 			}
-			return runExec(ctxOrBackground(cmd), execOptions{
+			return runExec(cmd.Context(), execOptions{
 				name:         "session",
 				sessionID:    sid,
 				cwd:          cwd,

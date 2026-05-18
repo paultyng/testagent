@@ -132,7 +132,7 @@ func TestStubSubcommands(t *testing.T) {
 			cmd.SetErr(&buf)
 			cmd.SetArgs(tc.args)
 
-			err := cmd.Execute()
+			err := cmd.ExecuteContext(t.Context())
 
 			if tc.wantErr {
 				if err == nil {
