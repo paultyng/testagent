@@ -107,9 +107,13 @@ func TestParseBody(t *testing.T) {
 			want: Result{Ask: true, Reason: "please confirm"},
 		},
 		{
-			name: "cursor permission unknown falls through",
+			// Per the path-0 contract: a non-empty cursor permission value
+			// that isn't allow/deny/ask returns the zero Result rather than
+			// risking a hybrid-body match against a claude/codex path
+			// further down. Closes review-all finding C3.
+			name: "cursor permission unknown does not fall through",
 			body: `{"permission":"maybe","decision":"block","reason":"legacy fallback"}`,
-			want: Result{Block: true, Reason: "legacy fallback"},
+			want: Result{},
 		},
 	}
 	for _, tc := range cases {

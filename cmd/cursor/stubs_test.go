@@ -147,7 +147,7 @@ func TestStubSubcommands(t *testing.T) {
 
 			if tc.jsonKeys != nil {
 				var got map[string]any
-				if jsonErr := json.Unmarshal([]byte(buf.String()), &got); jsonErr != nil {
+				if jsonErr := json.Unmarshal(buf.Bytes(), &got); jsonErr != nil {
 					t.Fatalf("args %v: output is not valid JSON: %v\noutput: %s", tc.args, jsonErr, buf.String())
 				}
 				for _, k := range tc.jsonKeys {

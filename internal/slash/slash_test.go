@@ -1276,25 +1276,6 @@ func TestSplitFirstWord(t *testing.T) {
 	}
 }
 
-func readAll(r interface {
-	Read([]byte) (int, error)
-}) ([]byte, error) {
-	var buf bytes.Buffer
-	tmp := make([]byte, 512)
-	for {
-		n, err := r.Read(tmp)
-		if n > 0 {
-			buf.Write(tmp[:n])
-		}
-		if err != nil {
-			if err.Error() == "EOF" {
-				return buf.Bytes(), nil
-			}
-			return buf.Bytes(), err
-		}
-	}
-}
-
 // TestSlash_CursorStubs asserts each cursor-aligned slash stub prints
 // its canned line and reports Handled=true so the engine doesn't pass
 // the line through to the prompt loop.

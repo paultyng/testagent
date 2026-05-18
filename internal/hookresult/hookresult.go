@@ -77,6 +77,11 @@ func ParseBody(body []byte) Result {
 	// Path 0: cursor top-level. Distinct field name ("permission") means
 	// claude/codex bodies never collide here. agent_message wins over
 	// user_message for Reason — agent_message is what the model sees.
+	//
+	// Unknown non-empty Permission values do NOT fall through to the
+	// claude/codex paths — a cursor wire that fails to match here returns
+	// the zero Result rather than risking a hybrid-body match against a
+	// later path. An empty Permission (claude/codex body) falls through.
 	switch wire.Permission {
 	case "deny":
 		r.Block = true
@@ -89,6 +94,10 @@ func ParseBody(body []byte) Result {
 	case "ask":
 		r.Ask = true
 		r.Reason = cursorReason(wire.AgentMessage, wire.UserMessage)
+		return r
+	case "":
+		// fall through to the next path (claude/codex)
+	default:
 		return r
 	}
 

@@ -255,6 +255,152 @@ func TestFailClosedNonZeroNon2ExitNonBlocking(t *testing.T) {
 	}
 }
 
+// TestNoOpLifecycleMethods proves the five HookSender methods Cursor
+// has no equivalent event for (OnPrompt, OnSessionStart, OnSessionEnd,
+// OnPreCompact, OnPostCompact) silently swallow registered matchers
+// rather than firing them. A user might register, e.g., a "sessionStart"
+// matcher in their hooks.json (cursor docs name it that way), but
+// testagent's runner does NOT wire those names today and these methods
+// return nil without running anything.
+func TestNoOpLifecycleMethods(t *testing.T) {
+	skipWindows(t)
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		event    string
+		call     func(context.Context, *cursorhooks.Runner) error
+	}{
+		{
+			name:  "OnPrompt",
+			event: "userPromptSubmit", // a name a user might guess
+			call: func(ctx context.Context, r *cursorhooks.Runner) error {
+				return r.OnPrompt(ctx, "hi", "session title")
+			},
+		},
+		{
+			name:  "OnSessionStart",
+			event: "sessionStart",
+			call: func(ctx context.Context, r *cursorhooks.Runner) error {
+				return r.OnSessionStart(ctx, "startup")
+			},
+		},
+		{
+			name:  "OnSessionEnd",
+			event: "sessionEnd",
+			call: func(ctx context.Context, r *cursorhooks.Runner) error {
+				return r.OnSessionEnd(ctx, "logout")
+			},
+		},
+		{
+			name:  "OnPreCompact",
+			event: "preCompact",
+			call: func(ctx context.Context, r *cursorhooks.Runner) error {
+				return r.OnPreCompact(ctx, "manual")
+			},
+		},
+		{
+			name:  "OnPostCompact",
+			event: "postCompact",
+			call: func(ctx context.Context, r *cursorhooks.Runner) error {
+				return r.OnPostCompact(ctx, "manual")
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			marker := filepath.Join(dir, "ran.txt")
+			script := writeScript(t, dir, "noop.sh", fmt.Sprintf("touch %s", marker))
+			r := newRunner(map[string][]cursorhooks.Matcher{
+				tc.event: {{Command: script}},
+			})
+			if err := tc.call(context.Background(), r); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if _, err := os.Stat(marker); err == nil {
+				t.Errorf("matcher fired for %s (marker exists); should be no-op", tc.name)
+			}
+		})
+	}
+}
+
+// TestOnPermissionRequestFiresPreToolUse asserts that OnPermissionRequest
+// routes to the preToolUse event (cursor models permission decisions as
+// the gate, not a separate event) and honors per-tool matcher filtering.
+func TestOnPermissionRequestFiresPreToolUse(t *testing.T) {
+	t.Parallel()
+	skipWindows(t)
+
+	dir := t.TempDir()
+	deny := writeScript(t, dir, "deny.sh",
+		`echo '{"permission":"deny","agent_message":"perm denied"}'`)
+	r := newRunner(map[string][]cursorhooks.Matcher{
+		cursorhooks.EventPreToolUse: {
+			{Command: deny, Pattern: "Edit"},
+		},
+	})
+
+	// Wrong tool name → no fire.
+	resOther, err := r.OnPermissionRequest(context.Background(), "id1", "Shell", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resOther.Block {
+		t.Errorf("expected no block for Shell (pattern=Edit), got %+v", resOther)
+	}
+
+	// Matching tool name → deny fires.
+	resEdit, err := r.OnPermissionRequest(context.Background(), "id1", "Edit", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resEdit.Block {
+		t.Errorf("expected Block=true for Edit, got %+v", resEdit)
+	}
+	if resEdit.Reason != "perm denied" {
+		t.Errorf("expected Reason=%q, got %q", "perm denied", resEdit.Reason)
+	}
+}
+
+// TestOnStopFiresStopEvent asserts OnStop dispatches a registered "stop"
+// matcher. Stop is advisory in hookresult aggregation (returns the zero
+// Result), but the matcher must still execute so users observing the
+// transcript see the side effect.
+func TestOnStopFiresStopEvent(t *testing.T) {
+	t.Parallel()
+	skipWindows(t)
+
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "stopped.txt")
+	script := writeScript(t, dir, "stop.sh",
+		fmt.Sprintf("touch %s", marker))
+	r := newRunner(map[string][]cursorhooks.Matcher{
+		cursorhooks.EventStop: {{Command: script}},
+	})
+	if err := r.OnStop(context.Background(), "last message", false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := os.Stat(marker); os.IsNotExist(err) {
+		t.Error("expected stop hook to have run (marker file missing)")
+	}
+}
+
+// TestRunnerCloseIsNoOp asserts Close returns nil without doing anything
+// observable. Cursor has no async machinery so there's nothing to drain.
+func TestRunnerCloseIsNoOp(t *testing.T) {
+	t.Parallel()
+	r := newRunner(nil)
+	if err := r.Close(context.Background()); err != nil {
+		t.Errorf("Close returned non-nil: %v", err)
+	}
+	// Idempotent.
+	if err := r.Close(context.Background()); err != nil {
+		t.Errorf("second Close returned non-nil: %v", err)
+	}
+}
+
 func TestOnPostToolUseShell(t *testing.T) {
 	t.Parallel()
 	skipWindows(t)
