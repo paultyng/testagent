@@ -451,15 +451,15 @@ Alphabetical.
 
 | Command | testagent | Notes |
 |---------|-----------|-------|
-| `/about` | `✗ planned` | Environment and account info; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `/ask` | `✗ planned` | Switch to Q&A mode (read-only); tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `/compress` | `✗ planned` | Reduce context window usage; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `/mcp list` | `not relevant` | Interactive MCP browser; testagent uses `/mcp-call` |
-| `/model` | `not relevant` | Model selector; no model |
-| `/plan` | `✗ planned` | Switch to plan mode (read-only/planning); tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `/resume` | `✗ planned` | Continue prior conversation; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `/setup-terminal` | `not relevant` | Configures keybindings on host shell; TUI-internal |
-| `/usage` | `not relevant` | Usage statistics; requires upstream API |
+| `/about` | `accepted` | Stub: prints testagent + cursor adapter identity |
+| `/ask` | `accepted` | Stub: prints "entering ask mode"; real banner-state toggle is engine work (Phase 4) |
+| `/compress` | `✓ supported` | Alias for `/compact` — fires PreCompact → SessionEnd → SessionStart → PostCompact (trigger=manual) |
+| `/mcp` / `/mcp list` | `accepted` | Stub: prints connected MCP server names + tool counts (real upstream is an interactive browser) |
+| `/model` | `accepted` | Stub: prints "model: testagent-stub" |
+| `/plan` | `accepted` | Stub: prints "entering plan mode"; real banner-state toggle is engine work (Phase 4) |
+| `/resume` | `accepted` | Stub: prints "no prior session" (real REPL resume is `cursor resume <id>` subcommand) |
+| `/setup-terminal` | `accepted` | Stub: prints "terminal integration: already configured" |
+| `/usage` | `accepted` | Stub: prints zeros (testagent never calls an LLM) |
 
 #### Plugin-contributed (skills)
 

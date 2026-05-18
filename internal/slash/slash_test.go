@@ -1294,3 +1294,62 @@ func readAll(r interface {
 		}
 	}
 }
+
+// TestSlash_CursorStubs asserts each cursor-aligned slash stub prints
+// its canned line and reports Handled=true so the engine doesn't pass
+// the line through to the prompt loop.
+func TestSlash_CursorStubs(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		line     string
+		wantSubs []string
+	}{
+		{"plan", "/plan", []string{"plan mode"}},
+		{"ask", "/ask", []string{"ask mode"}},
+		{"resume", "/resume", []string{"no prior session"}},
+		{"model", "/model", []string{"testagent-stub"}},
+		{"usage", "/usage", []string{"0 prompts", "0 tokens"}},
+		{"about", "/about", []string{"cursor adapter"}},
+		{"setup-terminal", "/setup-terminal", []string{"terminal integration"}},
+		{"mcp empty", "/mcp", []string{"no servers connected"}},
+		{"mcp list empty", "/mcp list", []string{"no servers connected"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := &bytes.Buffer{}
+			h := newTestHandler(out)
+			outcome := h.Dispatch(context.Background(), tc.line)
+			if !outcome.Handled {
+				t.Fatalf("Handled = false, want true")
+			}
+			s := out.String()
+			for _, sub := range tc.wantSubs {
+				if !strings.Contains(s, sub) {
+					t.Errorf("output %q missing substring %q", s, sub)
+				}
+			}
+		})
+	}
+}
+
+// TestSlash_Compress_AliasesCompact asserts /compress emits the same
+// Outcome as /compact (manual-trigger compaction lifecycle).
+func TestSlash_Compress_AliasesCompact(t *testing.T) {
+	t.Parallel()
+
+	out := &bytes.Buffer{}
+	h := newTestHandler(out)
+	outcome := h.Dispatch(context.Background(), "/compress")
+	if !outcome.Handled {
+		t.Fatalf("Handled = false, want true")
+	}
+	if !outcome.Restart {
+		t.Errorf("Restart = false, want true (compact triggers SessionEnd → SessionStart)")
+	}
+	if outcome.RestartReason != "compact" {
+		t.Errorf("RestartReason = %q, want \"compact\"", outcome.RestartReason)
+	}
+}
