@@ -721,11 +721,15 @@ func TestSender_Verbose_EmitsLinePerHook(t *testing.T) {
 	defer srv.Close()
 
 	var dbg bytes.Buffer
+	// No per-hook Timeout — the 1s value previously here flaked when
+	// CI scheduled this test alongside many other httptest.NewServer
+	// callers and the local POST+200 round-trip occasionally crossed
+	// the 1s ceiling. Default 10s is plenty for a localhost handler.
 	matchers := map[string][]Matcher{
 		Stop: {
 			{Hooks: []Hook{
-				{Type: "http", URL: srv.URL + "/a", Timeout: 1},
-				{Type: "http", URL: srv.URL + "/b", Timeout: 1},
+				{Type: "http", URL: srv.URL + "/a"},
+				{Type: "http", URL: srv.URL + "/b"},
 			}},
 		},
 	}
@@ -758,7 +762,7 @@ func TestSender_Verbose_RecordsErrorStatus(t *testing.T) {
 
 	var dbg bytes.Buffer
 	matchers := map[string][]Matcher{
-		Stop: {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
+		Stop: {{Hooks: []Hook{{Type: "http", URL: srv.URL}}}},
 	}
 	h := NewSender(matchers, "sid", "/tmp", "", "default", &dbg)
 	_ = h.OnStop(context.Background(), "msg", false)
@@ -800,7 +804,7 @@ func TestSender_Verbose_DisabledByDefault(t *testing.T) {
 	defer srv.Close()
 
 	matchers := map[string][]Matcher{
-		Stop: {{Hooks: []Hook{{Type: "http", URL: srv.URL, Timeout: 1}}}},
+		Stop: {{Hooks: []Hook{{Type: "http", URL: srv.URL}}}},
 	}
 	// debugWriter == nil → no output collected anywhere; this test asserts
 	// the no-debug path doesn't panic and behaves like before.
