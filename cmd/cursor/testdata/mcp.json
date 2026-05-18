@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "file-server": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["server.js"],
+      "env": {"NODE_ENV": "production"}
+    },
+    "remote-api": {
+      "type": "http",
+      "url": "https://example.com/mcp",
+      "headers": {"Authorization": "Bearer token123"}
+    }
+  }
+}

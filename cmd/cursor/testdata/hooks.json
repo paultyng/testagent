@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "/usr/local/bin/audit.sh",
+        "type": "command",
+        "matcher": "rm -rf",
+        "timeout": 30,
+        "failClosed": true
+      }
+    ],
+    "beforeReadFile": [
+      {
+        "command": "redact.sh",
+        "type": "command"
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "format-check.sh",
+        "type": "prompt"
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": "mcp-guard.sh",
+        "type": "command",
+        "matcher": "dangerous_tool",
+        "timeout": 10,
+        "loop_limit": null
+      }
+    ],
+    "subagentStart": [
+      {
+        "command": "init-subagent.sh",
+        "type": "command",
+        "loop_limit": 3
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "command": "log-mcp.sh",
+        "type": "command"
+      }
+    ]
+  }
+}

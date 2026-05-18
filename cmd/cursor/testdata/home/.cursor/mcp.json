@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "file-server": {
+      "type": "http",
+      "url": "https://global.example.com/mcp"
+    },
+    "global-only": {
+      "type": "http",
+      "url": "https://global-only.example.com/mcp"
+    }
+  }
+}
