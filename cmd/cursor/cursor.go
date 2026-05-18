@@ -92,7 +92,7 @@ func NewCommand(rf *rootflags.Flags) *cobra.Command {
 	cmd.AddCommand(newCreateChatCommand(rf))
 	cmd.AddCommand(newResumeCommand(rf))
 	cmd.AddCommand(newLsCommand(rf))
-	cmd.AddCommand(newMCPCommand(rf))
+	cmd.AddCommand(newMCPCommand(rf, cf))
 
 	return cmd
 }

@@ -24,27 +24,18 @@ func writeMCPJSON(t *testing.T, dir string, content []byte) {
 	}
 }
 
-// runMCPCmd wires a fresh NewCommand rooted at the cursor package, sets args,
-// captures stdout+stderr into a single buffer, and returns the output and any
-// error. The working directory is changed to wsDir before execution.
+// runMCPCmd wires a fresh NewCommand rooted at the cursor package, prepends
+// --workspace=wsDir so the cursor adapter resolves config from wsDir without
+// touching process-global cwd, captures stdout+stderr into a single buffer,
+// and returns the output and any error.
 func runMCPCmd(t *testing.T, wsDir string, args ...string) (string, error) {
 	t.Helper()
-
-	// Redirect cwd for loadConfig so it reads from wsDir.
-	orig, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(wsDir); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(orig) })
 
 	var buf bytes.Buffer
 	cmd := NewCommand(&rootflags.Flags{})
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
-	cmd.SetArgs(args)
+	cmd.SetArgs(append([]string{"--workspace", wsDir}, args...))
 	execErr := cmd.Execute()
 	return buf.String(), execErr
 }

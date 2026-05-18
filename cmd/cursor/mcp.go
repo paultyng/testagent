@@ -17,29 +17,46 @@ import (
 
 // newMCPCommand wires the "mcp" parent subcommand and its four children.
 // Real wiring lives here (not stubs); see Phase 2 for stdio-transport support.
-func newMCPCommand(rf *rootflags.Flags) *cobra.Command {
+// cf carries the parent cursor command's --workspace value; list and
+// list-tools resolve their workspace through it (falling back to cwd).
+func newMCPCommand(rf *rootflags.Flags, cf *flags) *cobra.Command {
 	cmd := &cobra.Command{Use: "mcp", Short: "Manage Cursor MCP servers", SilenceUsage: true}
-	cmd.AddCommand(newMCPListCommand(rf))
-	cmd.AddCommand(newMCPListToolsCommand(rf))
+	cmd.AddCommand(newMCPListCommand(rf, cf))
+	cmd.AddCommand(newMCPListToolsCommand(rf, cf))
 	cmd.AddCommand(newMCPEnableCommand(rf))
 	cmd.AddCommand(newMCPDisableCommand(rf))
 	return cmd
 }
 
+// resolveWorkspace returns the workspace path: cf.Workspace when set, else
+// os.Getwd(). Entrypoints (RunE handlers) call this to convert the persistent
+// --workspace flag into an explicit path argument, so downstream loaders don't
+// touch process-global state.
+func resolveWorkspace(cf *flags) (string, error) {
+	if cf != nil && cf.Workspace != "" {
+		return cf.Workspace, nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("getting working directory: %w", err)
+	}
+	return cwd, nil
+}
+
 // newMCPListCommand prints each configured MCP server as one tab-separated
 // line: name, enabled/disabled status, and transport type. Reads merged config
-// from the current working directory.
-func newMCPListCommand(_ *rootflags.Flags) *cobra.Command {
+// from cf.Workspace (or cwd if unset).
+func newMCPListCommand(_ *rootflags.Flags, cf *flags) *cobra.Command {
 	return &cobra.Command{
 		Use:          "list",
 		Short:        "List configured MCP servers",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cwd, err := os.Getwd()
+			ws, err := resolveWorkspace(cf)
 			if err != nil {
-				return fmt.Errorf("getting working directory: %w", err)
+				return err
 			}
-			cfg, err := loadConfig(cwd)
+			cfg, err := loadConfig(ws)
 			if err != nil {
 				return err
 			}
@@ -90,8 +107,9 @@ func mcpTransport(srv cursorMCPServer) string {
 
 // newMCPListToolsCommand connects to a named HTTP MCP server and prints its
 // tools. Errors immediately for disabled, missing, or stdio-only servers since
-// internal/mcp.Client is HTTP-only until Phase 2.
-func newMCPListToolsCommand(_ *rootflags.Flags) *cobra.Command {
+// internal/mcp.Client is HTTP-only until Phase 2. Reads merged config from
+// cf.Workspace (or cwd if unset).
+func newMCPListToolsCommand(_ *rootflags.Flags, cf *flags) *cobra.Command {
 	return &cobra.Command{
 		Use:          "list-tools <server>",
 		Short:        "List tools exposed by an MCP server",
@@ -100,11 +118,11 @@ func newMCPListToolsCommand(_ *rootflags.Flags) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			serverName := args[0]
 
-			cwd, err := os.Getwd()
+			ws, err := resolveWorkspace(cf)
 			if err != nil {
-				return fmt.Errorf("getting working directory: %w", err)
+				return err
 			}
-			cfg, err := loadConfig(cwd)
+			cfg, err := loadConfig(ws)
 			if err != nil {
 				return err
 			}

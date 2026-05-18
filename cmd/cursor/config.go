@@ -30,7 +30,11 @@ type cursorMCPServer struct {
 	Command  string            `json:"command,omitempty"`
 	Args     []string          `json:"args,omitempty"`
 	Env      map[string]string `json:"env,omitempty"`
-	Disabled bool              `json:"disabled,omitempty"`
+	// Disabled MUST NOT carry omitempty: omitempty hides false on
+	// re-marshal, which would silently corrupt an enabled-after-disabled
+	// round-trip if a future writer marshals via this struct rather than
+	// the raw-map path used by toggleMCPServer.
+	Disabled bool `json:"disabled"`
 }
 
 // toCoreServer projects a cursorMCPServer into the shared internal/mcp.Server
