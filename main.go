@@ -11,6 +11,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 
@@ -58,7 +59,7 @@ func main() {
 
 	root.SetArgs(defaultedArgs(os.Args[1:]))
 
-	if err := root.Execute(); err != nil {
+	if err := root.ExecuteContext(context.Background()); err != nil {
 		var ee *claude.ExitError
 		if errors.As(err, &ee) {
 			os.Exit(ee.Code)
