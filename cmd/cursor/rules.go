@@ -64,7 +64,12 @@ func loadRules(workspace string) ([]RuleFile, error) {
 
 	var out []RuleFile
 	for _, e := range entries {
-		if e.IsDir() {
+		// Only regular files: this skips directories AND symlinks, so a
+		// hostile `.cursor/rules/x.mdc -> /etc/passwd` symlink can't be
+		// silently traversed. testagent's rule loader surfaces presence
+		// only (no body interpretation), so a symlink would have low
+		// blast radius, but the cheap filter is worth it.
+		if !e.Type().IsRegular() {
 			continue
 		}
 		if filepath.Ext(e.Name()) != ".mdc" {

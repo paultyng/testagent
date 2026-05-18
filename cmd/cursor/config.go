@@ -169,7 +169,12 @@ func loadConfig(workspace string) (*Config, error) {
 // convention follows upstream cursor — the CLI also resolves $HOME/.cursor/.
 func userMCPConfigPath() (string, error) {
 	if home := os.Getenv("CURSOR_HOME"); home != "" {
-		return filepath.Join(home, ".cursor", "mcp.json"), nil
+		// filepath.Clean collapses ".." / "." / "//" so a malicious
+		// CURSOR_HOME like "../../etc" can't compose with the trailing
+		// ".cursor/mcp.json" to redirect the read/write into an
+		// unexpected directory. Low impact (env is attacker-controlled
+		// already), but cheap to harden.
+		return filepath.Join(filepath.Clean(home), ".cursor", "mcp.json"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
