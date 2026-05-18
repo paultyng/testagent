@@ -1,18 +1,25 @@
-// Package cursor implements testagent's "cursor" subcommand — the Phase 1
-// skeleton for Cursor CLI (cursor agent) emulation. The flag surface mirrors
-// Cursor CLI 3.2.16's `cursor agent --help` output. Behavioral wiring
-// (hooks, stream-json, session resume) lands in later phases; see
-// cursor-adapter-plan.md at the idea root.
+// Package cursor implements testagent's "cursor" subcommand — the v1
+// drop-in fake for Cursor CLI (cursor agent). Vendor-specific knobs
+// (cursor-shaped flags, the .cursor/{mcp,hooks}.json loaders, AGENTS.md
+// surfacing) live here; the shared engine loop in internal/engine drives
+// the actual session. Stream-json output (Phase 4) and .cursor/rules/*.mdc
+// surfacing (Phase 5) are deferred — see cursor-adapter-plan.md.
 package cursor
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/paultyng/testagent/cmd/claude"
+	"github.com/paultyng/testagent/internal/cursorhooks"
+	"github.com/paultyng/testagent/internal/engine"
+	"github.com/paultyng/testagent/internal/mcp"
 	"github.com/paultyng/testagent/internal/rootflags"
+	"github.com/paultyng/testagent/internal/slash"
 )
 
 // flags bundles the cursor subcommand's flag values. cobra populates
@@ -50,8 +57,9 @@ func (s *stringSlice) Set(v string) error { *s = append(*s, v); return nil }
 func (s *stringSlice) Type() string       { return "stringSlice" }
 
 // NewCommand returns the "cursor" subcommand wired against the given root
-// flags. The bare `testagent cursor` invocation prints a Phase 1 banner
-// to stderr and exits 0.
+// flags. The bare `testagent cursor` invocation drops into the shared
+// engine loop; subcommands (login/logout/status/about/models/update/
+// create-chat/resume/ls/mcp) handle one-shot CLI surface.
 func NewCommand(rf *rootflags.Flags) *cobra.Command {
 	cf := &flags{}
 
@@ -60,7 +68,7 @@ func NewCommand(rf *rootflags.Flags) *cobra.Command {
 		Short:        "Emulate the Cursor CLI (cursor agent)",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return run(cmd, rf, cf)
+			return runInteractive(cmd, rf, cf, "", false)
 		},
 	}
 
@@ -97,14 +105,99 @@ func NewCommand(rf *rootflags.Flags) *cobra.Command {
 	return cmd
 }
 
-// run is the Phase 1 entrypoint. It applies --workspace (cwd change) and
-// prints the skeleton banner to stderr.
-func run(cmd *cobra.Command, _ *rootflags.Flags, cf *flags) error {
+// runInteractive boots a cursor session through the shared engine. sid
+// and resumed are zero/false for fresh sessions; populated when /resume
+// or a future "cursor resume <id>" lands. Returns a *claude.ExitError when
+// the engine exits non-zero so cobra surfaces the code at root.
+func runInteractive(cmd *cobra.Command, rf *rootflags.Flags, cf *flags, sid string, resumed bool) error {
 	if cf.Workspace != "" {
 		if err := os.Chdir(cf.Workspace); err != nil {
 			return fmt.Errorf("--workspace %s: %w", cf.Workspace, err)
 		}
 	}
-	fmt.Fprintln(cmd.ErrOrStderr(), "cursor adapter — Phase 1 skeleton; interactive session lands in Phase 2")
+	cwd, _ := os.Getwd()
+
+	cfg, err := loadConfig(cwd)
+	if err != nil {
+		return err
+	}
+	agentsLine, err := loadAgentsMD(cwd)
+	if err != nil {
+		return err
+	}
+
+	if sid == "" {
+		sid = newSessionID()
+	}
+	transcriptPath := fmt.Sprintf("/tmp/testagent-transcript-%s.jsonl", sid)
+	const permissionMode = "default"
+
+	var debugW io.Writer
+	if rf.Verbose {
+		debugW = os.Stderr
+	}
+
+	hookCfg := hooksOrNil(cfg)
+	runner := cursorhooks.NewRunner(matchersFromConfig(hookCfg), sid, cwd, transcriptPath, permissionMode, debugW)
+
+	mcpClient := mcp.NewClient(httpServersFromConfig(cfg))
+	slashHandler := slash.New(runner, mcpClient, os.Stdout)
+
+	g := engine.Globals{
+		Emulator:    "Cursor",
+		Name:        "session",
+		SessionID:   sid,
+		Resumed:     resumed,
+		ThinkDelay:  rf.ThinkDelay,
+		StreamDelay: rf.StreamDelay,
+		ExitAfter:   rf.ExitAfter,
+		AutoExit:    rf.AutoExit,
+		HistoryCap:  rf.HistoryCap,
+		StatusLine:  buildStatusLine(cf, agentsLine, cfg),
+	}
+	d := engine.Deps{
+		Hooks: runner,
+		MCP:   mcpClient,
+		Slash: slashHandler,
+	}
+	if code := engine.Run(cmd.Context(), g, d); code != 0 {
+		return &claude.ExitError{Code: code}
+	}
 	return nil
 }
+
+// hooksOrNil returns cfg.Hooks or nil. Lifts the nil check out of
+// runInteractive so matchersFromConfig sees a stable shape.
+func hooksOrNil(cfg *Config) *HooksConfig {
+	if cfg == nil {
+		return nil
+	}
+	return cfg.Hooks
+}
+
+// buildStatusLine returns the one-line status summary shown under the
+// banner. Empty when nothing was loaded. Mirrors codex's buildStatusLine
+// shape so orchestrators see a consistent banner across vendors.
+func buildStatusLine(cf *flags, agentsLine string, cfg *Config) string {
+	var parts []string
+	if cf.Model != "" {
+		parts = append(parts, "model: "+cf.Model)
+	}
+	if cf.Mode != "" {
+		parts = append(parts, "mode: "+cf.Mode)
+	}
+	if cf.Sandbox != "" {
+		parts = append(parts, "sandbox: "+cf.Sandbox)
+	}
+	if cfg != nil && cfg.MCP != nil && len(cfg.MCP.MCPServers) > 0 {
+		parts = append(parts, fmt.Sprintf("mcp: %d", len(cfg.MCP.MCPServers)))
+	}
+	if cfg != nil && cfg.Hooks != nil && len(cfg.Hooks.Hooks) > 0 {
+		parts = append(parts, fmt.Sprintf("hooks: %d events", len(cfg.Hooks.Hooks)))
+	}
+	if agentsLine != "" {
+		parts = append(parts, agentsLine)
+	}
+	return strings.Join(parts, " | ")
+}
+

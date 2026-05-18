@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/paultyng/testagent/internal/cursorhooks"
 	"github.com/paultyng/testagent/internal/mcp"
 )
 
@@ -197,4 +198,60 @@ func mergeMCPConfigs(base, overlay *MCPConfig) *MCPConfig {
 		}
 	}
 	return merged
+}
+
+// matchersFromConfig flattens a HooksConfig into the per-event matcher map
+// the cursorhooks runner consumes. Each HookEntry becomes one Matcher with
+// the entry's optional matcher pattern, type, timeout, loop limit, and
+// fail-closed bit carried through. nil/empty cfg yields a nil result so the
+// runner is a no-op.
+func matchersFromConfig(cfg *HooksConfig) map[string][]cursorhooks.Matcher {
+	if cfg == nil || len(cfg.Hooks) == 0 {
+		return nil
+	}
+	out := make(map[string][]cursorhooks.Matcher, len(cfg.Hooks))
+	for event, entries := range cfg.Hooks {
+		conv := make([]cursorhooks.Matcher, 0, len(entries))
+		for _, e := range entries {
+			conv = append(conv, cursorhooks.Matcher{
+				Pattern:    e.Matcher,
+				Command:    e.Command,
+				Type:       e.Type,
+				Timeout:    e.Timeout,
+				LoopLimit:  e.LoopLimit,
+				FailClosed: e.FailClosed,
+			})
+		}
+		if len(conv) > 0 {
+			out[event] = conv
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// httpServersFromConfig returns just the enabled HTTP servers from the
+// merged config in the shape internal/mcp.NewClient expects. Stdio servers
+// are silently dropped — internal/mcp.Client is HTTP-only today (Phase 2
+// follow-up tracks adding stdio support).
+func httpServersFromConfig(cfg *Config) map[string]mcp.Server {
+	if cfg == nil || cfg.MCP == nil || len(cfg.MCP.MCPServers) == 0 {
+		return nil
+	}
+	out := make(map[string]mcp.Server, len(cfg.MCP.MCPServers))
+	for name, srv := range cfg.MCP.MCPServers {
+		if srv.Disabled {
+			continue
+		}
+		if mcpTransport(srv) != "http" {
+			continue
+		}
+		out[name] = srv.toCoreServer()
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

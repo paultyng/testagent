@@ -228,3 +228,60 @@ func TestLoadConfigPrecedence(t *testing.T) {
 		t.Error("missing server \"remote-api\" — project-only servers must be present")
 	}
 }
+
+// TestMatchersFromConfig asserts the HooksConfig → cursorhooks.Matcher
+// flattening preserves each entry's pattern, type, timeout, loop limit,
+// and fail-closed flag, and returns nil for empty/missing configs.
+func TestMatchersFromConfig(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil returns nil", func(t *testing.T) {
+		t.Parallel()
+		if got := matchersFromConfig(nil); got != nil {
+			t.Errorf("matchersFromConfig(nil) = %v, want nil", got)
+		}
+	})
+
+	t.Run("empty Hooks map returns nil", func(t *testing.T) {
+		t.Parallel()
+		if got := matchersFromConfig(&HooksConfig{Version: 1}); got != nil {
+			t.Errorf("matchersFromConfig(empty) = %v, want nil", got)
+		}
+	})
+
+	t.Run("fields round-trip", func(t *testing.T) {
+		t.Parallel()
+		ll := 7
+		cfg := &HooksConfig{
+			Version: 1,
+			Hooks: map[string][]HookEntry{
+				"beforeShellExecution": {
+					{Command: "/bin/true", Type: "command", Matcher: "rm -rf", Timeout: 30, LoopLimit: &ll, FailClosed: true},
+					{Command: "/bin/false", Type: "prompt"},
+				},
+				"afterFileEdit": {
+					{Command: "/bin/echo"},
+				},
+			},
+		}
+		got := matchersFromConfig(cfg)
+
+		if n := len(got["beforeShellExecution"]); n != 2 {
+			t.Fatalf("beforeShellExecution: got %d matchers, want 2", n)
+		}
+		shell := got["beforeShellExecution"][0]
+		if shell.Command != "/bin/true" || shell.Pattern != "rm -rf" || shell.Type != "command" ||
+			shell.Timeout != 30 || shell.LoopLimit == nil || *shell.LoopLimit != 7 || !shell.FailClosed {
+			t.Errorf("first beforeShellExecution matcher round-trip mismatch: %+v", shell)
+		}
+
+		prompt := got["beforeShellExecution"][1]
+		if prompt.Type != "prompt" || prompt.Command != "/bin/false" {
+			t.Errorf("second beforeShellExecution matcher: %+v", prompt)
+		}
+
+		if n := len(got["afterFileEdit"]); n != 1 {
+			t.Fatalf("afterFileEdit: got %d matchers, want 1", n)
+		}
+	})
+}
