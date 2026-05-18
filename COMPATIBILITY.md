@@ -394,7 +394,7 @@ Cursor's user-facing surface is under `cursor agent`; bare `cursor agent [prompt
 | Subcommand | testagent | Notes |
 |------------|-----------|-------|
 | `cursor agent` (no subcommand) | `partial` | Phase 1 prints a skeleton banner; interactive REPL lands in Phase 2 ([#14](https://github.com/paultyng/testagent/issues/14)) |
-| `cursor agent --print` | `✗ planned` | Non-interactive one-shot; `--output-format text\|json\|stream-json`; Phase 4 ([#14](https://github.com/paultyng/testagent/issues/14)) |
+| `cursor agent --print` | `✓ supported` | Non-interactive one-shot; `--output-format text\|json\|stream-json` honored; cursor stream-json frame set per cursor.com/docs/cli/reference/output-format |
 | `cursor agent about` | `accepted` | Canned `name`+`version`; `--format text\|json` honored |
 | `cursor agent create-chat` | `accepted` | Returns a canned chat ID |
 | `cursor agent generate-rule` | `not relevant` | Interactive rule-authoring wizard; requires model |
@@ -427,8 +427,8 @@ Alphabetical by long name. Short flags shown inline.
 | `--list-models` | `✗ planned` | Print model list and exit; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
 | `-m` / `--model <name>` | `accepted` | Model name; parsed and discarded |
 | `--mode <plan\|ask>` | `accepted` | Banner change lands in Phase 3 ([#14](https://github.com/paultyng/testagent/issues/14)) |
-| `--output-format <text\|json\|stream-json>` | `✗ planned` | Output formatter for `--print`; Phase 4 ([#14](https://github.com/paultyng/testagent/issues/14)) |
-| `-p` / `--print` | `✗ planned` | Non-interactive one-shot; Phase 4 ([#14](https://github.com/paultyng/testagent/issues/14)) |
+| `--output-format <text\|json\|stream-json>` | `✓ supported` | Output formatter for `--print`; text default, json single object, stream-json NDJSON (system/user/assistant/result) |
+| `-p` / `--print` | `✓ supported` | Non-interactive one-shot; reads positional or stdin prompt, echoes via the selected `--output-format` |
 | `--plan` | `✗ planned` | Shorthand for `--mode=plan`; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
 | `--plugin-dir <path>` | `accepted` | Local plugin dir; no plugin engine (repeatable) |
 | `--resume [chatId]` | `accepted` | Persistent flag parsed; positional-arg subcommand stub returns canned output |

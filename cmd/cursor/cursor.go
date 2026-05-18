@@ -68,6 +68,9 @@ func NewCommand(rf *rootflags.Flags) *cobra.Command {
 		Short:        "Emulate the Cursor CLI (cursor agent)",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cf.Print {
+				return runPrintMode(cmd, rf, cf, args)
+			}
 			return runInteractive(cmd, rf, cf, "", false)
 		},
 	}
@@ -103,6 +106,57 @@ func NewCommand(rf *rootflags.Flags) *cobra.Command {
 	cmd.AddCommand(newMCPCommand(rf, cf))
 
 	return cmd
+}
+
+// runPrintMode boots cursor's --print one-shot path. Builds the same
+// hook runner + MCP client + status-line inputs as runInteractive, then
+// dispatches to runPrint (defined in print.go) instead of engine.Run.
+// Stream-json shape is documented at cursor.com/docs/cli/reference/output-format.
+func runPrintMode(cmd *cobra.Command, rf *rootflags.Flags, cf *flags, args []string) error {
+	if cf.Workspace != "" {
+		if err := os.Chdir(cf.Workspace); err != nil {
+			return fmt.Errorf("--workspace %s: %w", cf.Workspace, err)
+		}
+	}
+	cwd, _ := os.Getwd()
+
+	cfg, err := loadConfig(cwd)
+	if err != nil {
+		return err
+	}
+
+	sid := newSessionID()
+	transcriptPath := fmt.Sprintf("/tmp/testagent-transcript-%s.jsonl", sid)
+	const permissionMode = "default"
+
+	var debugW io.Writer
+	if rf.Verbose {
+		debugW = os.Stderr
+	}
+
+	runner := cursorhooks.NewRunner(matchersFromConfig(hooksOrNil(cfg)), sid, cwd, transcriptPath, permissionMode, debugW)
+	mcpClient := mcp.NewClient(httpServersFromConfig(cfg))
+
+	ctx := cmd.Context()
+	if err := mcpClient.Connect(ctx); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "testagent: mcp Connect: %v\n", err)
+	}
+
+	code := runPrint(ctx, printOptions{
+		name:         "session",
+		sessionID:    sid,
+		cwd:          cwd,
+		model:        cf.Model,
+		outputFormat: cf.OutputFormat,
+		positional:   args,
+		resumed:      cf.Resume != "",
+		hooks:        runner,
+		mcp:          mcpClient,
+	}, cmd.InOrStdin(), cmd.OutOrStdout())
+	if code != 0 {
+		return &claude.ExitError{Code: code}
+	}
+	return nil
 }
 
 // runInteractive boots a cursor session through the shared engine. sid
