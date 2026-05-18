@@ -385,7 +385,7 @@ Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes
 **Upstream version researched:** Cursor CLI 2026.05.09-0afadcc
 **Local binary version:** `cursor agent --version` → 2026.05.09-0afadcc
 
-Note: testagent does not yet ship a `cursor` subcommand. All rows below are `✗ planned` (tracked in the vendor-adapters umbrella [#14](https://github.com/paultyng/testagent/issues/14)) or `not relevant`. The skeleton mirrors the per-vendor template under `.claude/skills/update-compatibility/vendors/cursor/template.md`.
+Phase 1 (skeleton + stubs + MCP wiring) ships the `testagent cursor` subcommand. The full upstream global flag surface is `accepted` (parsed without error, behavior not modeled); login/logout/status/about/models/update/create-chat/resume/ls are canned-output stubs; `mcp list / list-tools / enable / disable` are wired against `internal/mcp.Client`. Hooks (Phase 2), stream-json (Phase 4), and `.cursor/rules/*.mdc` surfacing (Phase 5) are tracked in [#14](https://github.com/paultyng/testagent/issues/14).
 
 ### Subcommands
 
@@ -393,23 +393,23 @@ Cursor's user-facing surface is under `cursor agent`; bare `cursor agent [prompt
 
 | Subcommand | testagent | Notes |
 |------------|-----------|-------|
-| `cursor agent` (no subcommand) | `✗ planned` | Interactive REPL; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `cursor agent --print` | `✗ planned` | Non-interactive one-shot; `--output-format text\|json\|stream-json`; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `cursor agent about` | `✗ planned` | Canned version + account info; `--format text\|json`; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `cursor agent create-chat` | `✗ planned` | Returns a generated chat ID; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `cursor agent` (no subcommand) | `partial` | Phase 1 prints a skeleton banner; interactive REPL lands in Phase 2 ([#14](https://github.com/paultyng/testagent/issues/14)) |
+| `cursor agent --print` | `✗ planned` | Non-interactive one-shot; `--output-format text\|json\|stream-json`; Phase 4 ([#14](https://github.com/paultyng/testagent/issues/14)) |
+| `cursor agent about` | `accepted` | Canned `name`+`version`; `--format text\|json` honored |
+| `cursor agent create-chat` | `accepted` | Returns a canned chat ID |
 | `cursor agent generate-rule` | `not relevant` | Interactive rule-authoring wizard; requires model |
 | `cursor agent install-shell-integration` | `not relevant` | Writes to `~/.zshrc`; not in scope for a fake agent |
-| `cursor agent login` | `✗ planned` | Auth no-op stub; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `cursor agent logout` | `✗ planned` | Auth no-op stub; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `cursor agent ls` | `✗ planned` | Resume picker; stub returns empty list; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `cursor agent mcp list` | `✗ planned` | Interactive MCP browser; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `cursor agent mcp list-tools <id>` | `✗ planned` | List tools per server; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `cursor agent mcp login <id>` | `✗ planned` | OAuth handshake; stub returns canned success; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `cursor agent mcp enable <id>` | `✗ planned` | Add to local approved list; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `cursor agent mcp disable <id>` | `✗ planned` | Disable server; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `cursor agent models` | `✗ planned` | Canned model list; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `cursor agent resume` | `✗ planned` | Resume latest; stub returns "no session"; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `cursor agent status\|whoami` | `✗ planned` | Canned auth status; `--format text\|json`; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `cursor agent login` | `accepted` | Auth no-op stub |
+| `cursor agent logout` | `accepted` | Session-clear no-op stub |
+| `cursor agent ls` | `accepted` | Canned chat list |
+| `cursor agent mcp list` | `✓ supported` | Reads merged `.cursor/mcp.json` + `~/.cursor/mcp.json`; prints name / status / transport |
+| `cursor agent mcp list-tools <id>` | `partial` | HTTP servers connect via `internal/mcp.Client`; stdio servers return a not-yet-supported error (Phase 2 follow-up) |
+| `cursor agent mcp login <id>` | `✗ planned` | OAuth handshake; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `cursor agent mcp enable <id>` | `✓ supported` | Round-trips `disabled: false` to `~/.cursor/mcp.json` (atomic write) |
+| `cursor agent mcp disable <id>` | `✓ supported` | Round-trips `disabled: true` to `~/.cursor/mcp.json` (atomic write) |
+| `cursor agent models` | `accepted` | Canned model list, one per line |
+| `cursor agent resume` | `accepted` | Canned-output stub; optional positional `<chat-id>` |
+| `cursor agent status\|whoami` | `accepted` | Canned auth status; `--format text\|json` honored |
 | `cursor agent uninstall-shell-integration` | `not relevant` | Symmetric to install-shell-integration |
 | `cursor agent update` | `not relevant` | Self-update; testagent has its own release cadence |
 
@@ -419,27 +419,27 @@ Alphabetical by long name. Short flags shown inline.
 
 | Flag | testagent | Notes |
 |------|-----------|-------|
-| `--api-key <key>` | `✗ planned` | Auth key; will be parsed and discarded |
-| `--approve-mcps` | `✗ planned` | Auto-approve MCP servers; will be `accepted` (no permission engine) |
-| `--continue` | `✗ planned` | Continue previous session; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `-f` / `--force` / `--yolo` | `✗ planned` | Approval bypass; will be `accepted` |
-| `-H` / `--header <header>` | `✗ planned` | Custom HTTP header; will be `accepted` |
+| `--api-key <key>` | `accepted` | Auth key; parsed and discarded |
+| `--approve-mcps` | `accepted` | Auto-approve MCP servers (no permission engine) |
+| `--continue` | `accepted` | Continue previous session (no session engine) |
+| `-f` / `--force` / `--yolo` | `accepted` | Approval bypass; parsed and discarded |
+| `-H` / `--header <header>` | `accepted` | Custom HTTP header; parsed and discarded (repeatable) |
 | `--list-models` | `✗ planned` | Print model list and exit; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `-m` / `--model <name>` | `✗ planned` | Model name; will be `accepted` |
-| `--mode <plan\|ask>` | `✗ planned` | Start in plan/Q&A mode; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `--output-format <text\|json\|stream-json>` | `✗ planned` | Output formatter for `--print`; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `-p` / `--print` | `✗ planned` | Non-interactive one-shot; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `-m` / `--model <name>` | `accepted` | Model name; parsed and discarded |
+| `--mode <plan\|ask>` | `accepted` | Banner change lands in Phase 3 ([#14](https://github.com/paultyng/testagent/issues/14)) |
+| `--output-format <text\|json\|stream-json>` | `✗ planned` | Output formatter for `--print`; Phase 4 ([#14](https://github.com/paultyng/testagent/issues/14)) |
+| `-p` / `--print` | `✗ planned` | Non-interactive one-shot; Phase 4 ([#14](https://github.com/paultyng/testagent/issues/14)) |
 | `--plan` | `✗ planned` | Shorthand for `--mode=plan`; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `--plugin-dir <path>` | `✗ planned` | Local plugin dir; will be `accepted` (no plugin engine) |
-| `--resume [chatId]` | `✗ planned` | Resume session by ID; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `--sandbox <enabled\|disabled>` | `✗ planned` | Sandbox override; will be `accepted` |
-| `--skip-worktree-setup` | `✗ planned` | Skip worktree setup scripts; will be `accepted` |
-| `--stream-partial-output` | `✗ planned` | Token-level deltas in `stream-json`; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `--trust` | `✗ planned` | Trust workspace without prompting (headless only); will be `accepted` |
+| `--plugin-dir <path>` | `accepted` | Local plugin dir; no plugin engine (repeatable) |
+| `--resume [chatId]` | `accepted` | Persistent flag parsed; positional-arg subcommand stub returns canned output |
+| `--sandbox <enabled\|disabled>` | `accepted` | Sandbox override; parsed and discarded |
+| `--skip-worktree-setup` | `✗ planned` | Skip worktree setup scripts; not yet wired |
+| `--stream-partial-output` | `✗ planned` | Token-level deltas in `stream-json`; Phase 4 ([#14](https://github.com/paultyng/testagent/issues/14)) |
+| `--trust` | `accepted` | Trust workspace without prompting; parsed and discarded |
 | `-v` / `--version` | `not relevant` | testagent uses its own `--version` |
-| `--workspace <path>` | `✗ planned` | Workspace dir override; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `-w` / `--worktree [name]` | `✗ planned` | Worktree creation flag; will be `accepted` |
-| `--worktree-base <branch>` | `✗ planned` | Worktree base ref; will be `accepted` |
+| `--workspace <path>` | `✓ supported` | Chdirs before the skeleton banner prints (mirrors codex `--cd`) |
+| `-w` / `--worktree [name]` | `accepted` | Worktree creation flag; parsed and discarded |
+| `--worktree-base <branch>` | `accepted` | Worktree base ref; parsed and discarded |
 
 ### Slash commands
 

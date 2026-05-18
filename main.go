@@ -18,6 +18,7 @@ import (
 
 	"github.com/paultyng/testagent/cmd/claude"
 	"github.com/paultyng/testagent/cmd/codex"
+	"github.com/paultyng/testagent/cmd/cursor"
 	"github.com/paultyng/testagent/internal/rootflags"
 )
 
@@ -33,6 +34,7 @@ var version = "dev"
 var knownSubcommands = map[string]bool{
 	"claude":           true,
 	"codex":            true,
+	"cursor":           true,
 	"help":             true,
 	"completion":       true,
 	"__complete":       true,
@@ -52,6 +54,7 @@ func main() {
 
 	root.AddCommand(claude.NewCommand(rf))
 	root.AddCommand(codex.NewCommand(rf))
+	root.AddCommand(cursor.NewCommand(rf))
 
 	root.SetArgs(defaultedArgs(os.Args[1:]))
 
