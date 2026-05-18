@@ -385,7 +385,7 @@ Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes
 **Upstream version researched:** Cursor CLI 2026.05.09-0afadcc
 **Local binary version:** `cursor agent --version` → 2026.05.09-0afadcc
 
-Phase 1 (skeleton + stubs + MCP wiring) ships the `testagent cursor` subcommand. The full upstream global flag surface is `accepted` (parsed without error, behavior not modeled); login/logout/status/about/models/update/create-chat/resume/ls are canned-output stubs; `mcp list / list-tools / enable / disable` are wired against `internal/mcp.Client`. Hooks (Phase 2), stream-json (Phase 4), and `.cursor/rules/*.mdc` surfacing (Phase 5) are tracked in [#14](https://github.com/paultyng/testagent/issues/14).
+The `testagent cursor` subcommand boots the shared engine REPL with the full upstream global flag surface `accepted` (parsed without error). Subcommands login/logout/status/about/models/update/create-chat/resume/ls are canned-output stubs; `mcp list / list-tools / enable / disable` are wired against `internal/mcp.Client`. Hooks fire via `internal/cursorhooks` (top-level `permission` wire shape); `--print` honors `--output-format text|json|stream-json` per cursor.com/docs/cli/reference/output-format; `.cursor/rules/*.mdc` are walked and surfaced in the banner with activation-mode counts. Remaining work: `internal/mcp` stdio support, typed `tool_call` frames in stream-json. Tracked in [#14](https://github.com/paultyng/testagent/issues/14).
 
 ### Subcommands
 
@@ -519,7 +519,7 @@ Hooks are configured in `.cursor/hooks.json` with a 4-level priority cascade (en
 | `approvalMode` token grammar | `not relevant` | Allowlist tokens (`Shell(...)`, `Read(...)`, `Mcp(server:tool)`); no permission engine |
 | `sandbox.json` | `not relevant` | Sandbox mode picker; no sandbox; source: [cursor.com/docs/reference/sandbox](https://cursor.com/docs/reference/sandbox) |
 | `AGENTS.md` project instructions | `✗ planned` | Same file codex reads; surface in banner/status; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
-| `.cursor/rules/*.mdc` | `✗ planned` | YAML-frontmattered rules (`description`/`alwaysApply`/`globs`); tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
+| `.cursor/rules/*.mdc` | `partial` | Walks `.cursor/rules/*.mdc` and surfaces a `rules: N (a always, g glob, i intelligent, m manual)` line in the banner. Rule body content is not interpreted (testagent has no model) — orchestrator-parity surfacing only. |
 | `.cursorrules` (legacy) | `not relevant` | Deprecated; not loaded by current agent CLI |
 | Plugins (`~/.cursor/plugins/local/<name>`) | `not relevant` | Dynamic; depend on installed plugin set |
 | `--plugin-dir <path>` | `✗ planned` | Local plugin discovery flag; will be `accepted` |

@@ -179,6 +179,10 @@ func runInteractive(cmd *cobra.Command, rf *rootflags.Flags, cf *flags, sid stri
 	if err != nil {
 		return err
 	}
+	rules, err := loadRules(cwd)
+	if err != nil {
+		return err
+	}
 
 	if sid == "" {
 		sid = newSessionID()
@@ -207,7 +211,7 @@ func runInteractive(cmd *cobra.Command, rf *rootflags.Flags, cf *flags, sid stri
 		ExitAfter:   rf.ExitAfter,
 		AutoExit:    rf.AutoExit,
 		HistoryCap:  rf.HistoryCap,
-		StatusLine:  buildStatusLine(cf, agentsLine, cfg),
+		StatusLine:  buildStatusLine(cf, agentsLine, cfg, rules),
 	}
 	d := engine.Deps{
 		Hooks: runner,
@@ -232,7 +236,7 @@ func hooksOrNil(cfg *Config) *HooksConfig {
 // buildStatusLine returns the one-line status summary shown under the
 // banner. Empty when nothing was loaded. Mirrors codex's buildStatusLine
 // shape so orchestrators see a consistent banner across vendors.
-func buildStatusLine(cf *flags, agentsLine string, cfg *Config) string {
+func buildStatusLine(cf *flags, agentsLine string, cfg *Config, rules []RuleFile) string {
 	var parts []string
 	if cf.Model != "" {
 		parts = append(parts, "model: "+cf.Model)
@@ -248,6 +252,9 @@ func buildStatusLine(cf *flags, agentsLine string, cfg *Config) string {
 	}
 	if cfg != nil && cfg.Hooks != nil && len(cfg.Hooks.Hooks) > 0 {
 		parts = append(parts, fmt.Sprintf("hooks: %d events", len(cfg.Hooks.Hooks)))
+	}
+	if rulesLine := rulesStatusLine(rules); rulesLine != "" {
+		parts = append(parts, rulesLine)
 	}
 	if agentsLine != "" {
 		parts = append(parts, agentsLine)

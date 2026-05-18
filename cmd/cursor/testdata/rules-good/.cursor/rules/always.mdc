@@ -1,0 +1,6 @@
+---
+description: "Hard-coded constants live in const blocks"
+alwaysApply: true
+---
+
+- Group related constants in a single const block.
