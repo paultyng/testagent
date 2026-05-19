@@ -35,4 +35,8 @@ jobs:
       # case (~1-2s).
       - run: npm install -g @modelcontextprotocol/server-everything
       - run: go build ./...
-      - run: go test ./...
+      # -v surfaces per-test PASS/SKIP lines so the e2e tests (notably
+      # TestE2E_Cursor_MCPListTools_StdioServerEverything) are visible
+      # in the CI log — silent skips on a misconfigured runner would
+      # otherwise just look like a fast green run.
+      - run: go test -v ./...
