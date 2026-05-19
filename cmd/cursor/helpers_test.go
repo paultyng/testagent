@@ -148,41 +148,60 @@ func TestBuildStatusLine(t *testing.T) {
 	})
 }
 
-// TestToCoreServer / TestHTTPServersFromConfig: the boundary between the
+// TestToCoreServer / TestEnabledServersFromConfig: the boundary between the
 // disk-side cursorMCPServer and the runtime-side internal/mcp.Server, plus
-// the http-only filter that drops disabled and stdio entries.
+// the enabled-only filter that drops disabled entries (but passes stdio).
 func TestToCoreServer(t *testing.T) {
 	t.Parallel()
 
-	srv := cursorMCPServer{
-		Type:    "http",
-		URL:     "https://example.com/mcp",
-		Headers: map[string]string{"Authorization": "Bearer x"},
-		// Stdio fields are dropped at this boundary.
-		Command: "node",
-		Args:    []string{"s.js"},
-		Env:     map[string]string{"K": "v"},
-	}
-	got := srv.toCoreServer()
-	if got.Type != "http" || got.URL != "https://example.com/mcp" {
-		t.Errorf("Type/URL not projected: %+v", got)
-	}
-	if v, ok := got.Headers["Authorization"]; !ok || v != "Bearer x" {
-		t.Errorf("Headers not projected: %+v", got.Headers)
-	}
+	t.Run("http fields round-trip", func(t *testing.T) {
+		t.Parallel()
+		srv := cursorMCPServer{
+			Type:    "http",
+			URL:     "https://example.com/mcp",
+			Headers: map[string]string{"Authorization": "Bearer x"},
+		}
+		got := srv.toCoreServer()
+		if got.Type != "http" || got.URL != "https://example.com/mcp" {
+			t.Errorf("Type/URL not projected: %+v", got)
+		}
+		if v, ok := got.Headers["Authorization"]; !ok || v != "Bearer x" {
+			t.Errorf("Headers not projected: %+v", got.Headers)
+		}
+	})
+
+	t.Run("stdio fields round-trip", func(t *testing.T) {
+		t.Parallel()
+		srv := cursorMCPServer{
+			Type:    "stdio",
+			Command: "node",
+			Args:    []string{"s.js"},
+			Env:     map[string]string{"K": "v"},
+		}
+		got := srv.toCoreServer()
+		if got.Type != "stdio" || got.Command != "node" {
+			t.Errorf("Type/Command not projected: %+v", got)
+		}
+		if len(got.Args) != 1 || got.Args[0] != "s.js" {
+			t.Errorf("Args not projected: %+v", got.Args)
+		}
+		if got.Env["K"] != "v" {
+			t.Errorf("Env not projected: %+v", got.Env)
+		}
+	})
 }
 
-func TestHTTPServersFromConfig(t *testing.T) {
+func TestEnabledServersFromConfig(t *testing.T) {
 	t.Parallel()
 
 	t.Run("nil cfg yields nil", func(t *testing.T) {
 		t.Parallel()
-		if got := httpServersFromConfig(nil); got != nil {
+		if got := enabledServersFromConfig(nil); got != nil {
 			t.Errorf("got %v, want nil", got)
 		}
 	})
 
-	t.Run("filters stdio and disabled", func(t *testing.T) {
+	t.Run("filters disabled only", func(t *testing.T) {
 		t.Parallel()
 		cfg := &Config{
 			MCP: &MCPConfig{
@@ -193,12 +212,18 @@ func TestHTTPServersFromConfig(t *testing.T) {
 				},
 			},
 		}
-		got := httpServersFromConfig(cfg)
-		if len(got) != 1 {
-			t.Fatalf("got %d servers, want 1: %+v", len(got), got)
+		got := enabledServersFromConfig(cfg)
+		if len(got) != 2 {
+			t.Fatalf("got %d servers, want 2: %+v", len(got), got)
 		}
 		if _, ok := got["http-on"]; !ok {
 			t.Errorf("expected http-on to survive filter, got: %+v", got)
+		}
+		if _, ok := got["stdio-on"]; !ok {
+			t.Errorf("expected stdio-on to survive filter, got: %+v", got)
+		}
+		if _, ok := got["http-off"]; ok {
+			t.Errorf("expected http-off to be dropped (disabled), got: %+v", got)
 		}
 	})
 }

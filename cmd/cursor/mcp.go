@@ -106,10 +106,9 @@ func mcpTransport(srv cursorMCPServer) string {
 	}
 }
 
-// newMCPListToolsCommand connects to a named HTTP MCP server and prints its
-// tools. Errors immediately for disabled, missing, or stdio-only servers since
-// internal/mcp.Client is HTTP-only until Phase 2. Reads merged config from
-// cf.Workspace (or cwd if unset).
+// newMCPListToolsCommand connects to a named MCP server (HTTP or stdio) and
+// prints its tools. Errors immediately for disabled or missing servers. Reads
+// merged config from cf.Workspace (or cwd if unset).
 func newMCPListToolsCommand(_ *rootflags.Flags, cf *flags) *cobra.Command {
 	return &cobra.Command{
 		Use:          "list-tools <server>",
@@ -139,9 +138,6 @@ func newMCPListToolsCommand(_ *rootflags.Flags, cf *flags) *cobra.Command {
 			}
 			if srv.Disabled {
 				return fmt.Errorf("server %q is disabled", serverName)
-			}
-			if mcpTransport(srv) == "stdio" {
-				return errors.New("stdio servers are not supported by the testagent stub yet")
 			}
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)

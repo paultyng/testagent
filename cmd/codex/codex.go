@@ -137,9 +137,7 @@ func runInteractive(cmd *cobra.Command, rf *rootflags.Flags, cf *flags, sid stri
 	// the runner. nil cfg / empty matchers → no-op runner.
 	runner := codexhooks.NewRunner(matchersFromConfig(cfg), sid, cwd, transcriptPath, permissionMode, debugW)
 
-	// MCP server config from TOML lands in a follow-up (codex matrix's
-	// [mcp_servers] row stays ✗ planned for now — tracked in #37).
-	mcpClient := mcp.NewClient(nil)
+	mcpClient := mcp.NewClient(codexMCPServersFromConfig(cfg))
 
 	slashHandler := slash.New(runner, mcpClient, os.Stdout)
 
@@ -197,6 +195,18 @@ func buildStatusLine(cf *flags, agentsLine string, cfg *Config) string {
 	return strings.Join(parts, " | ")
 }
 
+// codexMCPServersFromConfig flattens cfg.MCPServers into the shape
+// internal/mcp.NewClient expects. nil cfg or empty map → nil.
+func codexMCPServersFromConfig(cfg *Config) map[string]mcp.Server {
+	if cfg == nil || len(cfg.MCPServers) == 0 {
+		return nil
+	}
+	out := make(map[string]mcp.Server, len(cfg.MCPServers))
+	for name, srv := range cfg.MCPServers {
+		out[name] = srv.toCoreServer()
+	}
+	return out
+}
 
 // matchersFromConfig flattens the cmd/codex.Config's HooksTable into
 // the codexhooks.Runner's per-event matcher list. Walks each

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/paultyng/testagent/internal/mcp"
 )
 
 // Config mirrors the subset of `~/.codex/config.toml` the MVP consumes.
@@ -27,6 +29,20 @@ type MCPServer struct {
 	Env     map[string]string `toml:"env"`
 	URL     string            `toml:"url"`
 	Headers map[string]string `toml:"headers"`
+}
+
+// toCoreServer projects a codex MCPServer into the shared internal/mcp.Server
+// shape. internal/mcp resolves the transport (HTTP / stdio) per the
+// resolved Type and field set; codex's TOML can declare either.
+func (s MCPServer) toCoreServer() mcp.Server {
+	return mcp.Server{
+		Type:    s.Type,
+		URL:     s.URL,
+		Headers: s.Headers,
+		Command: s.Command,
+		Args:    s.Args,
+		Env:     s.Env,
+	}
 }
 
 // HooksTable maps a codex hook event name (e.g. "SessionStart") to a
