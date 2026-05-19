@@ -1,7 +1,9 @@
-// Package mcp provides an HTTP MCP client. Connects to servers declared
-// by the caller, performs the standard MCP handshake (initialize +
-// notifications/initialized + tools/list), and exposes a method to invoke
-// tools. Built on github.com/mark3labs/mcp-go.
+// Package mcp provides an MCP client supporting HTTP and stdio
+// transports. Connects to servers declared by the caller, performs the
+// standard MCP handshake (initialize + notifications/initialized +
+// tools/list), and exposes a method to invoke tools. Stdio servers run
+// as subprocesses managed under a process group so Close walks the
+// whole tree. Built on github.com/mark3labs/mcp-go.
 package mcp
 
 import (
