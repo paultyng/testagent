@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -215,9 +214,6 @@ func TestConnectStdio_StderrPassthrough(t *testing.T) {
 // TestConnectStdio_TreeKill spawns the fixture with --spawn-child and verifies
 // that cancelling the context reaps both the parent and child processes.
 func TestConnectStdio_TreeKill(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("tree-kill test is Unix-only")
-	}
 	t.Parallel()
 
 	bin := stdioFixtureBinary(t)
@@ -319,9 +315,6 @@ func TestConnectStdio_TreeKill(t *testing.T) {
 // TestClient_Close_KillsStdioSubprocess verifies that Client.Close reaps the
 // stdio subprocess.
 func TestClient_Close_KillsStdioSubprocess(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("PID-based reaping check is Unix-only")
-	}
 	t.Parallel()
 
 	bin := stdioFixtureBinary(t)
@@ -374,9 +367,6 @@ func TestClient_Close_KillsStdioSubprocess(t *testing.T) {
 // Connect (during a slow tool Call) causes the call to return an error and
 // the subprocess to be reaped.
 func TestConnectStdio_ContextCancel(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("PID-based reaping check is Unix-only")
-	}
 	t.Parallel()
 
 	bin := stdioFixtureBinary(t)

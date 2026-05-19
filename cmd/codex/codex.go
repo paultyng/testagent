@@ -138,6 +138,7 @@ func runInteractive(cmd *cobra.Command, rf *rootflags.Flags, cf *flags, sid stri
 	runner := codexhooks.NewRunner(matchersFromConfig(cfg), sid, cwd, transcriptPath, permissionMode, debugW)
 
 	mcpClient := mcp.NewClient(codexMCPServersFromConfig(cfg))
+	mcpClient.SetDebugWriter(debugW)
 
 	slashHandler := slash.New(runner, mcpClient, os.Stdout)
 

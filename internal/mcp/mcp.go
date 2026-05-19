@@ -261,6 +261,10 @@ func (c *Client) connectHTTP(ctx context.Context, name string, cfg Server) (*ser
 		_ = cl.Close()
 		return nil, fmt.Errorf("mcp %s: tools/list: %w", name, err)
 	}
+	if listRes == nil {
+		_ = cl.Close()
+		return nil, fmt.Errorf("mcp %s: tools/list returned nil result", name)
+	}
 
 	return &serverConn{
 		name:   name,
@@ -314,6 +318,10 @@ func (c *Client) connectStdio(ctx context.Context, name string, cfg Server) (*se
 		_ = cl.Close()
 		return nil, fmt.Errorf("mcp %s: tools/list: %w", name, err)
 	}
+	if listRes == nil {
+		_ = cl.Close()
+		return nil, fmt.Errorf("mcp %s: tools/list returned nil result", name)
+	}
 
 	return &serverConn{name: name, client: cl, tools: listRes.Tools}, nil
 }
@@ -333,8 +341,19 @@ func (c *Client) spawnStderrPump(name string, cl *client.Client) {
 	}
 	go func() {
 		sc := bufio.NewScanner(r)
+		// Bump the buffer cap from the 64KB default so a server emitting
+		// a large JSON blob to stderr doesn't ErrTooLong and silently
+		// orphan the pump goroutine.
+		sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 		for sc.Scan() {
 			fmt.Fprintf(c.debugWriter, "mcp[%s]: %s\n", name, sc.Text())
+		}
+		// EOF is the normal exit (subprocess exited or Close shut the
+		// stderr pipe). Any other Scanner error surfaces a real I/O
+		// failure on the pump side; log it once so operators see the
+		// pump terminated abnormally.
+		if err := sc.Err(); err != nil {
+			fmt.Fprintf(c.debugWriter, "mcp[%s]: stderr pump exit: %v\n", name, err)
 		}
 	}()
 }

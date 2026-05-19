@@ -137,6 +137,7 @@ func runPrintMode(cmd *cobra.Command, rf *rootflags.Flags, cf *flags, args []str
 
 	runner := cursorhooks.NewRunner(matchersFromConfig(hooksOrNil(cfg)), sid, cwd, transcriptPath, permissionMode, debugW)
 	mcpClient := mcp.NewClient(enabledServersFromConfig(cfg))
+	mcpClient.SetDebugWriter(debugW)
 
 	ctx := cmd.Context()
 	if err := mcpClient.Connect(ctx); err != nil {
@@ -201,6 +202,7 @@ func runInteractive(cmd *cobra.Command, rf *rootflags.Flags, cf *flags, sid stri
 	runner := cursorhooks.NewRunner(matchersFromConfig(hookCfg), sid, cwd, transcriptPath, permissionMode, debugW)
 
 	mcpClient := mcp.NewClient(enabledServersFromConfig(cfg))
+	mcpClient.SetDebugWriter(debugW)
 	slashHandler := slash.New(runner, mcpClient, os.Stdout)
 
 	g := engine.Globals{
