@@ -4,8 +4,7 @@
 // .cursor/rules/*.mdc surfacing, AGENTS.md surfacing, stream-json
 // emission) live here; the shared engine loop in internal/engine drives
 // the actual interactive session. Typed tool_call frames in stream-json
-// and internal/mcp stdio support remain follow-ups — see
-// cursor-adapter-plan.md.
+// remain a follow-up — see cursor-adapter-plan.md.
 package cursor
 
 import (
@@ -137,7 +136,8 @@ func runPrintMode(cmd *cobra.Command, rf *rootflags.Flags, cf *flags, args []str
 	}
 
 	runner := cursorhooks.NewRunner(matchersFromConfig(hooksOrNil(cfg)), sid, cwd, transcriptPath, permissionMode, debugW)
-	mcpClient := mcp.NewClient(httpServersFromConfig(cfg))
+	mcpClient := mcp.NewClient(enabledServersFromConfig(cfg))
+	mcpClient.SetDebugWriter(debugW)
 
 	ctx := cmd.Context()
 	if err := mcpClient.Connect(ctx); err != nil {
@@ -201,7 +201,8 @@ func runInteractive(cmd *cobra.Command, rf *rootflags.Flags, cf *flags, sid stri
 	hookCfg := hooksOrNil(cfg)
 	runner := cursorhooks.NewRunner(matchersFromConfig(hookCfg), sid, cwd, transcriptPath, permissionMode, debugW)
 
-	mcpClient := mcp.NewClient(httpServersFromConfig(cfg))
+	mcpClient := mcp.NewClient(enabledServersFromConfig(cfg))
+	mcpClient.SetDebugWriter(debugW)
 	slashHandler := slash.New(runner, mcpClient, os.Stdout)
 
 	g := engine.Globals{
@@ -264,4 +265,3 @@ func buildStatusLine(cf *flags, agentsLine string, cfg *Config, rules []RuleFile
 	}
 	return strings.Join(parts, " | ")
 }
-

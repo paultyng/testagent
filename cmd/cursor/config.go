@@ -19,18 +19,17 @@ type Config struct {
 }
 
 // cursorMCPServer is the on-disk shape of one entry under .cursor/mcp.json's
-// "mcpServers" map. Strictly richer than internal/mcp.Server — captures stdio
-// transport fields (Command/Args/Env) and the Cursor-specific Disabled toggle
-// that mcp enable/disable round-trip. Convert to mcp.Server via toCoreServer()
-// at the launch boundary; stdio servers are skipped at that boundary today
-// (mcp.Client is HTTP-only) — tracked in the plan's Phase 2 follow-up.
+// "mcpServers" map. Captures both HTTP transport fields (URL/Headers) and
+// stdio transport fields (Command/Args/Env), plus the Cursor-specific Disabled
+// toggle that mcp enable/disable round-trips. Convert to mcp.Server via
+// toCoreServer() at the launch boundary.
 type cursorMCPServer struct {
-	Type     string            `json:"type,omitempty"`
-	URL      string            `json:"url,omitempty"`
-	Headers  map[string]string `json:"headers,omitempty"`
-	Command  string            `json:"command,omitempty"`
-	Args     []string          `json:"args,omitempty"`
-	Env      map[string]string `json:"env,omitempty"`
+	Type    string            `json:"type,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
 	// Disabled MUST NOT carry omitempty: omitempty hides false on
 	// re-marshal, which would silently corrupt an enabled-after-disabled
 	// round-trip if a future writer marshals via this struct rather than
@@ -39,14 +38,16 @@ type cursorMCPServer struct {
 }
 
 // toCoreServer projects a cursorMCPServer into the shared internal/mcp.Server
-// shape. Used when handing off to mcp.Client. Stdio servers (Command set, no
-// URL) return a zero-value Server today; callers must filter those out before
-// connecting until internal/mcp grows stdio support.
+// shape. internal/mcp now supports stdio transport, so all fields project
+// directly. Callers should still filter on Disabled.
 func (s cursorMCPServer) toCoreServer() mcp.Server {
 	return mcp.Server{
 		Type:    s.Type,
 		URL:     s.URL,
 		Headers: s.Headers,
+		Command: s.Command,
+		Args:    s.Args,
+		Env:     s.Env,
 	}
 }
 
@@ -237,20 +238,17 @@ func matchersFromConfig(cfg *HooksConfig) map[string][]cursorhooks.Matcher {
 	return out
 }
 
-// httpServersFromConfig returns just the enabled HTTP servers from the
-// merged config in the shape internal/mcp.NewClient expects. Stdio servers
-// are silently dropped — internal/mcp.Client is HTTP-only today (Phase 2
-// follow-up tracks adding stdio support).
-func httpServersFromConfig(cfg *Config) map[string]mcp.Server {
+// enabledServersFromConfig returns all enabled servers from the merged
+// config in the shape internal/mcp.NewClient expects. Disabled servers
+// are dropped; the transport (HTTP / stdio) is resolved by internal/mcp's
+// connectServer dispatcher.
+func enabledServersFromConfig(cfg *Config) map[string]mcp.Server {
 	if cfg == nil || cfg.MCP == nil || len(cfg.MCP.MCPServers) == 0 {
 		return nil
 	}
 	out := make(map[string]mcp.Server, len(cfg.MCP.MCPServers))
 	for name, srv := range cfg.MCP.MCPServers {
 		if srv.Disabled {
-			continue
-		}
-		if mcpTransport(srv) != "http" {
 			continue
 		}
 		out[name] = srv.toCoreServer()

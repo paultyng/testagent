@@ -373,9 +373,9 @@ Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes
 
 | Feature | testagent | Notes |
 |---------|-----------|-------|
-| `~/.codex/config.toml` | partial | Loaded if present; `$CODEX_HOME` honored; `[hooks]` table consumed for `session_start`/`user_prompt_submit`/`pre_tool_use`/`post_tool_use`/`stop`/`pre_compact`/`post_compact`/`permission_request`; `[mcp_servers]` parsed but not yet consumed |
+| `~/.codex/config.toml` | partial | Loaded if present; `$CODEX_HOME` honored; `[hooks]` table consumed for `session_start`/`user_prompt_submit`/`pre_tool_use`/`post_tool_use`/`stop`/`pre_compact`/`post_compact`/`permission_request`; `[mcp_servers]` consumed by `internal/mcp.Client` |
 | `AGENTS.md` project instructions | partial | Presence surfaced in status line; content not interpreted (testagent has no model) |
-| `[mcp_servers]` in config.toml | `✗ planned` | Parsed by config skeleton; not yet consumed by the MCP client (tracked in [#13](https://github.com/paultyng/testagent/issues/13)) |
+| `[mcp_servers]` in config.toml | `✓ supported` | HTTP + stdio servers wired into `internal/mcp.Client`; no `Disabled` toggle (codex has no enable/disable subcommand) |
 | `codex mcp add/remove/list` | `not relevant` | Subcommands managing `[mcp_servers]`; no config management in stub |
 
 ---
@@ -385,7 +385,7 @@ Hooks are configured in `~/.codex/config.toml` under `[hooks]`. Each event takes
 **Upstream version researched:** Cursor CLI 2026.05.09-0afadcc
 **Local binary version:** `cursor agent --version` → 2026.05.09-0afadcc
 
-The `testagent cursor` subcommand boots the shared engine REPL with the full upstream global flag surface `accepted` (parsed without error). Subcommands login/logout/status/about/models/update/create-chat/resume/ls are canned-output stubs; `mcp list / list-tools / enable / disable` are wired against `internal/mcp.Client`. Hooks fire via `internal/cursorhooks` (top-level `permission` wire shape); `--print` honors `--output-format text|json|stream-json` per cursor.com/docs/cli/reference/output-format; `.cursor/rules/*.mdc` are walked and surfaced in the banner with activation-mode counts. Remaining work: `internal/mcp` stdio support, typed `tool_call` frames in stream-json. Tracked in [#14](https://github.com/paultyng/testagent/issues/14).
+The `testagent cursor` subcommand boots the shared engine REPL with the full upstream global flag surface `accepted` (parsed without error). Subcommands login/logout/status/about/models/update/create-chat/resume/ls are canned-output stubs; `mcp list / list-tools / enable / disable` are wired against `internal/mcp.Client` (HTTP and stdio). Hooks fire via `internal/cursorhooks` (top-level `permission` wire shape); `--print` honors `--output-format text|json|stream-json` per cursor.com/docs/cli/reference/output-format; `.cursor/rules/*.mdc` are walked and surfaced in the banner with activation-mode counts. Remaining work: typed `tool_call` frames in stream-json. Tracked in [#14](https://github.com/paultyng/testagent/issues/14).
 
 ### Subcommands
 
@@ -403,7 +403,7 @@ Cursor's user-facing surface is under `cursor agent`; bare `cursor agent [prompt
 | `cursor agent logout` | `accepted` | Session-clear no-op stub |
 | `cursor agent ls` | `accepted` | Canned chat list |
 | `cursor agent mcp list` | `✓ supported` | Reads merged `.cursor/mcp.json` + `~/.cursor/mcp.json`; prints name / status / transport |
-| `cursor agent mcp list-tools <id>` | `partial` | HTTP servers connect via `internal/mcp.Client`; stdio servers return a not-yet-supported error (Phase 2 follow-up) |
+| `cursor agent mcp list-tools <id>` | `✓ supported` | HTTP + stdio servers both connect via `internal/mcp.Client` (with process-group teardown) |
 | `cursor agent mcp login <id>` | `✗ planned` | OAuth handshake; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
 | `cursor agent mcp enable <id>` | `✓ supported` | Round-trips `disabled: false` to `~/.cursor/mcp.json` (atomic write) |
 | `cursor agent mcp disable <id>` | `✓ supported` | Round-trips `disabled: true` to `~/.cursor/mcp.json` (atomic write) |

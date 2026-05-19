@@ -1,20 +1,27 @@
-// Package mcp provides an HTTP MCP client. Connects to servers declared
-// by the caller, performs the standard MCP handshake (initialize +
-// notifications/initialized + tools/list), and exposes a method to invoke
-// tools. Built on github.com/mark3labs/mcp-go.
+// Package mcp provides an MCP client supporting HTTP and stdio
+// transports. Connects to servers declared by the caller, performs the
+// standard MCP handshake (initialize + notifications/initialized +
+// tools/list), and exposes a method to invoke tools. Stdio servers run
+// as subprocesses managed under a process group so Close walks the
+// whole tree. Built on github.com/mark3labs/mcp-go.
 package mcp
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/paultyng/testagent/internal/shellrun"
 )
 
 // ErrNoServers is returned by Call when no MCP servers are configured.
@@ -24,17 +31,50 @@ var ErrNoServers = errors.New("no MCP servers configured")
 // resolve to a known server+tool.
 var ErrUnknownTool = errors.New("unknown tool")
 
-// Server is the on-disk shape of one MCP server entry from Claude Code's
-// --mcp-config file.
+// Server is the on-disk shape of one MCP server entry. Field set covers
+// both HTTP (URL + Headers) and stdio (Command + Args + Env) transports.
+// resolveType(Server) returns the effective transport:
+//   - explicit Type wins ("http" / "sse" / "stdio");
+//   - empty Type infers stdio when Command is set, HTTP when URL is set;
+//   - empty Type with neither set is an error at connect time.
 type Server struct {
-	Type    string            `json:"type"`
-	URL     string            `json:"url"`
+	Type    string            `json:"type,omitempty"`
+	URL     string            `json:"url,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
+
+	// Command + Args spawn a stdio MCP subprocess. Ignored for http/sse.
+	Command string   `json:"command,omitempty"`
+	Args    []string `json:"args,omitempty"`
+
+	// Env extras layered on top of the parent process env (last-write
+	// wins). The subprocess sees the parent's full env including
+	// ambient credentials — configure MCP servers you trust.
+	Env map[string]string `json:"env,omitempty"`
+}
+
+// resolveType returns the effective transport type for a Server: "http",
+// "stdio", or "" (unresolvable). Explicit Type wins (lowercased); otherwise
+// Command implies stdio, URL implies http.
+func resolveType(s Server) string {
+	if s.Type != "" {
+		return strings.ToLower(s.Type)
+	}
+	if s.Command != "" {
+		return "stdio"
+	}
+	if s.URL != "" {
+		return "http"
+	}
+	return ""
 }
 
 // Client connects to MCP servers and exposes the union of their tools.
 type Client struct {
 	config map[string]Server
+
+	// debugWriter, when non-nil, receives per-server stderr prefixed with
+	// "mcp[<name>]: ". Set via SetDebugWriter. Nil silences passthrough.
+	debugWriter io.Writer
 
 	mu        sync.Mutex
 	servers   map[string]*serverConn // keyed by server name
@@ -83,6 +123,13 @@ func NewClient(servers map[string]Server) *Client {
 		config:  servers,
 		servers: make(map[string]*serverConn),
 	}
+}
+
+// SetDebugWriter attaches a writer that receives stderr from stdio-backed
+// MCP servers. Each line is prefixed "mcp[<name>]: ". Passing nil disables
+// passthrough. Must be called before Connect.
+func (c *Client) SetDebugWriter(w io.Writer) {
+	c.debugWriter = w
 }
 
 // Connect performs initialize + notifications/initialized + tools/list against
@@ -157,11 +204,23 @@ func (c *Client) Connect(ctx context.Context) error {
 	return nil
 }
 
-// connectServer dials one server and runs the handshake + tools/list.
+// connectServer dispatches to connectHTTP or connectStdio based on the
+// server's resolved transport type.
 func (c *Client) connectServer(ctx context.Context, name string, cfg Server) (*serverConn, error) {
-	if cfg.Type != "" && cfg.Type != "http" {
-		return nil, fmt.Errorf("mcp %s: unsupported transport type %q (only \"http\" supported)", name, cfg.Type)
+	switch resolveType(cfg) {
+	case "http":
+		return c.connectHTTP(ctx, name, cfg)
+	case "stdio":
+		return c.connectStdio(ctx, name, cfg)
+	case "":
+		return nil, fmt.Errorf("mcp %s: server config has neither URL nor Command", name)
+	default:
+		return nil, fmt.Errorf("mcp %s: unsupported transport type %q (want \"http\" or \"stdio\")", name, cfg.Type)
 	}
+}
+
+// connectHTTP dials an HTTP MCP server and runs the handshake + tools/list.
+func (c *Client) connectHTTP(ctx context.Context, name string, cfg Server) (*serverConn, error) {
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("mcp %s: empty URL", name)
 	}
@@ -204,12 +263,113 @@ func (c *Client) connectServer(ctx context.Context, name string, cfg Server) (*s
 		_ = cl.Close()
 		return nil, fmt.Errorf("mcp %s: tools/list: %w", name, err)
 	}
+	if listRes == nil {
+		_ = cl.Close()
+		return nil, fmt.Errorf("mcp %s: tools/list returned nil result", name)
+	}
 
 	return &serverConn{
 		name:   name,
 		client: cl,
 		tools:  listRes.Tools,
 	}, nil
+}
+
+// connectStdio spawns a stdio MCP subprocess and runs the handshake + tools/list.
+func (c *Client) connectStdio(ctx context.Context, name string, cfg Server) (*serverConn, error) {
+	if cfg.Command == "" {
+		return nil, fmt.Errorf("mcp %s: empty Command", name)
+	}
+	env := mergedEnv(cfg.Env)
+
+	stdioTransport := transport.NewStdioWithOptions(cfg.Command, env, cfg.Args,
+		transport.WithCommandFunc(func(ctx context.Context, command string, env []string, args []string) (*exec.Cmd, error) {
+			cmd := exec.CommandContext(ctx, command, args...)
+			cmd.Env = env
+			shellrun.SetProcessGroup(cmd)
+			return cmd, nil
+		}),
+	)
+
+	cl := client.NewClient(stdioTransport)
+	if err := cl.Start(ctx); err != nil {
+		_ = cl.Close()
+		return nil, fmt.Errorf("mcp %s: start: %w", name, err)
+	}
+
+	// Wire stderr passthrough if debugWriter is set.
+	c.spawnStderrPump(name, cl)
+
+	initReq := mcpgo.InitializeRequest{
+		Params: mcpgo.InitializeParams{
+			ProtocolVersion: mcpgo.LATEST_PROTOCOL_VERSION,
+			ClientInfo: mcpgo.Implementation{
+				Name:    "testagent",
+				Version: "0.1.0",
+			},
+			Capabilities: mcpgo.ClientCapabilities{},
+		},
+	}
+	if _, err := cl.Initialize(ctx, initReq); err != nil {
+		_ = cl.Close()
+		return nil, fmt.Errorf("mcp %s: initialize: %w", name, err)
+	}
+
+	listRes, err := cl.ListTools(ctx, mcpgo.ListToolsRequest{})
+	if err != nil {
+		_ = cl.Close()
+		return nil, fmt.Errorf("mcp %s: tools/list: %w", name, err)
+	}
+	if listRes == nil {
+		_ = cl.Close()
+		return nil, fmt.Errorf("mcp %s: tools/list returned nil result", name)
+	}
+
+	return &serverConn{name: name, client: cl, tools: listRes.Tools}, nil
+}
+
+// spawnStderrPump launches a goroutine that copies the per-server stdio
+// transport's stderr to c.debugWriter with a "mcp[<name>]: " line prefix.
+// No-op when debugWriter is nil or the transport does not expose stderr.
+// The goroutine ends when the reader hits EOF (subprocess exits or Close
+// shuts the stderr pipe).
+func (c *Client) spawnStderrPump(name string, cl *client.Client) {
+	if c.debugWriter == nil {
+		return
+	}
+	r, ok := client.GetStderr(cl)
+	if !ok {
+		return
+	}
+	go func() {
+		sc := bufio.NewScanner(r)
+		// Bump the buffer cap from the 64KB default so a server emitting
+		// a large JSON blob to stderr doesn't ErrTooLong and silently
+		// orphan the pump goroutine.
+		sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+		for sc.Scan() {
+			fmt.Fprintf(c.debugWriter, "mcp[%s]: %s\n", name, sc.Text())
+		}
+		// EOF is the normal exit (subprocess exited or Close shut the
+		// stderr pipe). Any other Scanner error surfaces a real I/O
+		// failure on the pump side; log it once so operators see the
+		// pump terminated abnormally.
+		if err := sc.Err(); err != nil {
+			fmt.Fprintf(c.debugWriter, "mcp[%s]: stderr pump exit: %v\n", name, err)
+		}
+	}()
+}
+
+// mergedEnv returns os.Environ() with extras appended (last-write wins on
+// key collision). The returned slice is safe to mutate by the caller.
+// Mirrors the env layering that internal/hooks + internal/codexhooks already
+// do for command-type hooks.
+func mergedEnv(extras map[string]string) []string {
+	env := append([]string{}, os.Environ()...)
+	for k, v := range extras {
+		env = append(env, k+"="+v)
+	}
+	return env
 }
 
 // Tools returns all tools across all connected servers, qualified as

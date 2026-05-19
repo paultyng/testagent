@@ -9,6 +9,33 @@ import (
 	"github.com/paultyng/testagent/internal/mcp"
 )
 
+func TestLoadMCPConfig_StdioRoundtrip(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mcp.json")
+	body := `{"mcpServers":{"local":{"type":"stdio","command":"node","args":["server.js"],"env":{"K":"v"}}}}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg, err := loadMCPConfig(path)
+	if err != nil {
+		t.Fatalf("loadMCPConfig: %v", err)
+	}
+	srv, ok := cfg.MCPServers["local"]
+	if !ok {
+		t.Fatalf("missing server \"local\"")
+	}
+	if srv.Type != "stdio" || srv.Command != "node" {
+		t.Errorf("got %+v, want stdio command=node", srv)
+	}
+	if len(srv.Args) != 1 || srv.Args[0] != "server.js" {
+		t.Errorf("args = %v, want [server.js]", srv.Args)
+	}
+	if srv.Env["K"] != "v" {
+		t.Errorf("env[K] = %q, want \"v\"", srv.Env["K"])
+	}
+}
+
 func TestLoadSettings(t *testing.T) {
 	t.Parallel()
 

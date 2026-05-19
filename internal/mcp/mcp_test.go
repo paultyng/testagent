@@ -525,3 +525,60 @@ func TestMCPClient_ConnectError(t *testing.T) {
 	}
 	_ = c.Close()
 }
+
+// TestServer_TypeInference covers the resolveType helper's discriminator
+// logic across explicit / inferred / unresolvable inputs.
+func TestServer_TypeInference(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		srv  Server
+		want string
+	}{
+		{"explicit http", Server{Type: "http", URL: "https://x"}, "http"},
+		{"explicit stdio", Server{Type: "stdio", Command: "node"}, "stdio"},
+		{"inferred http from URL", Server{URL: "https://x"}, "http"},
+		{"inferred stdio from Command", Server{Command: "node"}, "stdio"},
+		{"explicit wins over URL", Server{Type: "stdio", URL: "https://x", Command: "node"}, "stdio"},
+		{"explicit lowercased", Server{Type: "HTTP", URL: "https://x"}, "http"},
+		{"explicit sse passes through", Server{Type: "sse", URL: "https://x"}, "sse"},
+		{"empty everything", Server{}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := resolveType(tc.srv); got != tc.want {
+				t.Errorf("resolveType = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestClient_RejectsUnknownTransport asserts connectServer routes to the
+// right branch and that unknown / unresolvable types produce specific
+// error messages.
+func TestClient_RejectsUnknownTransport(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		srv    Server
+		errSub string
+	}{
+		{"empty config", Server{}, "neither URL nor Command"},
+		{"unknown type", Server{Type: "ipc", URL: "https://x"}, "unsupported transport type"},
+		{"sse not implemented", Server{Type: "sse", URL: "https://x"}, "unsupported transport type"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := NewClient(map[string]Server{"x": tc.srv})
+			_, err := c.connectServer(context.Background(), "x", tc.srv)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.errSub) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.errSub)
+			}
+		})
+	}
+}

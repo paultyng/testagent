@@ -9,3 +9,7 @@ testdata/captures/
 compat/
 RELEASE_PLAN.md
 .DS_Store
+
+# Local artifacts from review-* skills (PLAN-REVIEW, CODE-REVIEW,
+# SUMMARY, etc.). Regenerated per invocation; not project artifacts.
+/reviews/
