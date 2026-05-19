@@ -5,16 +5,21 @@
 package mcp
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/paultyng/testagent/internal/shellrun"
 )
 
 // ErrNoServers is returned by Call when no MCP servers are configured.
@@ -65,6 +70,10 @@ func resolveType(s Server) string {
 type Client struct {
 	config map[string]Server
 
+	// debugWriter, when non-nil, receives per-server stderr prefixed with
+	// "mcp[<name>]: ". Set via SetDebugWriter. Nil silences passthrough.
+	debugWriter io.Writer
+
 	mu        sync.Mutex
 	servers   map[string]*serverConn // keyed by server name
 	tools     []Tool                 // qualified, sorted by Server.Name
@@ -112,6 +121,13 @@ func NewClient(servers map[string]Server) *Client {
 		config:  servers,
 		servers: make(map[string]*serverConn),
 	}
+}
+
+// SetDebugWriter attaches a writer that receives stderr from stdio-backed
+// MCP servers. Each line is prefixed "mcp[<name>]: ". Passing nil disables
+// passthrough. Must be called before Connect.
+func (c *Client) SetDebugWriter(w io.Writer) {
+	c.debugWriter = w
 }
 
 // Connect performs initialize + notifications/initialized + tools/list against
@@ -253,9 +269,86 @@ func (c *Client) connectHTTP(ctx context.Context, name string, cfg Server) (*ser
 	}, nil
 }
 
-// connectStdio is a stub — Phase A2 replaces this with real wiring.
-func (c *Client) connectStdio(_ context.Context, _ string, _ Server) (*serverConn, error) {
-	return nil, errors.New("stdio not yet wired")
+// connectStdio spawns a stdio MCP subprocess and runs the handshake + tools/list.
+func (c *Client) connectStdio(ctx context.Context, name string, cfg Server) (*serverConn, error) {
+	if cfg.Command == "" {
+		return nil, fmt.Errorf("mcp %s: empty Command", name)
+	}
+	env := mergedEnv(cfg.Env)
+
+	stdioTransport := transport.NewStdioWithOptions(cfg.Command, env, cfg.Args,
+		transport.WithCommandFunc(func(ctx context.Context, command string, env []string, args []string) (*exec.Cmd, error) {
+			cmd := exec.CommandContext(ctx, command, args...)
+			cmd.Env = env
+			shellrun.SetProcessGroup(cmd)
+			return cmd, nil
+		}),
+	)
+
+	cl := client.NewClient(stdioTransport)
+	if err := cl.Start(ctx); err != nil {
+		_ = cl.Close()
+		return nil, fmt.Errorf("mcp %s: start: %w", name, err)
+	}
+
+	// Wire stderr passthrough if debugWriter is set.
+	c.spawnStderrPump(name, cl)
+
+	initReq := mcpgo.InitializeRequest{
+		Params: mcpgo.InitializeParams{
+			ProtocolVersion: mcpgo.LATEST_PROTOCOL_VERSION,
+			ClientInfo: mcpgo.Implementation{
+				Name:    "testagent",
+				Version: "0.1.0",
+			},
+			Capabilities: mcpgo.ClientCapabilities{},
+		},
+	}
+	if _, err := cl.Initialize(ctx, initReq); err != nil {
+		_ = cl.Close()
+		return nil, fmt.Errorf("mcp %s: initialize: %w", name, err)
+	}
+
+	listRes, err := cl.ListTools(ctx, mcpgo.ListToolsRequest{})
+	if err != nil {
+		_ = cl.Close()
+		return nil, fmt.Errorf("mcp %s: tools/list: %w", name, err)
+	}
+
+	return &serverConn{name: name, client: cl, tools: listRes.Tools}, nil
+}
+
+// spawnStderrPump launches a goroutine that copies the per-server stdio
+// transport's stderr to c.debugWriter with a "mcp[<name>]: " line prefix.
+// No-op when debugWriter is nil or the transport does not expose stderr.
+// The goroutine ends when the reader hits EOF (subprocess exits or Close
+// shuts the stderr pipe).
+func (c *Client) spawnStderrPump(name string, cl *client.Client) {
+	if c.debugWriter == nil {
+		return
+	}
+	r, ok := client.GetStderr(cl)
+	if !ok {
+		return
+	}
+	go func() {
+		sc := bufio.NewScanner(r)
+		for sc.Scan() {
+			fmt.Fprintf(c.debugWriter, "mcp[%s]: %s\n", name, sc.Text())
+		}
+	}()
+}
+
+// mergedEnv returns os.Environ() with extras appended (last-write wins on
+// key collision). The returned slice is safe to mutate by the caller.
+// Mirrors the env layering that internal/hooks + internal/codexhooks already
+// do for command-type hooks.
+func mergedEnv(extras map[string]string) []string {
+	env := append([]string{}, os.Environ()...)
+	for k, v := range extras {
+		env = append(env, k+"="+v)
+	}
+	return env
 }
 
 // Tools returns all tools across all connected servers, qualified as

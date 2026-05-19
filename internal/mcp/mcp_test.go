@@ -567,7 +567,6 @@ func TestClient_RejectsUnknownTransport(t *testing.T) {
 		{"empty config", Server{}, "neither URL nor Command"},
 		{"unknown type", Server{Type: "ipc", URL: "https://x"}, "unsupported transport type"},
 		{"sse not implemented", Server{Type: "sse", URL: "https://x"}, "unsupported transport type"},
-		{"stdio stub", Server{Type: "stdio", Command: "/bin/true"}, "stdio not yet wired"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
