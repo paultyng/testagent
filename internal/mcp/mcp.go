@@ -24,12 +24,41 @@ var ErrNoServers = errors.New("no MCP servers configured")
 // resolve to a known server+tool.
 var ErrUnknownTool = errors.New("unknown tool")
 
-// Server is the on-disk shape of one MCP server entry from Claude Code's
-// --mcp-config file.
+// Server is the on-disk shape of one MCP server entry. Field set covers
+// both HTTP (URL + Headers) and stdio (Command + Args + Env) transports.
+// resolveType(Server) returns the effective transport:
+//   - explicit Type wins ("http" / "sse" / "stdio");
+//   - empty Type infers stdio when Command is set, HTTP when URL is set;
+//   - empty Type with neither set is an error at connect time.
 type Server struct {
-	Type    string            `json:"type"`
-	URL     string            `json:"url"`
+	Type    string            `json:"type,omitempty"`
+	URL     string            `json:"url,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
+
+	// Command + Args spawn a stdio MCP subprocess. Ignored for http/sse.
+	Command string   `json:"command,omitempty"`
+	Args    []string `json:"args,omitempty"`
+
+	// Env extras layered on top of the parent process env (last-write
+	// wins). The subprocess sees the parent's full env including
+	// ambient credentials — configure MCP servers you trust.
+	Env map[string]string `json:"env,omitempty"`
+}
+
+// resolveType returns the effective transport type for a Server: "http",
+// "stdio", or "" (unresolvable). Explicit Type wins (lowercased); otherwise
+// Command implies stdio, URL implies http.
+func resolveType(s Server) string {
+	if s.Type != "" {
+		return strings.ToLower(s.Type)
+	}
+	if s.Command != "" {
+		return "stdio"
+	}
+	if s.URL != "" {
+		return "http"
+	}
+	return ""
 }
 
 // Client connects to MCP servers and exposes the union of their tools.
@@ -157,11 +186,23 @@ func (c *Client) Connect(ctx context.Context) error {
 	return nil
 }
 
-// connectServer dials one server and runs the handshake + tools/list.
+// connectServer dispatches to connectHTTP or connectStdio based on the
+// server's resolved transport type.
 func (c *Client) connectServer(ctx context.Context, name string, cfg Server) (*serverConn, error) {
-	if cfg.Type != "" && cfg.Type != "http" {
-		return nil, fmt.Errorf("mcp %s: unsupported transport type %q (only \"http\" supported)", name, cfg.Type)
+	switch resolveType(cfg) {
+	case "http":
+		return c.connectHTTP(ctx, name, cfg)
+	case "stdio":
+		return c.connectStdio(ctx, name, cfg)
+	case "":
+		return nil, fmt.Errorf("mcp %s: server config has neither URL nor Command", name)
+	default:
+		return nil, fmt.Errorf("mcp %s: unsupported transport type %q (want \"http\" or \"stdio\")", name, cfg.Type)
 	}
+}
+
+// connectHTTP dials an HTTP MCP server and runs the handshake + tools/list.
+func (c *Client) connectHTTP(ctx context.Context, name string, cfg Server) (*serverConn, error) {
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("mcp %s: empty URL", name)
 	}
@@ -210,6 +251,11 @@ func (c *Client) connectServer(ctx context.Context, name string, cfg Server) (*s
 		client: cl,
 		tools:  listRes.Tools,
 	}, nil
+}
+
+// connectStdio is a stub — Phase A2 replaces this with real wiring.
+func (c *Client) connectStdio(_ context.Context, _ string, _ Server) (*serverConn, error) {
+	return nil, errors.New("stdio not yet wired")
 }
 
 // Tools returns all tools across all connected servers, qualified as
