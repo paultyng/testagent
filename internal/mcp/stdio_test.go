@@ -5,31 +5,22 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-
-	"github.com/paultyng/testagent/internal/shellrun"
 )
 
 // TestStdio_Roundtrip exercises the full path through the public Client
 // surface: NewClient → Connect → Tools → Call → Close. Validates that
 // stdio MCP servers are first-class consumers of the cross-vendor client.
 //
-// Skipped on Windows when shellrun.AfterStart is a no-op (i.e. no
-// Job-object cleanup available) — per cross-OS plan, tree-kill semantics
-// are Unix-verified and the runner code on Windows is exercised by
-// TestConnectStdio_HelloWorld + TestConnectStdio_StderrPassthrough which
-// don't require process-group probing.
+// Skipped on Windows: tree-kill verification depends on syscall.Kill
+// (covered in Unix-tagged tests). Windows runner code is exercised by
+// the e2e test in mcp_stdio_e2e_test.go via the cursor adapter's
+// mcp list-tools subcommand, which goes through the same connectStdio
+// path without needing a PID-liveness probe.
 func TestStdio_Roundtrip(t *testing.T) {
 	t.Parallel()
 
 	if runtime.GOOS == "windows" {
-		// Use a dummy *exec.Cmd to probe whether AfterStart is a no-op on
-		// this platform. The Windows variant returns a cleanup func that's
-		// non-no-op (assigns to a Job object); the Unix variant returns a
-		// trivial closure. We're already on Windows here, so a non-no-op
-		// AfterStart means the Job-object path is available.
-		cleanup := shellrun.AfterStart(nil)
-		_ = cleanup
-		t.Skip("Windows process-group semantics covered in Unix-only tests; roundtrip skipped pending Job-object verification harness")
+		t.Skip("PID-liveness probing is Unix-only; cross-platform stdio coverage in mcp_stdio_e2e_test.go")
 	}
 
 	bin := stdioFixtureBinary(t)

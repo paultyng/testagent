@@ -140,7 +140,12 @@ func newMCPListToolsCommand(_ *rootflags.Flags, cf *flags) *cobra.Command {
 				return fmt.Errorf("server %q is disabled", serverName)
 			}
 
-			ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+			// 60s budget covers cold-cache npx-installed servers (the
+			// first-run download for @modelcontextprotocol/server-* is
+			// often 10-30s on fresh CI runners). HTTP transports
+			// complete in well under a second; the same ceiling is
+			// fine for both transport types.
+			ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
 			defer cancel()
 
 			core := srv.toCoreServer()
