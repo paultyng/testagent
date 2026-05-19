@@ -1,3 +1,12 @@
+//go:build unix
+
+// The stdio transport tests probe subprocess liveness via syscall.Kill,
+// which is Unix-only. Windows uses Job-object semantics (see
+// internal/shellrun/shellrun_windows.go) which would need a different
+// probe — out of scope for this PR. The fixture binary itself builds
+// and runs on Windows (see testdata/stdio-server/spawn_windows.go);
+// only the verification path here is Unix-gated.
+
 package mcp
 
 import (
