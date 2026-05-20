@@ -105,6 +105,7 @@ func NewCommand(rf *rootflags.Flags) *cobra.Command {
 	cmd.AddCommand(newResumeCommand())
 	cmd.AddCommand(newLsCommand())
 	cmd.AddCommand(newMCPCommand(rf, cf))
+	cmd.AddCommand(newValidateCommand())
 
 	return cmd
 }
