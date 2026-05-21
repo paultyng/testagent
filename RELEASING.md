@@ -239,6 +239,27 @@ Not yet. v0.x releases are unsigned. Cosign / Sigstore keyless signing
 is planned for v1.1+ once the surface stabilises and a signing-key story
 is committed to.
 
+## Upstream drift policy
+
+The weekly `.github/workflows/upstream-drift.yml` job opens a draft PR
+when a vendor's docs publish a new config example that passes
+`testagent <vendor> validate --strict`. The release-cutter's role:
+
+- **If a drift PR is open at tag time**: merge it before tagging IF
+  the new fixtures pass CI and the additions are uncontroversial
+  (new shapes that exercise the existing schema, not new fields).
+  Skip when the PR surfaces a real validator gap (the new example
+  fails `--strict` because the allowlist is missing an event/field);
+  in that case, defer the corpus update to a follow-up after the
+  allowlist widening lands via `update-compatibility`.
+
+- **If no drift PR is open**: nothing to do; the corpus is in sync.
+
+The drift PR is informational and additive — never blocks a release.
+The validator tests (`TestRunValidate_*UpstreamExamples`) already
+catch any in-tree fixture that stops passing `--strict`; the drift
+PR only adds new fixtures discovered upstream.
+
 ## Out of scope (for now)
 
 - Homebrew tap / formula
