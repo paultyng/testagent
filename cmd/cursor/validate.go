@@ -112,10 +112,25 @@ func validateHooksFile(path string, strict bool, col *configvalidate.Collector) 
 			col.Addf(path, 0, "unknown hook event %q (%s)", event,
 				configvalidate.Suggest(event, knownCursorEvents))
 		}
-		for _, entry := range entries {
+		if len(entries) == 0 {
+			col.Addf(path, 0, "hooks.%s has zero entries", event)
+			continue
+		}
+		for i, entry := range entries {
 			if entry.Type != "" && !configvalidate.ContainsStr(knownCursorHookTypes, entry.Type) {
-				col.Addf(path, 0, "unknown hook type %q (%s)", entry.Type,
-					configvalidate.Suggest(entry.Type, knownCursorHookTypes))
+				col.Addf(path, 0, "hooks.%s[%d] unknown type %q (%s)",
+					event, i, entry.Type, configvalidate.Suggest(entry.Type, knownCursorHookTypes))
+				continue
+			}
+			// Empty type defaults to "command"; only command-type entries
+			// carry the value in the Command field. Prompt-type entries
+			// store content in a separate "prompt" field the runner skips
+			// today (see internal/cursorhooks/runner.go), so we don't
+			// gate on it here.
+			if entry.Type == "" || entry.Type == "command" {
+				if entry.Command == "" {
+					col.Addf(path, 0, "hooks.%s[%d] type=command requires command", event, i)
+				}
 			}
 		}
 	}

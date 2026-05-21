@@ -101,7 +101,49 @@ func TestRunValidate_Cursor(t *testing.T) {
 			writeHooks:  true,
 			strict:      true,
 			wantCode:    configvalidate.ExitErrors,
-			wantSubstrs: []string{`unknown hook type "promppt"`, `did you mean "prompt"`},
+			wantSubstrs: []string{`unknown type "promppt"`, `did you mean "prompt"`},
+		},
+		{
+			name: "strict rejects zero entries under an event",
+			hooksBody: `{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": []
+  }
+}`,
+			writeHooks:  true,
+			strict:      true,
+			wantCode:    configvalidate.ExitErrors,
+			wantSubstrs: []string{`hooks.beforeShellExecution has zero entries`},
+		},
+		{
+			name: "strict rejects command-type entry with empty command",
+			hooksBody: `{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {"type": "command"}
+    ]
+  }
+}`,
+			writeHooks:  true,
+			strict:      true,
+			wantCode:    configvalidate.ExitErrors,
+			wantSubstrs: []string{`hooks.beforeShellExecution[0] type=command requires command`},
+		},
+		{
+			name: "strict accepts prompt-type entry without command",
+			hooksBody: `{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {"type": "prompt"}
+    ]
+  }
+}`,
+			writeHooks: true,
+			strict:     true,
+			wantCode:   configvalidate.ExitOK,
 		},
 		{
 			name:     "missing config files OK",

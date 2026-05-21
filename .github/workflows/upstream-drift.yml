@@ -12,6 +12,11 @@ permissions:
 jobs:
   detect:
     runs-on: ubuntu-latest
+    # Serialize per-vendor so the cron + a manual workflow_dispatch on the
+    # same day can't both create + push chore/upstream-drift-<vendor>-<DATE>.
+    concurrency:
+      group: upstream-drift-${{ matrix.vendor }}
+      cancel-in-progress: false
     strategy:
       matrix:
         vendor: [claude, codex, cursor]
