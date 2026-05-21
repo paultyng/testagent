@@ -1,0 +1,7 @@
+[[hooks.pre_tool_use]]
+matcher = "^Bash$"
+
+[[hooks.pre_tool_use.hooks]]
+type = "command"
+command = '/usr/bin/python3 "$(git rev-parse --show-toplevel)/.codex/hooks/pre_tool_use_policy.py"'
+timeout = 30

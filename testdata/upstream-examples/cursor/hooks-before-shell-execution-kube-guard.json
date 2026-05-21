@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "python3 .cursor/hooks/kube_guard.py"
+      }
+    ]
+  }
+}
