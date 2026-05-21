@@ -70,12 +70,15 @@ extract_blocks() {
     *) ext="txt" ;;
   esac
 
+  # Closer matches `^``` <optional trailing whitespace> $` rather than
+  # `^```` (anywhere) so a 4-backtick wrapper inside a 3-backtick block
+  # doesn't false-close the capture.
   awk -v lang="$lang" -v outdir="$outdir" -v ext="$ext" '
     BEGIN { in_block=0; block_n=0; buf="" }
-    /^```'"$lang"'/ {
+    /^```'"$lang"'[[:space:]]*$/ {
       in_block=1; buf=""; next
     }
-    in_block && /^```/ {
+    in_block && /^```[[:space:]]*$/ {
       in_block=0
       if (length(buf) > 0) {
         block_n++
@@ -278,7 +281,12 @@ if [[ ${#ADDED_FILES[@]} -eq 0 ]]; then
   exit 0
 fi
 
-EXISTING_PR="$(gh pr list --search "in:title \"upstream-config drift detected ($VENDOR)\" state:open" --json number,url --jq '.[0].url' 2>/dev/null || true)"
+# GitHub search treats `(` and `)` as query delimiters, so the title
+# literal must not be passed in the --search expression. List open PRs
+# and exact-match the title via jq instead.
+EXISTING_PR="$(gh pr list --state open --json number,url,title --jq \
+  '.[] | select(.title == "chore(testdata): upstream-config drift detected ('"$VENDOR"')") | .url' \
+  2>/dev/null | head -n 1 || true)"
 if [[ -n "$EXISTING_PR" ]]; then
   echo "Drift PR already open for $VENDOR: $EXISTING_PR — skipping creation."
   exit 0
