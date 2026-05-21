@@ -108,16 +108,66 @@ sha256_file() {
 
 # Build a map of SHA256 -> filename for the corpus
 declare -A CORPUS_SHAS
-for f in "$CORPUS_DIR"/*.json "$CORPUS_DIR"/*.toml 2>/dev/null; do
+shopt -s nullglob
+for f in "$CORPUS_DIR"/*.json "$CORPUS_DIR"/*.toml; do
   [[ -f "$f" ]] || continue
   sha="$(sha256_file "$f")"
   CORPUS_SHAS["$sha"]="$f"
 done
+shopt -u nullglob
 
 ADDED_FILES=()
-DRIFTED_FILES=()
 SKIPPED_COUNT=0
 ADDED_SOURCES=()
+
+# try_validate <candidate> <vendor>
+# Returns 0 if any vendor slot accepts the candidate under --strict, and
+# echoes the slot prefix ("mcp" | "hooks" | "config") that accepted it.
+# Each `validate` subcommand consumes config differently:
+#   claude:  --settings <path> or --mcp-config <path>
+#   codex:   reads $CODEX_HOME/config.toml
+#   cursor:  --workspace <dir> with .cursor/{hooks,mcp}.json inside
+# We can't tell from a raw doc snippet which slot it belongs in, so we
+# try the plausible slots and accept the first that passes.
+try_validate() {
+  local candidate="$1"
+  local vendor="$2"
+  local sandbox
+  sandbox="$(mktemp -d "$WORK_DIR/sandbox_XXXXXX")"
+
+  case "$vendor" in
+    claude)
+      if "$TESTAGENT_BIN" claude validate --strict --mcp-config "$candidate" &>/dev/null; then
+        echo "mcp"; return 0
+      fi
+      if "$TESTAGENT_BIN" claude validate --strict --settings "$candidate" &>/dev/null; then
+        echo "settings"; return 0
+      fi
+      return 1
+      ;;
+    codex)
+      cp "$candidate" "$sandbox/config.toml"
+      if CODEX_HOME="$sandbox" "$TESTAGENT_BIN" codex validate --strict &>/dev/null; then
+        echo "config"; return 0
+      fi
+      return 1
+      ;;
+    cursor)
+      mkdir -p "$sandbox/.cursor"
+      cp "$candidate" "$sandbox/.cursor/hooks.json"
+      if "$TESTAGENT_BIN" cursor validate --strict --workspace "$sandbox" &>/dev/null; then
+        echo "hooks"; return 0
+      fi
+      rm -f "$sandbox/.cursor/hooks.json"
+      cp "$candidate" "$sandbox/.cursor/mcp.json"
+      if "$TESTAGENT_BIN" cursor validate --strict --workspace "$sandbox" &>/dev/null; then
+        echo "mcp"; return 0
+      fi
+      return 1
+      ;;
+  esac
+  return 1
+}
 
 process_candidate() {
   local candidate="$1"
@@ -137,23 +187,19 @@ process_candidate() {
     return
   fi
 
-  # Run validator
-  local validate_output
   local ext="$lang"
-  local tmp_candidate
-  tmp_candidate="$(mktemp "$WORK_DIR/candidate_XXXXXX.$ext")"
-  cp "$candidate" "$tmp_candidate"
-
-  if "$TESTAGENT_BIN" "$VENDOR" validate --strict < "$tmp_candidate" &>/dev/null; then
-    # Passing — propose for corpus
-    # Generate a slug from content hash (first 8 chars) to avoid collisions
+  local slot
+  if slot="$(try_validate "$candidate" "$VENDOR")"; then
+    # Passing — propose for corpus. Slug embeds the accepting slot so
+    # the Phase 2 parameterized tests route the fixture correctly on
+    # re-validation.
     local slug
-    slug="upstream-$(date +%Y%m%d)-$(echo "$sha" | cut -c1-8)"
+    slug="${slot}-upstream-$(date +%Y%m%d)-$(echo "$sha" | cut -c1-8)"
     local dest="$CORPUS_DIR/${slug}.${ext}"
-    cp "$tmp_candidate" "$dest"
+    cp "$candidate" "$dest"
 
     # Write .source sibling
-    cat > "${dest%.${ext}}.source" <<EOF
+    cat > "${dest%."${ext}"}.source" <<EOF
 url: $source_url
 verified: $(date +%Y-%m-%d)
 EOF
