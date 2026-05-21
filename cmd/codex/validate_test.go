@@ -147,3 +147,40 @@ command = "echo"
 		})
 	}
 }
+
+func TestRunValidate_CodexUpstreamExamples(t *testing.T) {
+	// No t.Parallel() — env is process-global (CODEX_HOME via t.Setenv).
+	fixtures, err := filepath.Glob("../../testdata/upstream-examples/codex/*.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fixtures) == 0 {
+		t.Fatal("no fixtures found in testdata/upstream-examples/codex/")
+	}
+	for _, path := range fixtures {
+		path := path
+		name := filepath.Base(path)
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("CODEX_HOME", dir)
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatalf("reading fixture %s: %v", path, readErr)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "config.toml"), data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var stderr bytes.Buffer
+			runErr := runValidate(&stderr, true)
+			var ex *claude.ExitError
+			if errors.As(runErr, &ex) {
+				t.Errorf("fixture %s: exit code = %d, want ExitOK; stderr=%q", path, ex.Code, stderr.String())
+			} else if runErr != nil {
+				t.Errorf("fixture %s: unexpected error: %v; stderr=%q", path, runErr, stderr.String())
+			}
+			if stderr.Len() != 0 {
+				t.Errorf("fixture %s: expected empty stderr, got %q", path, stderr.String())
+			}
+		})
+	}
+}

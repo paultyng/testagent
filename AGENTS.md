@@ -51,6 +51,29 @@ Taskfile.yaml               # build / test / lint / ci / gen:demo / dumpcli:clau
 
 The argv shape is `testagent [global-flags] <subcommand> [subcommand-flags]`. Bare invocation prepends `claude` so v0 scripts (no subcommand) keep working. Lone `--help` / `-h` routes to root help, not claude help.
 
+## Upstream config corpus
+
+`testdata/upstream-examples/<vendor>/` vendors representative config examples
+pulled from each vendor's public documentation. Each fixture has a sibling
+`.source` file with two lines: `url: <docs URL>` + `verified: <ISO date>`.
+Fixtures must pass `<vendor> validate --strict`; examples using fields the
+allowlist doesn't recognize are dropped (the drift workflow surfaces those
+gaps separately).
+
+### Contribution policy
+
+**Default — loose**: when widening a validator allowlist (new event constant,
+new hook type, new transport), the PR updates only the allowlist and an inline
+`validate_test.go` case demonstrating the new shape. The weekly upstream-drift
+workflow picks up the corresponding canonical fixture from upstream docs on
+its next run.
+
+**Exception — zero-coverage**: if the PR adds a code path with zero test
+coverage (no inline case, no fixture, no other test exercising the new
+schema branch), it must include EITHER an inline `validate_test.go` case
+OR a corpus fixture from upstream docs. Reviewer enforces — every new code
+path must be exercised by at least one test before merge.
+
 ## Future conventions (apply when phase 3+ lands)
 
 - **More vendors** under `cmd/<vendor>/`: gemini, copilot, aider, amp, q, goose, crush.

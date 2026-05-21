@@ -155,3 +155,53 @@ func TestRunValidate_Cursor(t *testing.T) {
 		})
 	}
 }
+
+func TestRunValidate_CursorUpstreamExamples(t *testing.T) {
+	t.Parallel()
+	fixtures, err := filepath.Glob("../../testdata/upstream-examples/cursor/*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fixtures) == 0 {
+		t.Fatal("no fixtures found in testdata/upstream-examples/cursor/")
+	}
+	for _, path := range fixtures {
+		path := path
+		name := filepath.Base(path)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			cursorDir := filepath.Join(dir, ".cursor")
+			if err := os.MkdirAll(cursorDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatalf("reading fixture %s: %v", path, readErr)
+			}
+			var dest string
+			switch {
+			case strings.HasPrefix(name, "hooks-"):
+				dest = filepath.Join(cursorDir, "hooks.json")
+			case strings.HasPrefix(name, "mcp-"):
+				dest = filepath.Join(cursorDir, "mcp.json")
+			default:
+				t.Fatalf("fixture %s: cannot determine target file (no hooks- or mcp- prefix)", name)
+			}
+			if err := os.WriteFile(dest, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var stderr bytes.Buffer
+			runErr := runValidate(&stderr, dir, true)
+			var ex *claude.ExitError
+			if errors.As(runErr, &ex) {
+				t.Errorf("fixture %s: exit code = %d, want ExitOK; stderr=%q", path, ex.Code, stderr.String())
+			} else if runErr != nil {
+				t.Errorf("fixture %s: unexpected error: %v; stderr=%q", path, runErr, stderr.String())
+			}
+			if stderr.Len() != 0 {
+				t.Errorf("fixture %s: expected empty stderr, got %q", path, stderr.String())
+			}
+		})
+	}
+}
