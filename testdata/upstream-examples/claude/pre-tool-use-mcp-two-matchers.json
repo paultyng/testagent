@@ -1,0 +1,1 @@
+{"hooks":{"PreToolUse":[{"matcher":"mcp__memory__.*","hooks":[{"type":"command","command":"echo 'Memory operation initiated' >> ~/mcp-operations.log"}]},{"matcher":"mcp__.*__write.*","hooks":[{"type":"command","command":"/home/user/scripts/validate-mcp-write.py"}]}]}}

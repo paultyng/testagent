@@ -1,0 +1,6 @@
+[[hooks.permission_request]]
+
+[[hooks.permission_request.hooks]]
+type = "command"
+command = "python3 .codex/hooks/permission_check.py"
+timeout = 120

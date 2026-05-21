@@ -184,3 +184,37 @@ func TestRunValidate_FileNotFound(t *testing.T) {
 		t.Fatalf("err = %v, want ExitError{Code=ExitUsageError}", err)
 	}
 }
+
+func TestRunValidate_ClaudeUpstreamExamples(t *testing.T) {
+	t.Parallel()
+	fixtures, err := filepath.Glob("../../testdata/upstream-examples/claude/*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fixtures) == 0 {
+		t.Fatal("no fixtures found in testdata/upstream-examples/claude/")
+	}
+	for _, path := range fixtures {
+		path := path
+		name := filepath.Base(path)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var stderr bytes.Buffer
+			var runErr error
+			if strings.HasPrefix(name, "mcp-") {
+				runErr = runValidate(&stderr, "", path, true)
+			} else {
+				runErr = runValidate(&stderr, path, "", true)
+			}
+			var ex *ExitError
+			if errors.As(runErr, &ex) {
+				t.Errorf("fixture %s: exit code = %d, want ExitOK; stderr=%q", path, ex.Code, stderr.String())
+			} else if runErr != nil {
+				t.Errorf("fixture %s: unexpected error: %v; stderr=%q", path, runErr, stderr.String())
+			}
+			if stderr.Len() != 0 {
+				t.Errorf("fixture %s: expected empty stderr, got %q", path, stderr.String())
+			}
+		})
+	}
+}

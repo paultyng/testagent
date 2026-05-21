@@ -412,6 +412,7 @@ Cursor's user-facing surface is under `cursor agent`; bare `cursor agent [prompt
 | `cursor agent status\|whoami` | `accepted` | Canned auth status; `--format text\|json` honored |
 | `cursor agent uninstall-shell-integration` | `not relevant` | Symmetric to install-shell-integration |
 | `cursor agent update` | `not relevant` | Self-update; testagent has its own release cadence |
+| `cursor agent validate` | `✓ supported (testagent-only)` | Validates `.cursor/{mcp,hooks}.json` against the documented schema. `--strict` adds unknown-event + unknown-hook-type checks. No real-cursor equivalent — testagent extension for CI use. |
 
 ### Flags (global / interactive)
 

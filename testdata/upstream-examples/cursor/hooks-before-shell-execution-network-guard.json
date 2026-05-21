@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "./scripts/approve-network.sh",
+        "timeout": 30,
+        "matcher": "curl|wget|nc"
+      }
+    ]
+  }
+}
