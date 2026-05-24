@@ -18,6 +18,9 @@ jobs:
       group: upstream-drift-${{ matrix.vendor }}
       cancel-in-progress: false
     strategy:
+      # One vendor's failure shouldn't kill in-flight runs for the
+      # others. Each vendor's drift is independent.
+      fail-fast: false
       matrix:
         vendor: [claude, codex, cursor]
     steps:

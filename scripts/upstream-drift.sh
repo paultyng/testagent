@@ -332,6 +332,12 @@ PRBODY
 DATE="$(date +%Y%m%d)"
 BRANCH="chore/upstream-drift-${VENDOR}-${DATE}"
 
+# GitHub Actions runners have no default git identity; without these
+# two configs the commit below fails with "empty ident name not
+# allowed". Using the conventional github-actions[bot] identity.
+git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+git config user.name "github-actions[bot]"
+
 git checkout -b "$BRANCH"
 git add "$CORPUS_DIR"
 git commit -m "chore(testdata): upstream-config drift detected ($VENDOR)"
