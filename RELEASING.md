@@ -260,6 +260,43 @@ The validator tests (`TestRunValidate_*UpstreamExamples`) already
 catch any in-tree fixture that stops passing `--strict`; the drift
 PR only adds new fixtures discovered upstream.
 
+### Validator semantics
+
+testagent exists so consuming CI can test their `claude` / `codex` /
+`cursor` compliance against the same surface the real vendor binaries
+expose. That gives one hard rule:
+
+> **`testagent <vendor> validate` must match what the real vendor
+> binary accepts, even when testagent's own runtime doesn't model
+> every field.**
+
+Practical consequences when evaluating a drift PR:
+
+- A doc example that passes our validator but looks stale or wrong
+  is a doc bug — drop the fixture, file an upstream report. Don't
+  tighten the validator to reject things the real vendor still
+  accepts.
+- A doc example that fails our validator might be the docs being
+  right and us missing coverage (widen via `update-compatibility`)
+  or the docs being wrong (skip). Disambiguate by checking the real
+  binary, not by re-reading the docs.
+- "Runtime > docs" when they conflict. When uncertain, sandbox the
+  real `<vendor>` binary against the candidate before merging.
+
+### CI on drift PRs
+
+Drift PRs are authored by `GITHUB_TOKEN`, which deliberately does
+not trigger downstream workflows — so `ci.yml` won't run
+automatically and `mergeStateStatus` will sit at `BLOCKED`. To kick
+required checks, push an empty commit to the drift branch:
+
+    gh pr checkout <number>
+    git commit --allow-empty -m "ci: kick checks"
+    git push
+
+Then review + merge normally once the 3 `build-test` checks land
+green.
+
 ## Out of scope (for now)
 
 - Homebrew tap / formula

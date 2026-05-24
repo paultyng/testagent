@@ -123,53 +123,89 @@ ADDED_FILES=()
 SKIPPED_COUNT=0
 ADDED_SOURCES=()
 
-# try_validate <candidate> <vendor>
-# Returns 0 if any vendor slot accepts the candidate under --strict, and
-# echoes the slot prefix ("mcp" | "hooks" | "config") that accepted it.
-# Each `validate` subcommand consumes config differently:
-#   claude:  --settings <path> or --mcp-config <path>
-#   codex:   reads $CODEX_HOME/config.toml
-#   cursor:  --workspace <dir> with .cursor/{hooks,mcp}.json inside
-# We can't tell from a raw doc snippet which slot it belongs in, so we
-# try the plausible slots and accept the first that passes.
-try_validate() {
+# detect_slot <candidate> <vendor>
+# Pick the file slot a doc example belongs in based on its top-level
+# JSON keys. The slot determines:
+#   - where in the sandbox the candidate gets dropped before
+#     `validate --strict` runs
+#   - the slug prefix of the vendored fixture, which the Phase 2
+#     parameterized tests use to dispatch on re-validation
+# Trial-and-error slot routing pollutes the corpus when a lax slot
+# (e.g. cursor's parse-only mcp.json validation) accepts content that
+# really belongs in another slot; pick from the shape, not from which
+# slot happens to not error.
+detect_slot() {
   local candidate="$1"
   local vendor="$2"
-  local sandbox
-  sandbox="$(mktemp -d "$WORK_DIR/sandbox_XXXXXX")"
-
   case "$vendor" in
     claude)
-      if "$TESTAGENT_BIN" claude validate --strict --mcp-config "$candidate" &>/dev/null; then
+      # Combined settings.json (real Claude Code accepts hooks +
+      # mcpServers in one file) → settings. Otherwise route by which
+      # of the two top-level keys is present.
+      if jq -e 'has("mcpServers") and (has("hooks") or has("permissions"))' "$candidate" >/dev/null 2>&1; then
+        echo "settings"; return 0
+      fi
+      if jq -e 'has("mcpServers")' "$candidate" >/dev/null 2>&1; then
         echo "mcp"; return 0
       fi
-      if "$TESTAGENT_BIN" claude validate --strict --settings "$candidate" &>/dev/null; then
+      if jq -e 'has("hooks") or has("permissions")' "$candidate" >/dev/null 2>&1; then
         echo "settings"; return 0
       fi
       return 1
       ;;
     codex)
-      cp "$candidate" "$sandbox/config.toml"
-      if CODEX_HOME="$sandbox" "$TESTAGENT_BIN" codex validate --strict &>/dev/null; then
-        echo "config"; return 0
-      fi
-      return 1
+      # codex is single-file; no detection needed.
+      echo "config"; return 0
       ;;
     cursor)
-      mkdir -p "$sandbox/.cursor"
-      cp "$candidate" "$sandbox/.cursor/hooks.json"
-      if "$TESTAGENT_BIN" cursor validate --strict --workspace "$sandbox" &>/dev/null; then
-        echo "hooks"; return 0
-      fi
-      rm -f "$sandbox/.cursor/hooks.json"
-      cp "$candidate" "$sandbox/.cursor/mcp.json"
-      if "$TESTAGENT_BIN" cursor validate --strict --workspace "$sandbox" &>/dev/null; then
+      if jq -e 'has("mcpServers")' "$candidate" >/dev/null 2>&1; then
         echo "mcp"; return 0
+      fi
+      if jq -e 'has("hooks")' "$candidate" >/dev/null 2>&1; then
+        echo "hooks"; return 0
       fi
       return 1
       ;;
   esac
   return 1
+}
+
+# try_validate <candidate> <vendor>
+# Detect the slot the candidate belongs in, drop it at the vendor-
+# expected path, run `validate --strict`. Echo the slot on success.
+# A candidate whose shape doesn't match any known slot is skipped
+# (counted toward SKIPPED_COUNT by the caller).
+try_validate() {
+  local candidate="$1"
+  local vendor="$2"
+  local slot
+  slot="$(detect_slot "$candidate" "$vendor")" || return 1
+
+  local sandbox
+  sandbox="$(mktemp -d "$WORK_DIR/sandbox_XXXXXX")"
+
+  case "$vendor" in
+    claude)
+      case "$slot" in
+        mcp)
+          "$TESTAGENT_BIN" claude validate --strict --mcp-config "$candidate" &>/dev/null || return 1
+          ;;
+        settings)
+          "$TESTAGENT_BIN" claude validate --strict --settings "$candidate" &>/dev/null || return 1
+          ;;
+      esac
+      ;;
+    codex)
+      cp "$candidate" "$sandbox/config.toml"
+      CODEX_HOME="$sandbox" "$TESTAGENT_BIN" codex validate --strict &>/dev/null || return 1
+      ;;
+    cursor)
+      mkdir -p "$sandbox/.cursor"
+      cp "$candidate" "$sandbox/.cursor/${slot}.json"
+      "$TESTAGENT_BIN" cursor validate --strict --workspace "$sandbox" &>/dev/null || return 1
+      ;;
+  esac
+  echo "$slot"
 }
 
 process_candidate() {
@@ -321,6 +357,33 @@ None detected in this run.
 ### Skipped — fail --strict
 
 - $SKIPPED_COUNT examples failed \`testagent $VENDOR validate --strict\`; tracked separately in \`update-compatibility\`.
+
+## How to evaluate
+
+Each Added fixture passed \`testagent $VENDOR validate --strict\` in the
+workflow. That's necessary but not sufficient — **runtime behavior of
+the actual vendor binary (\`claude\` / \`codex\` / \`cursor\`) is the
+canonical source of truth, not the docs page**. testagent's job is to
+match what the real vendor accepts, even when testagent's own internal
+runtime doesn't model every field.
+
+Triage rules:
+
+1. **Added**: spot-check each fixture matches what the real vendor
+   binary would accept. If our validator accepts a fixture but the
+   doc example looks stale or wrong (typo, deprecated key), drop it
+   from this PR and file an upstream doc bug — **don't widen our
+   validator to match a wrong doc**.
+2. **Skipped — fail --strict**: doc examples we couldn't accept.
+   Sometimes the doc is right and we're missing schema coverage
+   (→ extend the allowlist via \`update-compatibility\`). Sometimes
+   the doc is wrong (→ leave it skipped).
+3. **Drifted**: existing fixture diverges from upstream. If the real
+   vendor actually broke compat, treat it as a vendor break and
+   update the validator. If only the docs drifted, skip.
+
+When uncertain, run the real \`$VENDOR\` binary against the fixture in
+a sandbox before merging.
 
 🤖 Generated by \`.github/workflows/upstream-drift.yml\`
 PRBODY
