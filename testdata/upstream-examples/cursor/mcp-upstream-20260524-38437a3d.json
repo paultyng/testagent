@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{ "command": "./session-init.sh" }],
+    "sessionEnd": [{ "command": "./audit.sh" }],
+    "preToolUse": [
+      {
+        "command": "./hooks/validate-tool.sh",
+        "matcher": "Shell|Read|Write"
+      }
+    ],
+    "postToolUse": [{ "command": "./hooks/audit-tool.sh" }],
+    "subagentStart": [{ "command": "./hooks/validate-subagent.sh" }],
+    "subagentStop": [{ "command": "./hooks/audit-subagent.sh" }],
+    "beforeShellExecution": [{ "command": "./script.sh" }],
+    "afterShellExecution": [{ "command": "./script.sh" }],
+    "afterMCPExecution": [{ "command": "./script.sh" }],
+    "afterFileEdit": [{ "command": "./format.sh" }],
+    "preCompact": [{ "command": "./audit.sh" }],
+    "stop": [{ "command": "./audit.sh", "loop_limit": 10 }],
+    "beforeTabFileRead": [{ "command": "./redact-secrets-tab.sh" }],
+    "afterTabFileEdit": [{ "command": "./format-tab.sh" }],
+    "workspaceOpen": [{ "command": "./register-workspace-plugins.sh" }]
+  }
+}

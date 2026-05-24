@@ -1,0 +1,22 @@
+{
+  "hooks": {
+    "preToolUse": [
+      {
+        "command": "./validate-shell.sh",
+        "matcher": "Shell"
+      }
+    ],
+    "subagentStart": [
+      {
+        "command": "./validate-explore.sh",
+        "matcher": "explore|shell"
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "./approve-network.sh",
+        "matcher": "curl|wget|nc "
+      }
+    ]
+  }
+}
