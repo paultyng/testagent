@@ -405,6 +405,11 @@ git checkout -b "$BRANCH"
 git add "$CORPUS_DIR"
 git commit -m "chore(testdata): upstream-config drift detected ($VENDOR)"
 
+# If a remote branch with this name exists from a prior closed/abandoned
+# attempt on the same day, drop it before pushing. The dedupe guard
+# above already short-circuits the open-PR case, so reaching this point
+# means any stale ref is from a closed PR and safe to discard.
+git push --delete origin "$BRANCH" 2>/dev/null || true
 git push origin "$BRANCH"
 
 gh pr create \
