@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "remote-server": {
+      "url": "https://api.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${env:MY_SERVICE_TOKEN}"
+      }
+    }
+  }
+}
