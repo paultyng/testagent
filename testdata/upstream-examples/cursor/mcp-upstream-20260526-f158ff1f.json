@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "oauth-server": {
+      "url": "https://api.example.com/mcp",
+      "auth": {
+        "CLIENT_ID": "${env:MCP_CLIENT_ID}",
+        "CLIENT_SECRET": "${env:MCP_CLIENT_SECRET}"
+      }
+    }
+  }
+}

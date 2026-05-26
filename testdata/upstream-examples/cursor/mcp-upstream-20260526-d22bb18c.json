@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "local-server": {
+      "command": "python",
+      "args": ["${workspaceFolder}/tools/mcp_server.py"],
+      "env": {
+        "API_KEY": "${env:API_KEY}"
+      }
+    }
+  }
+}
