@@ -123,6 +123,17 @@ ADDED_FILES=()
 SKIPPED_COUNT=0
 ADDED_SOURCES=()
 
+# Track which existing corpus shas we observed in fetched doc blocks.
+# After all candidates are processed, any corpus sha NOT in this map
+# is a retirement candidate (no longer present upstream).
+declare -A SEEN_CORPUS_SHAS
+
+# Track the URLs we actually fetched this run, so retirement can
+# distinguish "fixture's source page was fetched and the bytes are
+# gone" (real retirement) from "fixture's source page was never
+# fetched" (false-positive if vendor docs restructure).
+FETCHED_URLS=""
+
 # detect_slot <candidate> <vendor>
 # Pick the file slot a doc example belongs in based on its top-level
 # JSON keys. The slot determines:
@@ -221,8 +232,10 @@ process_candidate() {
   local sha
   sha="$(sha256_file "$candidate")"
 
-  # Already vendored verbatim?
+  # Already vendored verbatim? Mark as seen so the retirement loop
+  # below doesn't false-retire it.
   if [[ -n "${CORPUS_SHAS[$sha]:-}" ]]; then
+    SEEN_CORPUS_SHAS["$sha"]=1
     return
   fi
 
@@ -267,6 +280,7 @@ case "$VENDOR" in
       if [[ -z "$page_content" ]]; then
         continue
       fi
+      FETCHED_URLS+="$page_url"$'\n'
       page_file="$(mktemp "$WORK_DIR/page_XXXXXX.md")"
       printf '%s' "$page_content" > "$page_file"
       block_dir="$(mktemp -d "$WORK_DIR/blocks_XXXXXX")"
@@ -285,6 +299,7 @@ case "$VENDOR" in
       if [[ -z "$page_content" ]]; then
         continue
       fi
+      FETCHED_URLS+="$page_url"$'\n'
       page_file="$(mktemp "$WORK_DIR/page_XXXXXX.md")"
       printf '%s' "$page_content" > "$page_file"
       block_dir="$(mktemp -d "$WORK_DIR/blocks_XXXXXX")"
@@ -297,6 +312,7 @@ case "$VENDOR" in
     ;;
 
   codex)
+    FETCHED_URLS+="https://github.com/openai/codex/blob/main/README.md"$'\n'
     readme_file="$(mktemp "$WORK_DIR/readme_XXXXXX.md")"
     fetch_codex_readme > "$readme_file"
     block_dir="$(mktemp -d "$WORK_DIR/blocks_XXXXXX")"
@@ -309,11 +325,63 @@ case "$VENDOR" in
 esac
 
 # ---------------------------------------------------------------------------
+# Step 5b: Retirement — corpus fixtures whose bytes are no longer in
+#                       any fetched doc block at the URL we recorded
+# ---------------------------------------------------------------------------
+
+RETIRED_FILES=()
+RETIRED_SOURCES=()
+RETIRED_VERIFIED=()
+
+# Vendor docs are often served at both `…/foo` and `…/foo.md` (the
+# llms.txt index uses the .md form; human-readable links don't).
+# Normalize by stripping trailing .md before URL comparison so a
+# Phase 1 fixture with `.source: …/hooks` matches a fetched
+# `…/hooks.md`.
+normalize_url() {
+  echo "${1%.md}"
+}
+
+NORMALIZED_FETCHED=""
+while IFS= read -r u; do
+  [[ -z "$u" ]] && continue
+  NORMALIZED_FETCHED+="$(normalize_url "$u")"$'\n'
+done <<<"$FETCHED_URLS"
+
+for corpus_sha in "${!CORPUS_SHAS[@]}"; do
+  # Saw this fixture's bytes in some fetched block? Keep it.
+  [[ -n "${SEEN_CORPUS_SHAS[$corpus_sha]:-}" ]] && continue
+
+  fixture="${CORPUS_SHAS[$corpus_sha]}"
+  source_file="${fixture%.*}.source"
+  [[ -f "$source_file" ]] || continue
+
+  source_url="$(awk '/^url:/ {print $2; exit}' "$source_file")"
+  verified="$(awk '/^verified:/ {print $2; exit}' "$source_file")"
+  [[ -z "$source_url" ]] && continue
+
+  norm_source="$(normalize_url "$source_url")"
+
+  # Only retire when the fixture's .source URL was actually fetched
+  # this run. Guards against false-positives when vendor docs URLs
+  # restructure (the page might still exist at a new URL with the
+  # same bytes; we just haven't refreshed our fetcher yet).
+  if grep -qFx "$norm_source" <<<"$NORMALIZED_FETCHED"; then
+    git rm -f "$fixture" "$source_file" >/dev/null
+    RETIRED_FILES+=("$fixture")
+    RETIRED_SOURCES+=("$source_url")
+    RETIRED_VERIFIED+=("${verified:-unknown}")
+  fi
+done
+
+# ---------------------------------------------------------------------------
 # Step 6: De-dupe guard
 # ---------------------------------------------------------------------------
 
-if [[ ${#ADDED_FILES[@]} -eq 0 ]]; then
-  echo "No net-new passing fixtures found for $VENDOR. Corpus is up to date."
+# Only short-circuit when there's nothing to report — neither added
+# nor retired. Retirements alone are reason enough to open a PR.
+if [[ ${#ADDED_FILES[@]} -eq 0 && ${#RETIRED_FILES[@]} -eq 0 ]]; then
+  echo "No net-new passing fixtures and no retirements for $VENDOR. Corpus is up to date."
   exit 0
 fi
 
@@ -337,22 +405,47 @@ PR_BODY_FILE="$(mktemp "$WORK_DIR/pr-body_XXXXXX.md")"
 cat > "$PR_BODY_FILE" <<PRBODY
 ## Upstream config drift detected — $VENDOR
 
-Net-new examples found in upstream docs that pass \`testagent $VENDOR validate --strict\`. Adding to the corpus.
+Reconciling testagent's corpus with current upstream docs.
 
-### Added
+### Added (${#ADDED_FILES[@]})
+
+Net-new examples found in docs that pass \`testagent $VENDOR validate --strict\`.
+
 PRBODY
 
-for i in "${!ADDED_FILES[@]}"; do
-  rel_path="${ADDED_FILES[$i]#$REPO_ROOT/}"
-  src="${ADDED_SOURCES[$i]:-unknown}"
-  echo "- \`$rel_path\` (from $src)" >> "$PR_BODY_FILE"
-done
+if [[ ${#ADDED_FILES[@]} -eq 0 ]]; then
+  echo "- _none_" >> "$PR_BODY_FILE"
+else
+  for i in "${!ADDED_FILES[@]}"; do
+    rel_path="${ADDED_FILES[$i]#$REPO_ROOT/}"
+    src="${ADDED_SOURCES[$i]:-unknown}"
+    echo "- \`$rel_path\` (from $src)" >> "$PR_BODY_FILE"
+  done
+fi
 
 cat >> "$PR_BODY_FILE" <<PRBODY
 
-### Drifted (existing fixture diverges from upstream)
+### Retired (${#RETIRED_FILES[@]})
 
-None detected in this run.
+Existing fixtures whose exact bytes are no longer present at the
+\`.source\` URL we recorded. Only fixtures whose source page was
+fetched this run are retired (guards against vendor docs URL
+restructures).
+
+PRBODY
+
+if [[ ${#RETIRED_FILES[@]} -eq 0 ]]; then
+  echo "- _none_" >> "$PR_BODY_FILE"
+else
+  for i in "${!RETIRED_FILES[@]}"; do
+    rel_path="${RETIRED_FILES[$i]#$REPO_ROOT/}"
+    src="${RETIRED_SOURCES[$i]:-unknown}"
+    verified="${RETIRED_VERIFIED[$i]:-unknown}"
+    echo "- \`$rel_path\` (last verified $verified at $src)" >> "$PR_BODY_FILE"
+  done
+fi
+
+cat >> "$PR_BODY_FILE" <<PRBODY
 
 ### Skipped — fail --strict
 
@@ -374,13 +467,15 @@ Triage rules:
    doc example looks stale or wrong (typo, deprecated key), drop it
    from this PR and file an upstream doc bug — **don't widen our
    validator to match a wrong doc**.
-2. **Skipped — fail --strict**: doc examples we couldn't accept.
+2. **Retired**: a fixture's exact bytes are no longer in upstream
+   docs at the URL we recorded. Default to accepting the retirement.
+   Push back only if the fixture exercises a real-world shape the
+   vendor still accepts at runtime — in which case keep it locally
+   and update the \`.source\` URL or add a comment explaining why.
+3. **Skipped — fail --strict**: doc examples we couldn't accept.
    Sometimes the doc is right and we're missing schema coverage
    (→ extend the allowlist via \`update-compatibility\`). Sometimes
    the doc is wrong (→ leave it skipped).
-3. **Drifted**: existing fixture diverges from upstream. If the real
-   vendor actually broke compat, treat it as a vendor break and
-   update the validator. If only the docs drifted, skip.
 
 When uncertain, run the real \`$VENDOR\` binary against the fixture in
 a sandbox before merging.
