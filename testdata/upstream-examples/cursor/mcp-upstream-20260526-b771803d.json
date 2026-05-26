@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "my-service": {
+      "url": "https://mcp.example.com/sse",
+      "headers": {
+        "Authorization": "Bearer your-token-here"
+      }
+    }
+  }
+}
