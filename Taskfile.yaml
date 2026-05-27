@@ -17,6 +17,12 @@ tasks:
       - go vet ./...
       - gofmt -l .
 
+  lint:shell:
+    desc: Syntax + shellcheck the upstream-drift script.
+    cmds:
+      - bash -n scripts/upstream-drift.sh
+      - shellcheck scripts/upstream-drift.sh
+
   ci:
     desc: Local CI dry-run — lint, test, build.
     deps: [lint, test, build]
