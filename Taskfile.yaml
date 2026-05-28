@@ -25,7 +25,7 @@ tasks:
 
   ci:
     desc: Local CI dry-run — lint, test, build.
-    deps: [lint, test, build]
+    deps: [lint, lint:shell, test, build]
 
   gen:demo:
     desc: Re-render per-vendor demo GIFs from their tape files via vhs.
