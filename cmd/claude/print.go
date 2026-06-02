@@ -25,6 +25,7 @@ import (
 
 	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/mcp"
+	"github.com/paultyng/testagent/internal/slash"
 )
 
 // printOptions bundles the inputs runPrint needs from main().
@@ -38,6 +39,7 @@ type printOptions struct {
 	resumed      bool // true when --resume was set; selects SessionStart source
 	hooks        *hooks.Sender
 	mcp          *mcp.Client
+	slash        *slash.Handler // optional; when set, a leading "/" routes through it
 }
 
 // runPrint executes one non-interactive turn and returns the exit code.
@@ -74,6 +76,40 @@ func runPrint(ctx context.Context, opt printOptions, stdin io.Reader, stdout io.
 		fmt.Fprintf(os.Stderr, "testagent: hook OnPrompt: %v\n", err)
 	}
 
+	// Leading-slash dispatch: walk the prompt line by line and route every
+	// leading line that starts with "/" through the slash handler, stopping
+	// at the first non-slash line (or at a terminal /think / /stream). The
+	// remainder becomes the prompt echoed below; if no remainder exists, we
+	// fire teardown and exit without echoing. Diverges from real claude
+	// (which sends "/help" to the model as literal text) — the divergence is
+	// intentional: testagent is a fake driven by orchestrator scripts, and
+	// dispatching slashes from -p is a useful hook (notably /think and
+	// /stream as a generic pacing mechanism, since print mode has no
+	// per-turn engine timing).
+	if opt.slash != nil {
+		pre := opt.slash.PrePromptDispatch(ctx, prompt)
+		fmt.Fprint(stdout, pre.Rendered)
+		if pre.Exit {
+			printTeardown(ctx, opt, "")
+			return pre.ExitCode
+		}
+		for _, d := range pre.Sleeps {
+			sleepCtx(ctx, d)
+		}
+		if pre.Prompt == "" && pre.Rendered != "" {
+			// Pure side-effect dispatch with no residual prompt: emit the
+			// rendered slash output (already written) and skip the echo
+			// path. --output-format wrapping is bypassed by design — the
+			// slash render is the response; wrapping ANSI-styled text into
+			// a JSON `result` field would be more confusing than helpful.
+			printTeardown(ctx, opt, "")
+			return 0
+		}
+		if pre.Prompt != "" {
+			prompt = pre.Prompt
+		}
+	}
+
 	start := time.Now()
 	response := fmt.Sprintf("[%s] %s", opt.name, prompt)
 	durationMs := time.Since(start).Milliseconds()
@@ -92,6 +128,15 @@ func runPrint(ctx context.Context, opt printOptions, stdin io.Reader, stdout io.
 		fmt.Fprintln(stdout, response)
 	}
 
+	printTeardown(ctx, opt, response)
+	return 0
+}
+
+// printTeardown fires Stop + SessionEnd hooks and closes the MCP client.
+// Shared between the echo path and the leading-slash branches so all exit
+// routes leave the same wire trace. response is the assistant text passed
+// to OnStop; empty when the turn dispatched a pure side-effect slash.
+func printTeardown(ctx context.Context, opt printOptions, response string) {
 	if err := opt.hooks.OnStop(ctx, response, false); err != nil {
 		fmt.Fprintf(os.Stderr, "testagent: hook OnStop: %v\n", err)
 	}
@@ -101,7 +146,21 @@ func runPrint(ctx context.Context, opt printOptions, stdin io.Reader, stdout io.
 	if err := opt.mcp.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "testagent: mcp Close: %v\n", err)
 	}
-	return 0
+}
+
+// sleepCtx sleeps for d unless ctx is canceled first. Used by the print-
+// mode /think and /stream dispatch path so a SIGINT during the slash-
+// driven delay doesn't strand the caller.
+func sleepCtx(ctx context.Context, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
 }
 
 // emitJSON writes a single JSON object summarizing the turn.

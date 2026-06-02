@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/paultyng/testagent/cmd/claude"
 	"github.com/paultyng/testagent/internal/codexhooks"
+	"github.com/paultyng/testagent/internal/mcp"
+	"github.com/paultyng/testagent/internal/slash"
 )
 
 // newTestRunner returns a no-hook codex Runner suitable for exec tests.
@@ -231,4 +235,84 @@ func TestRunExec_FiresLifecycleHooks(t *testing.T) {
 			t.Errorf("events[%d] = %q, want %q (full: %v)", i, events[i], want[i], events)
 		}
 	}
+}
+
+// TestRunExec_LeadingSlashDispatch covers `codex exec` pre-prompt slash
+// dispatch (the analog of claude --print's TestRunPrint_LeadingSlashDispatch).
+// Same multi-line walk semantics; codex-specific divergence is the exit
+// path (returns *claude.ExitError instead of returning an int).
+func TestRunExec_LeadingSlashDispatch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("pure side-effect skips echo", func(t *testing.T) {
+		t.Parallel()
+		stdout := &bytes.Buffer{}
+		runner := newTestRunner("sid-cx-1")
+		mcpClient := mcp.NewClient(nil)
+		err := runExec(context.Background(), execOptions{
+			name:         "session",
+			sessionID:    "sid-cx-1",
+			outputFormat: "text",
+			positional:   []string{"/panel hi"},
+			hooks:        runner,
+			mcp:          mcpClient,
+			slash:        slash.New(runner, mcpClient, stdout),
+		}, strings.NewReader(""), stdout)
+		if err != nil {
+			t.Fatalf("runExec err = %v", err)
+		}
+		out := stdout.String()
+		if !strings.Contains(out, "hi") {
+			t.Errorf("/panel render missing in output: %q", out)
+		}
+		if strings.Contains(out, "[session]") {
+			t.Errorf("echo path should be skipped; got %q", out)
+		}
+	})
+
+	t.Run("exit propagates as ExitError", func(t *testing.T) {
+		t.Parallel()
+		stdout := &bytes.Buffer{}
+		runner := newTestRunner("sid-cx-2")
+		mcpClient := mcp.NewClient(nil)
+		err := runExec(context.Background(), execOptions{
+			name:         "session",
+			sessionID:    "sid-cx-2",
+			outputFormat: "text",
+			positional:   []string{"/exit 4"},
+			hooks:        runner,
+			mcp:          mcpClient,
+			slash:        slash.New(runner, mcpClient, stdout),
+		}, strings.NewReader(""), stdout)
+		var ex *claude.ExitError
+		if !errors.As(err, &ex) {
+			t.Fatalf("err = %v; want *claude.ExitError", err)
+		}
+		if ex.Code != 4 {
+			t.Errorf("Code = %d, want 4", ex.Code)
+		}
+	})
+
+	t.Run("multi-line: side-effects then prompt", func(t *testing.T) {
+		t.Parallel()
+		stdout := &bytes.Buffer{}
+		runner := newTestRunner("sid-cx-3")
+		mcpClient := mcp.NewClient(nil)
+		err := runExec(context.Background(), execOptions{
+			name:         "session",
+			sessionID:    "sid-cx-3",
+			outputFormat: "text",
+			positional:   []string{"/panel one\nthe real prompt"},
+			hooks:        runner,
+			mcp:          mcpClient,
+			slash:        slash.New(runner, mcpClient, stdout),
+		}, strings.NewReader(""), stdout)
+		if err != nil {
+			t.Fatalf("runExec err = %v", err)
+		}
+		out := stdout.String()
+		if !strings.Contains(out, "one") || !strings.Contains(out, "[session] the real prompt") {
+			t.Errorf("unexpected output: %q", out)
+		}
+	})
 }

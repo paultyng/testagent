@@ -9,6 +9,7 @@ import (
 
 	"github.com/paultyng/testagent/internal/cursorhooks"
 	"github.com/paultyng/testagent/internal/mcp"
+	"github.com/paultyng/testagent/internal/slash"
 )
 
 // newNoopHooks returns a cursorhooks.Runner with no matchers — the print
@@ -210,6 +211,65 @@ func TestRunPrint_MissingPrompt(t *testing.T) {
 	if code != 1 {
 		t.Errorf("missing-prompt exit code = %d, want 1", code)
 	}
+}
+
+// TestRunPrint_LeadingSlashDispatch is the cursor analog of the claude
+// test of the same name. Smoke-tests the wiring through PrePromptDispatch;
+// the per-line walk semantics are covered exhaustively in
+// internal/slash.TestPrePromptDispatch.
+func TestRunPrint_LeadingSlashDispatch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("pure side-effect skips echo", func(t *testing.T) {
+		t.Parallel()
+		stdout := &bytes.Buffer{}
+		runner := newNoopHooks()
+		mcpClient := mcp.NewClient(nil)
+		code := runPrint(context.Background(), printOptions{
+			name:         "Echo",
+			sessionID:    "sid-cur-s1",
+			cwd:          "/tmp",
+			outputFormat: "text",
+			positional:   []string{"/panel cur-hi"},
+			hooks:        runner,
+			mcp:          mcpClient,
+			slash:        slash.New(runner, mcpClient, stdout),
+		}, strings.NewReader(""), stdout)
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+		out := stdout.String()
+		if !strings.Contains(out, "cur-hi") {
+			t.Errorf("/panel render missing 'cur-hi' in output: %q", out)
+		}
+		if strings.Contains(out, "[Echo]") {
+			t.Errorf("echo path should be skipped; got %q", out)
+		}
+	})
+
+	t.Run("multi-line: side-effects then prompt", func(t *testing.T) {
+		t.Parallel()
+		stdout := &bytes.Buffer{}
+		runner := newNoopHooks()
+		mcpClient := mcp.NewClient(nil)
+		code := runPrint(context.Background(), printOptions{
+			name:         "Echo",
+			sessionID:    "sid-cur-s2",
+			cwd:          "/tmp",
+			outputFormat: "text",
+			positional:   []string{"/panel one\nreal prompt"},
+			hooks:        runner,
+			mcp:          mcpClient,
+			slash:        slash.New(runner, mcpClient, stdout),
+		}, strings.NewReader(""), stdout)
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+		out := stdout.String()
+		if !strings.Contains(out, "one") || !strings.Contains(out, "[Echo] real prompt") {
+			t.Errorf("unexpected output: %q", out)
+		}
+	})
 }
 
 // checkField mirrors the helper in cmd/claude/print_test.go. Duplicated

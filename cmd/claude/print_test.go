@@ -10,9 +10,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/paultyng/testagent/internal/hooks"
 	"github.com/paultyng/testagent/internal/mcp"
+	"github.com/paultyng/testagent/internal/slash"
 )
 
 func TestRunPrint_TextFormat(t *testing.T) {
@@ -159,6 +161,164 @@ func TestRunPrint_MissingPrompt(t *testing.T) {
 	if code == 0 {
 		t.Errorf("exit code = 0 with no prompt; want non-zero")
 	}
+}
+
+// TestRunPrint_LeadingSlashDispatch covers the -p / --print pre-prompt
+// dispatch path: lines starting with "/" are routed through the slash
+// handler in order; the first non-slash line (and everything after it)
+// becomes the prompt that's echoed.
+func TestRunPrint_LeadingSlashDispatch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("pure side-effect skips echo", func(t *testing.T) {
+		t.Parallel()
+		stdout := &bytes.Buffer{}
+		sender := hooks.NewSender(nil, "sid-s1", "/tmp", "", "default", nil)
+		mcpClient := mcp.NewClient(nil)
+		code := runPrint(context.Background(), printOptions{
+			name:         "Echo",
+			sessionID:    "sid-s1",
+			cwd:          "/tmp",
+			outputFormat: "text",
+			positional:   []string{"/panel hello"},
+			hooks:        sender,
+			mcp:          mcpClient,
+			slash:        slash.New(sender, mcpClient, stdout),
+		}, strings.NewReader(""), stdout)
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+		out := stdout.String()
+		if !strings.Contains(out, "hello") {
+			t.Errorf("/panel render missing 'hello' in output: %q", out)
+		}
+		if strings.Contains(out, "[Echo]") {
+			t.Errorf("echo path should be skipped, got [Echo] prefix: %q", out)
+		}
+	})
+
+	t.Run("exit slash propagates code", func(t *testing.T) {
+		t.Parallel()
+		stdout := &bytes.Buffer{}
+		sender := hooks.NewSender(nil, "sid-s2", "/tmp", "", "default", nil)
+		mcpClient := mcp.NewClient(nil)
+		code := runPrint(context.Background(), printOptions{
+			name:         "Echo",
+			sessionID:    "sid-s2",
+			cwd:          "/tmp",
+			outputFormat: "text",
+			positional:   []string{"/exit 7"},
+			hooks:        sender,
+			mcp:          mcpClient,
+			slash:        slash.New(sender, mcpClient, stdout),
+		}, strings.NewReader(""), stdout)
+		if code != 7 {
+			t.Fatalf("exit code = %d, want 7", code)
+		}
+	})
+
+	t.Run("think sleeps then echoes parsed message", func(t *testing.T) {
+		t.Parallel()
+		stdout := &bytes.Buffer{}
+		sender := hooks.NewSender(nil, "sid-s3", "/tmp", "", "default", nil)
+		mcpClient := mcp.NewClient(nil)
+		start := time.Now()
+		code := runPrint(context.Background(), printOptions{
+			name:         "Echo",
+			sessionID:    "sid-s3",
+			cwd:          "/tmp",
+			outputFormat: "text",
+			positional:   []string{"/think 40ms hello there"},
+			hooks:        sender,
+			mcp:          mcpClient,
+			slash:        slash.New(sender, mcpClient, stdout),
+		}, strings.NewReader(""), stdout)
+		elapsed := time.Since(start)
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+		if elapsed < 40*time.Millisecond {
+			t.Errorf("elapsed = %v, want >= 40ms (/think delay was not honored)", elapsed)
+		}
+		got := strings.TrimRight(stdout.String(), "\n")
+		if got != "[Echo] hello there" {
+			t.Errorf("echo = %q, want %q", got, "[Echo] hello there")
+		}
+	})
+
+	t.Run("multi-line: side-effects then prompt", func(t *testing.T) {
+		t.Parallel()
+		stdout := &bytes.Buffer{}
+		sender := hooks.NewSender(nil, "sid-s4", "/tmp", "", "default", nil)
+		mcpClient := mcp.NewClient(nil)
+		input := "/panel banner\n/panel second\nthe real prompt"
+		code := runPrint(context.Background(), printOptions{
+			name:         "Echo",
+			sessionID:    "sid-s4",
+			cwd:          "/tmp",
+			outputFormat: "text",
+			positional:   []string{input},
+			hooks:        sender,
+			mcp:          mcpClient,
+			slash:        slash.New(sender, mcpClient, stdout),
+		}, strings.NewReader(""), stdout)
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+		out := stdout.String()
+		if !strings.Contains(out, "banner") || !strings.Contains(out, "second") {
+			t.Errorf("missing panel renders in output: %q", out)
+		}
+		if !strings.Contains(out, "[Echo] the real prompt") {
+			t.Errorf("missing echoed prompt in output: %q", out)
+		}
+	})
+
+	t.Run("multi-line: first non-slash includes trailing lines", func(t *testing.T) {
+		t.Parallel()
+		stdout := &bytes.Buffer{}
+		sender := hooks.NewSender(nil, "sid-s5", "/tmp", "", "default", nil)
+		mcpClient := mcp.NewClient(nil)
+		input := "/panel hi\nfirst line\nsecond line"
+		code := runPrint(context.Background(), printOptions{
+			name:         "Echo",
+			sessionID:    "sid-s5",
+			cwd:          "/tmp",
+			outputFormat: "text",
+			positional:   []string{input},
+			hooks:        sender,
+			mcp:          mcpClient,
+			slash:        slash.New(sender, mcpClient, stdout),
+		}, strings.NewReader(""), stdout)
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+		if !strings.Contains(stdout.String(), "[Echo] first line\nsecond line") {
+			t.Errorf("multi-line prompt not joined into echo: %q", stdout.String())
+		}
+	})
+
+	t.Run("nil slash handler preserves legacy echo for /-prefixed prompt", func(t *testing.T) {
+		t.Parallel()
+		stdout := &bytes.Buffer{}
+		sender := hooks.NewSender(nil, "sid-s6", "/tmp", "", "default", nil)
+		code := runPrint(context.Background(), printOptions{
+			name:         "Echo",
+			sessionID:    "sid-s6",
+			cwd:          "/tmp",
+			outputFormat: "text",
+			positional:   []string{"/help"},
+			hooks:        sender,
+			mcp:          mcp.NewClient(nil),
+			// slash intentionally nil — exercises the back-compat path.
+		}, strings.NewReader(""), stdout)
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+		if strings.TrimRight(stdout.String(), "\n") != "[Echo] /help" {
+			t.Errorf("nil-slash path should echo as-is; got %q", stdout.String())
+		}
+	})
 }
 
 func checkField(t *testing.T, m map[string]any, key string, want any) {
