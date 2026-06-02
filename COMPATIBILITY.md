@@ -71,7 +71,7 @@ Alphabetical by long name. Short flags shown inline. Global flags (common across
 | `--name` / `-n` | ✓ supported | Shown in banner (default `test-agent`) |
 | `--output-format` | ✓ supported | `text`, `json`, `stream-json`; used with `--print` |
 | `--permission-mode` | `not relevant` | No permission system |
-| `--print` / `-p` | ✓ supported | Non-interactive one-shot mode |
+| `--print` / `-p` | ✓ supported | Non-interactive one-shot mode. **Divergence:** when the prompt's leading lines start with `/`, they're dispatched through the slash handler (in order, stopping at the first non-slash line). Real Claude Code sends `/help` etc. as literal text to the model — testagent dispatches them so orchestrators can drive lifecycle events (`/exit`, `/panel`, `/think`) from a single `-p` invocation. Set the prompt to a non-`/`-prefixed string to bypass dispatch. |
 | `--resume` / `-r` | ✓ supported | Sets session ID; fires `source=resume` on `SessionStart` |
 | `--session-id` | ✓ supported | UUID for the session |
 | `--settings` | ✓ supported | Claude-shaped JSON; loads hook URLs |
@@ -244,7 +244,7 @@ Codex's user-facing surface is divided across multiple subcommands; orchestrator
 
 #### codex exec
 
-`codex exec <prompt>` is codex's non-interactive one-shot — the analog of `claude --print`. Lifecycle: `session_start` → `user_prompt_submit` → emit per `--output-format` → `stop`. Codex has no `session_end` event.
+`codex exec <prompt>` is codex's non-interactive one-shot — the analog of `claude --print`. Lifecycle: `session_start` → `user_prompt_submit` → emit per `--output-format` → `stop`. Codex has no `session_end` event. Leading-slash dispatch behaves as for `claude --print` (see the `--print` row in [#### claude (no subcommand)](#claude-no-subcommand)): leading lines that start with `/` route through the slash handler; the first non-slash line and everything after it is the prompt.
 
 | Flag | testagent | Notes |
 |------|-----------|-------|
@@ -394,7 +394,7 @@ Cursor's user-facing surface is under `cursor agent`; bare `cursor agent [prompt
 | Subcommand | testagent | Notes |
 |------------|-----------|-------|
 | `cursor agent` (no subcommand) | `partial` | Phase 1 prints a skeleton banner; interactive REPL lands in Phase 2 ([#14](https://github.com/paultyng/testagent/issues/14)) |
-| `cursor agent --print` | `✓ supported` | Non-interactive one-shot; `--output-format text\|json\|stream-json` honored; cursor stream-json frame set per cursor.com/docs/cli/reference/output-format |
+| `cursor agent --print` | `✓ supported` | Non-interactive one-shot; `--output-format text\|json\|stream-json` honored; cursor stream-json frame set per cursor.com/docs/cli/reference/output-format. Leading-slash dispatch behaves as for `claude --print`. |
 | `cursor agent about` | `accepted` | Canned `name`+`version`; `--format text\|json` honored |
 | `cursor agent create-chat` | `accepted` | Returns a canned chat ID |
 | `cursor agent generate-rule` | `not relevant` | Interactive rule-authoring wizard; requires model |
@@ -429,7 +429,7 @@ Alphabetical by long name. Short flags shown inline.
 | `-m` / `--model <name>` | `accepted` | Model name; parsed and discarded |
 | `--mode <plan\|ask>` | `accepted` | Banner change lands in Phase 3 ([#14](https://github.com/paultyng/testagent/issues/14)) |
 | `--output-format <text\|json\|stream-json>` | `✓ supported` | Output formatter for `--print`; text default, json single object, stream-json NDJSON (system/user/assistant/result) |
-| `-p` / `--print` | `✓ supported` | Non-interactive one-shot; reads positional or stdin prompt, echoes via the selected `--output-format` |
+| `-p` / `--print` | `✓ supported` | Non-interactive one-shot; reads positional or stdin prompt, echoes via the selected `--output-format`. Leading-slash dispatch behaves as for `claude --print`. |
 | `--plan` | `✗ planned` | Shorthand for `--mode=plan`; tracked in [#14](https://github.com/paultyng/testagent/issues/14) |
 | `--plugin-dir <path>` | `accepted` | Local plugin dir; no plugin engine (repeatable) |
 | `--resume [chatId]` | `accepted` | Persistent flag parsed; positional-arg subcommand stub returns canned output |

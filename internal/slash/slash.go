@@ -143,6 +143,81 @@ func (h *Handler) DispatchString(ctx context.Context, line string) (string, Outc
 	return buf.String(), outcome
 }
 
+// PrePromptResult is the aggregated outcome of walking a -p / non-
+// interactive prompt for leading slash lines. See PrePromptDispatch.
+type PrePromptResult struct {
+	// Rendered is the concatenated output of every dispatched line — the
+	// caller writes it to stdout before any echo. May contain ANSI styling.
+	Rendered string
+
+	// Sleeps is the ordered list of durations parsed from /think and
+	// /stream lines in dispatch order. The caller is expected to sleep
+	// each before producing the echo so the orchestrator can use slash
+	// commands as a generic pacing mechanism in non-interactive mode.
+	Sleeps []time.Duration
+
+	// Prompt is the residual prompt text to echo. Empty when every line
+	// was a side-effect slash with no trailing content. Populated either
+	// from the first non-slash line and everything after it, or from a
+	// /think/ /stream's parsed message (those are terminal: lines after
+	// them are dropped because their semantics already include a body).
+	Prompt string
+
+	// Exit is set when a dispatched line returned Outcome.Exit (e.g.
+	// /exit, /quit). The caller should fire teardown and propagate
+	// ExitCode without echoing. Rendered still carries any output the
+	// /exit slash produced.
+	Exit     bool
+	ExitCode int
+}
+
+// PrePromptDispatch walks prompt line by line and dispatches every leading
+// line whose trimmed form starts with "/", stopping at the first non-slash
+// line. The first non-slash line and everything after it becomes
+// Result.Prompt. /think and /stream are terminal in this walk: their
+// parsed message becomes Prompt, their duration is appended to Sleeps,
+// and any later lines are dropped (their semantics already bundle a
+// message argument, so concatenating more lines under them would be
+// ambiguous). Pass orchestrators a deterministic prompt-shaping hook for
+// -p mode where the engine's per-turn timing is unavailable.
+//
+// CR/LF lines: \r is preserved in the joined Prompt; only leading
+// whitespace is trimmed when checking the "/" prefix.
+func (h *Handler) PrePromptDispatch(ctx context.Context, prompt string) PrePromptResult {
+	var (
+		out    strings.Builder
+		result PrePromptResult
+	)
+	lines := strings.Split(prompt, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimLeft(line, " \t\r")
+		if !strings.HasPrefix(trimmed, "/") {
+			result.Prompt = strings.Join(lines[i:], "\n")
+			break
+		}
+		rendered, outcome := h.DispatchString(ctx, line)
+		out.WriteString(rendered)
+		if outcome.Exit {
+			result.Exit = true
+			result.ExitCode = outcome.ExitCode
+			result.Rendered = out.String()
+			return result
+		}
+		if outcome.HasThinkDuration {
+			result.Sleeps = append(result.Sleeps, outcome.ThinkDuration)
+		}
+		if outcome.HasStreamDuration {
+			result.Sleeps = append(result.Sleeps, outcome.StreamDuration)
+		}
+		if outcome.Prompt != "" {
+			result.Prompt = outcome.Prompt
+			break
+		}
+	}
+	result.Rendered = out.String()
+	return result
+}
+
 // Dispatch parses and runs a single line, writing rendered output to h.out.
 // If line doesn't start with "/", returns Handled=false. Errors go to stderr.
 func (h *Handler) Dispatch(ctx context.Context, line string) Outcome {

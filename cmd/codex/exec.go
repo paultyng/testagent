@@ -23,11 +23,15 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/paultyng/testagent/cmd/claude"
 	"github.com/paultyng/testagent/internal/codexhooks"
+	"github.com/paultyng/testagent/internal/mcp"
 	"github.com/paultyng/testagent/internal/rootflags"
+	"github.com/paultyng/testagent/internal/slash"
 )
 
 // execFlags bundles `codex exec`-specific flag values. Parent persistent
@@ -48,6 +52,8 @@ type execOptions struct {
 	outputFormat string
 	positional   []string
 	hooks        *codexhooks.Runner
+	mcp          *mcp.Client    // optional; only consulted by /mcp* slashes when slash is set
+	slash        *slash.Handler // optional; when set, a leading "/" routes through it
 }
 
 // newExecCommand returns the `codex exec [prompt]` subcommand. Non-
@@ -86,6 +92,10 @@ func newExecCommand(rf *rootflags.Flags, cf *flags) *cobra.Command {
 			runner := codexhooks.NewRunner(matchersFromConfig(cfg), sid, cwd, transcriptPath, permissionMode, debugW)
 			defer func() { _ = runner.Close(cmd.Context()) }()
 
+			mcpClient := mcp.NewClient(codexMCPServersFromConfig(cfg))
+			mcpClient.SetDebugWriter(debugW)
+			slashHandler := slash.New(runner, mcpClient, os.Stdout)
+
 			format := ef.OutputFormat
 			if format == "" {
 				format = "text"
@@ -98,6 +108,8 @@ func newExecCommand(rf *rootflags.Flags, cf *flags) *cobra.Command {
 				outputFormat: format,
 				positional:   args,
 				hooks:        runner,
+				mcp:          mcpClient,
+				slash:        slashHandler,
 			}, os.Stdin, os.Stdout)
 		},
 	}
@@ -133,6 +145,36 @@ func runExec(ctx context.Context, opt execOptions, stdin io.Reader, stdout io.Wr
 		fmt.Fprintf(os.Stderr, "testagent: hook OnPrompt: %v\n", err)
 	}
 
+	// Leading-slash dispatch: see cmd/claude/print.go's runPrint for the
+	// full rationale. Mirrored here so `codex exec` exposes the same
+	// orchestrator hook. Codex has no SessionEnd, so teardown is just the
+	// Stop fire.
+	if opt.slash != nil {
+		pre := opt.slash.PrePromptDispatch(ctx, prompt)
+		fmt.Fprint(stdout, pre.Rendered)
+		if pre.Exit {
+			if err := opt.hooks.OnStop(ctx, "", false); err != nil {
+				fmt.Fprintf(os.Stderr, "testagent: hook OnStop: %v\n", err)
+			}
+			if pre.ExitCode == 0 {
+				return nil
+			}
+			return &claude.ExitError{Code: pre.ExitCode}
+		}
+		for _, d := range pre.Sleeps {
+			sleepCtx(ctx, d)
+		}
+		if pre.Prompt == "" && pre.Rendered != "" {
+			if err := opt.hooks.OnStop(ctx, "", false); err != nil {
+				fmt.Fprintf(os.Stderr, "testagent: hook OnStop: %v\n", err)
+			}
+			return nil
+		}
+		if pre.Prompt != "" {
+			prompt = pre.Prompt
+		}
+	}
+
 	response := fmt.Sprintf("[%s] %s", opt.name, prompt)
 
 	switch opt.outputFormat {
@@ -148,6 +190,19 @@ func runExec(ctx context.Context, opt execOptions, stdin io.Reader, stdout io.Wr
 		fmt.Fprintf(os.Stderr, "testagent: hook OnStop: %v\n", err)
 	}
 	return nil
+}
+
+// sleepCtx sleeps for d unless ctx is canceled first.
+func sleepCtx(ctx context.Context, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
 }
 
 // emitExecJSON writes a single JSON summary object for the turn. This

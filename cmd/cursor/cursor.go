@@ -139,6 +139,7 @@ func runPrintMode(cmd *cobra.Command, rf *rootflags.Flags, cf *flags, args []str
 	runner := cursorhooks.NewRunner(matchersFromConfig(hooksOrNil(cfg)), sid, cwd, transcriptPath, permissionMode, debugW)
 	mcpClient := mcp.NewClient(enabledServersFromConfig(cfg))
 	mcpClient.SetDebugWriter(debugW)
+	slashHandler := slash.New(runner, mcpClient, cmd.OutOrStdout())
 
 	ctx := cmd.Context()
 	if err := mcpClient.Connect(ctx); err != nil {
@@ -155,6 +156,7 @@ func runPrintMode(cmd *cobra.Command, rf *rootflags.Flags, cf *flags, args []str
 		resumed:      cf.Resume != "",
 		hooks:        runner,
 		mcp:          mcpClient,
+		slash:        slashHandler,
 		stderr:       cmd.ErrOrStderr(),
 	}, cmd.InOrStdin(), cmd.OutOrStdout())
 	if code != 0 {

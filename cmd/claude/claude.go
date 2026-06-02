@@ -108,6 +108,7 @@ Bare invocation (testagent <flags>) defaults to this subcommand.`,
 					resumed:      resume != "",
 					hooks:        hookSender,
 					mcp:          mcpClient,
+					slash:        slashHandler,
 				}, os.Stdin, os.Stdout)
 				if code != 0 {
 					return &ExitError{Code: code}
@@ -158,4 +159,3 @@ Bare invocation (testagent <flags>) defaults to this subcommand.`,
 	cmd.AddCommand(newValidateCommand(&settingsPath, &mcpPath))
 	return cmd
 }
-

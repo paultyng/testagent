@@ -1334,3 +1334,112 @@ func TestSlash_Compress_AliasesCompact(t *testing.T) {
 		t.Errorf("RestartReason = %q, want \"compact\"", outcome.RestartReason)
 	}
 }
+
+// TestPrePromptDispatch covers the -p / non-interactive prompt walker:
+// leading slash lines dispatch in order; the first non-slash line (plus
+// everything after it) becomes the residual prompt; /think and /stream
+// are terminal (their parsed message is the prompt). The Handler.out is
+// unused in this path because PrePromptDispatch routes through
+// DispatchString.
+func TestPrePromptDispatch(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name         string
+		input        string
+		wantPrompt   string
+		wantExit     bool
+		wantExitCode int
+		wantSleeps   []time.Duration
+		wantRendered string // substring expected in Rendered (empty = no check)
+		wantNotInOut string // substring that MUST NOT appear in Rendered (empty = no check)
+	}{
+		{
+			name:       "non-slash leaves prompt unchanged, no dispatch",
+			input:      "just a prompt",
+			wantPrompt: "just a prompt",
+		},
+		{
+			name:         "single side-effect slash, no residual prompt",
+			input:        "/panel hi",
+			wantPrompt:   "",
+			wantRendered: "hi",
+		},
+		{
+			name:         "slash then prompt: residual is the prompt",
+			input:        "/panel hi\nthe real prompt",
+			wantPrompt:   "the real prompt",
+			wantRendered: "hi",
+		},
+		{
+			name:         "two side-effects then multi-line prompt joined",
+			input:        "/panel one\n/panel two\nfirst\nsecond",
+			wantPrompt:   "first\nsecond",
+			wantRendered: "two",
+		},
+		{
+			name:         "indented slash still dispatched",
+			input:        "  /panel indented\nprompt",
+			wantPrompt:   "prompt",
+			wantRendered: "indented",
+		},
+		{
+			name:         "exit short-circuits, ExitCode propagates",
+			input:        "/panel before\n/exit 5\n/panel never",
+			wantExit:     true,
+			wantExitCode: 5,
+			wantRendered: "before",
+			wantNotInOut: "never",
+		},
+		{
+			name:       "think is terminal: parsed message becomes prompt, later lines dropped",
+			input:      "/panel x\n/think 25ms message body\nignored",
+			wantPrompt: "message body",
+			wantSleeps: []time.Duration{25 * time.Millisecond},
+		},
+		{
+			name:       "stream is terminal: parsed message becomes prompt, sleep stacked",
+			input:      "/stream 10ms hello world",
+			wantPrompt: "hello world",
+			wantSleeps: []time.Duration{10 * time.Millisecond},
+		},
+		{
+			name:       "empty input: empty prompt, no dispatch",
+			input:      "",
+			wantPrompt: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newTestHandler(&bytes.Buffer{})
+			got := h.PrePromptDispatch(context.Background(), tc.input)
+
+			if got.Prompt != tc.wantPrompt {
+				t.Errorf("Prompt = %q, want %q", got.Prompt, tc.wantPrompt)
+			}
+			if got.Exit != tc.wantExit {
+				t.Errorf("Exit = %v, want %v", got.Exit, tc.wantExit)
+			}
+			if got.ExitCode != tc.wantExitCode {
+				t.Errorf("ExitCode = %d, want %d", got.ExitCode, tc.wantExitCode)
+			}
+			if len(got.Sleeps) != len(tc.wantSleeps) {
+				t.Errorf("len(Sleeps) = %d, want %d (got %v)", len(got.Sleeps), len(tc.wantSleeps), got.Sleeps)
+			} else {
+				for i, d := range got.Sleeps {
+					if d != tc.wantSleeps[i] {
+						t.Errorf("Sleeps[%d] = %v, want %v", i, d, tc.wantSleeps[i])
+					}
+				}
+			}
+			if tc.wantRendered != "" && !strings.Contains(got.Rendered, tc.wantRendered) {
+				t.Errorf("Rendered missing %q; got %q", tc.wantRendered, got.Rendered)
+			}
+			if tc.wantNotInOut != "" && strings.Contains(got.Rendered, tc.wantNotInOut) {
+				t.Errorf("Rendered should not contain %q; got %q", tc.wantNotInOut, got.Rendered)
+			}
+		})
+	}
+}

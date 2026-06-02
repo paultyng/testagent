@@ -28,6 +28,7 @@ import (
 
 	"github.com/paultyng/testagent/internal/cursorhooks"
 	"github.com/paultyng/testagent/internal/mcp"
+	"github.com/paultyng/testagent/internal/slash"
 )
 
 // printOptions bundles the inputs runPrint needs from the cursor RunE.
@@ -45,7 +46,8 @@ type printOptions struct {
 	resumed      bool
 	hooks        *cursorhooks.Runner
 	mcp          *mcp.Client
-	stderr       io.Writer // optional; falls back to os.Stderr when nil
+	slash        *slash.Handler // optional; when set, a leading "/" routes through it
+	stderr       io.Writer      // optional; falls back to os.Stderr when nil
 }
 
 // runPrint executes one non-interactive turn and returns the exit code.
@@ -96,6 +98,28 @@ func runPrint(ctx context.Context, opt printOptions, stdin io.Reader, stdout io.
 		fmt.Fprintf(stderr, "testagent: hook OnPrompt: %v\n", err)
 	}
 
+	// Leading-slash dispatch: see cmd/claude/print.go's runPrint for the
+	// full rationale. Mirrored here so cursor `--print` exposes the same
+	// orchestrator hook.
+	if opt.slash != nil {
+		pre := opt.slash.PrePromptDispatch(ctx, prompt)
+		fmt.Fprint(stdout, pre.Rendered)
+		if pre.Exit {
+			cursorPrintTeardown(opt, stderr, "")
+			return pre.ExitCode
+		}
+		for _, d := range pre.Sleeps {
+			sleepCtx(ctx, d)
+		}
+		if pre.Prompt == "" && pre.Rendered != "" {
+			cursorPrintTeardown(opt, stderr, "")
+			return 0
+		}
+		if pre.Prompt != "" {
+			prompt = pre.Prompt
+		}
+	}
+
 	start := time.Now()
 	response := fmt.Sprintf("[%s] %s", opt.name, prompt)
 	durationMs := time.Since(start).Milliseconds()
@@ -114,9 +138,15 @@ func runPrint(ctx context.Context, opt printOptions, stdin io.Reader, stdout io.
 		fmt.Fprintln(stdout, response)
 	}
 
-	// Teardown uses a fresh background context so SIGINT-cancelled cobra
-	// contexts don't silently skip stop-hook execution. mcp.Close runs via
-	// the deferred cleanup above.
+	cursorPrintTeardown(opt, stderr, response)
+	return 0
+}
+
+// cursorPrintTeardown fires Stop + SessionEnd on a fresh background
+// context (so a SIGINT-cancelled cobra context doesn't skip hook delivery)
+// and logs failures to stderr. MCP close runs via runPrint's deferred
+// cleanup. Shared between the echo path and the leading-slash branches.
+func cursorPrintTeardown(opt printOptions, stderr io.Writer, response string) {
 	teardownCtx := context.Background()
 	if err := opt.hooks.OnStop(teardownCtx, response, false); err != nil {
 		fmt.Fprintf(stderr, "testagent: hook OnStop: %v\n", err)
@@ -124,7 +154,19 @@ func runPrint(ctx context.Context, opt printOptions, stdin io.Reader, stdout io.
 	if err := opt.hooks.OnSessionEnd(teardownCtx, "logout"); err != nil {
 		fmt.Fprintf(stderr, "testagent: hook OnSessionEnd: %v\n", err)
 	}
-	return 0
+}
+
+// sleepCtx sleeps for d unless ctx is canceled first.
+func sleepCtx(ctx context.Context, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
 }
 
 // emitJSON writes a single JSON object summarizing the turn. Cursor's
@@ -199,4 +241,3 @@ func emitStreamJSON(w io.Writer, opt printOptions, prompt, result string, durati
 		"session_id":      opt.sessionID,
 	})
 }
-
