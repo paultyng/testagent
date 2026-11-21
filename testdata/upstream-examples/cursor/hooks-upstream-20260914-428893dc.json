@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "type": "prompt",
+        "prompt": "Does this command look safe to execute? Only allow read-only operations.",
+        "timeout": 10
+      }
+    ]
+  }
+}
