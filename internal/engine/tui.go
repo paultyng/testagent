@@ -672,7 +672,11 @@ func cmdBoot(client *mcp.Client, sender HookSender, source string, timeout time.
 		timer := time.AfterFunc(timeout, cancel)
 		connectErr := client.Connect(ctx)
 		if !timer.Stop() {
-			connectErr = fmt.Errorf("timed out after %s: %w", timeout, context.DeadlineExceeded)
+			if connectErr != nil {
+				connectErr = fmt.Errorf("timed out after %s: %w: %v", timeout, context.DeadlineExceeded, connectErr)
+			} else {
+				connectErr = fmt.Errorf("timed out after %s: %w", timeout, context.DeadlineExceeded)
+			}
 		}
 		tools := 0
 		if connectErr == nil {
