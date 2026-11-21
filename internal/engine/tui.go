@@ -75,7 +75,6 @@ type model struct {
 	count      int
 	quitReason string
 	quitCode   int
-	bootDone   bool
 }
 
 // thinkingDoneMsg fires when the simulated thinking delay elapses for tag.
@@ -208,8 +207,7 @@ func bannerTitle(emulator, name string) string {
 
 // Init seeds the initial command batch: spinner ticks, the boot sequence
 // (cmdBoot does MCP connect → SessionStart in one goroutine), and optional
-// auto-exit timer. The banner is committed via tea.Println on the first
-// Update tick (Init can't mutate state, so we use a bootDone latch).
+// auto-exit timer. The banner is committed in the mcpConnectMsg handler.
 func (m model) Init() tea.Cmd {
 	startSource := "startup"
 	if m.g.Resumed {
@@ -229,18 +227,6 @@ func (m model) Init() tea.Cmd {
 // no mutex is needed; long-running work is pushed onto goroutines via tea.Cmd.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
-
-	// Lazy boot: commit the banner + status line once via tea.Println so
-	// they land in native scrollback at the top of the session. Sequenced
-	// so the status line renders under the banner, not above it.
-	if !m.bootDone {
-		m.bootDone = true
-		boot := []tea.Cmd{m.commit(banner(m.g))}
-		if m.g.StatusLine != "" {
-			boot = append(boot, m.commit(render.MuteStyle.Render("["+m.g.StatusLine+"]")))
-		}
-		cmds = append(cmds, tea.Sequence(boot...))
-	}
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -438,14 +424,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case mcpConnectMsg:
+		lines := []string{banner(m.g)}
+		if m.g.StatusLine != "" {
+			lines = append(lines, render.MuteStyle.Render("["+m.g.StatusLine+"]"))
+		}
 		if msg.err != nil {
-			cmds = append(cmds, m.commit(render.MuteStyle.Render(fmt.Sprintf("[mcp connect failed: %v]", msg.err))))
+			lines = append(lines, render.MuteStyle.Render(fmt.Sprintf("[mcp connect failed: %v]", msg.err)))
 		} else if msg.tools > 0 {
-			cmds = append(cmds, m.commit(render.MuteStyle.Render(fmt.Sprintf("[mcp connected: %d tools]", msg.tools))))
+			lines = append(lines, render.MuteStyle.Render(fmt.Sprintf("[mcp connected: %d tools]", msg.tools)))
 		}
 		if msg.startErr != nil {
-			cmds = append(cmds, m.commit(render.LifecycleWarn(fmt.Sprintf("hook OnSessionStart error: %v", msg.startErr))))
+			lines = append(lines, render.LifecycleWarn(fmt.Sprintf("hook OnSessionStart error: %v", msg.startErr)))
 		}
+		m.scrollback = append(m.scrollback, lines...)
+		cmds = append(cmds, tea.Println(strings.Join(lines, "\n")))
 
 	case autoExitMsg:
 		cmds = append(cmds, m.commit(render.MuteStyle.Render(fmt.Sprintf("[auto-exit after %s]", m.g.AutoExit))))

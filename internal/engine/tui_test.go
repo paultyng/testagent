@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -859,5 +861,119 @@ func TestModel_CtrlCQuits(t *testing.T) {
 	}
 	if m.quitReason != "other" {
 		t.Errorf("quitReason = %q, want %q", m.quitReason, "other")
+	}
+}
+
+// collectMsgs runs cmd and flattens any BatchMsg into leaf messages. Cmds
+// that don't return within 50ms (ticks, timers) are skipped.
+func collectMsgs(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	ch := make(chan tea.Msg, 1)
+	go func() { ch <- cmd() }()
+	select {
+	case msg := <-ch:
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			var out []tea.Msg
+			for _, inner := range batch {
+				out = append(out, collectMsgs(inner)...)
+			}
+			return out
+		}
+		if msg == nil {
+			return nil
+		}
+		return []tea.Msg{msg}
+	case <-time.After(50 * time.Millisecond):
+		return nil
+	}
+}
+
+// printLines returns the fmt.Sprint of every bubbletea print-line message.
+func printLines(msgs []tea.Msg) []string {
+	var out []string
+	for _, msg := range msgs {
+		if strings.HasSuffix(fmt.Sprintf("%T", msg), "printLineMessage") {
+			out = append(out, fmt.Sprint(msg))
+		}
+	}
+	return out
+}
+
+// TestBootScrollback pins that boot scrollback is one Println emitted from
+// the mcpConnectMsg handler: bubbletea v2.0.7 drops Printlns issued before
+// the first frame, so the banner, status line, and MCP result must land in a
+// single write, and nothing may be printed on the first Update.
+func TestBootScrollback(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		statusLine string
+		msg        mcpConnectMsg
+		want       []string
+		wantNot    []string
+	}{
+		{
+			name:       "connected",
+			statusLine: "hooks: stop",
+			msg:        mcpConnectMsg{tools: 3},
+			want:       []string{"Test", "[hooks: stop]", "[mcp connected: 3 tools]"},
+		},
+		{
+			name:       "connect-failed",
+			statusLine: "hooks: stop",
+			msg:        mcpConnectMsg{err: errors.New("boom")},
+			want:       []string{"Test", "[hooks: stop]", "[mcp connect failed: boom]"},
+		},
+		{
+			name:       "start-error",
+			statusLine: "hooks: stop",
+			msg:        mcpConnectMsg{tools: 2, startErr: errors.New("hook down")},
+			want:       []string{"Test", "[hooks: stop]", "[mcp connected: 2 tools]", "hook OnSessionStart error: hook down"},
+		},
+		{
+			name: "no-mcp-no-status",
+			msg:  mcpConnectMsg{},
+			want: []string{"Test"},
+			wantNot: []string{
+				"mcp connect", "[hooks",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newTestModel(nil)
+			m.g.StatusLine = tc.statusLine
+
+			newM, cmd := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+			if got := printLines(collectMsgs(cmd)); len(got) != 0 {
+				t.Fatalf("first Update printed %d lines before boot completed: %q", len(got), got)
+			}
+
+			newM, cmd = newM.(model).Update(tc.msg)
+			got := printLines(collectMsgs(cmd))
+			if len(got) != 1 {
+				t.Fatalf("mcpConnectMsg emitted %d print lines, want exactly 1: %q", len(got), got)
+			}
+			pos := 0
+			for _, w := range tc.want {
+				i := strings.Index(got[0][pos:], w)
+				if i < 0 {
+					t.Fatalf("want %q (in order) after offset %d in %q", w, pos, got[0])
+				}
+				pos += i + len(w)
+			}
+			for _, w := range tc.wantNot {
+				if strings.Contains(got[0], w) {
+					t.Errorf("unexpected %q in %q", w, got[0])
+				}
+			}
+			if sb := newM.(model).scrollback; len(sb) == 0 || !strings.Contains(strings.Join(sb, "\n"), tc.want[0]) {
+				t.Errorf("scrollback missing boot lines: %q", sb)
+			}
+		})
 	}
 }
