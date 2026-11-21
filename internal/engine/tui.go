@@ -72,10 +72,18 @@ type model struct {
 
 	width, height int
 
+	// Boot scrollback is held until both the boot result and the first
+	// frame flush have arrived; bubbletea v2.0.7 mis-positions Printlns
+	// issued before the first flush. bannerShown latches once any path
+	// (boot flush, /clear, /compact) has printed the banner.
+	bannerShown bool
+	bootDone    bool
+	frameReady  bool
+	bootPending []string
+
 	count      int
 	quitReason string
 	quitCode   int
-	bootDone   bool
 }
 
 // thinkingDoneMsg fires when the simulated thinking delay elapses for tag.
@@ -127,6 +135,16 @@ type mcpConnectMsg struct {
 	tools    int
 	startErr error
 }
+
+// bootFrameMsg fires once, bootFrameDelay after Init, by which point the
+// renderer has flushed its first frame.
+type bootFrameMsg struct{}
+
+// bootFrameDelay spans several ~60fps frame intervals.
+const bootFrameDelay = 50 * time.Millisecond
+
+// bootConnectTimeout bounds the boot MCP connect.
+const bootConnectTimeout = 10 * time.Second
 
 // autoExitMsg fires after --auto-exit's duration elapses.
 type autoExitMsg struct{}
@@ -208,8 +226,8 @@ func bannerTitle(emulator, name string) string {
 
 // Init seeds the initial command batch: spinner ticks, the boot sequence
 // (cmdBoot does MCP connect → SessionStart in one goroutine), and optional
-// auto-exit timer. The banner is committed via tea.Println on the first
-// Update tick (Init can't mutate state, so we use a bootDone latch).
+// auto-exit timer. The banner is committed once both mcpConnectMsg and
+// bootFrameMsg have arrived.
 func (m model) Init() tea.Cmd {
 	startSource := "startup"
 	if m.g.Resumed {
@@ -217,7 +235,8 @@ func (m model) Init() tea.Cmd {
 	}
 	cmds := []tea.Cmd{
 		m.spin.Tick,
-		cmdBoot(m.d.MCP, m.d.Hooks, startSource),
+		cmdBoot(m.d.MCP, m.d.Hooks, startSource, bootConnectTimeout),
+		tea.Tick(bootFrameDelay, func(time.Time) tea.Msg { return bootFrameMsg{} }),
 	}
 	if m.g.AutoExit > 0 {
 		cmds = append(cmds, cmdAutoExit(m.g.AutoExit))
@@ -229,18 +248,6 @@ func (m model) Init() tea.Cmd {
 // no mutex is needed; long-running work is pushed onto goroutines via tea.Cmd.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
-
-	// Lazy boot: commit the banner + status line once via tea.Println so
-	// they land in native scrollback at the top of the session. Sequenced
-	// so the status line renders under the banner, not above it.
-	if !m.bootDone {
-		m.bootDone = true
-		boot := []tea.Cmd{m.commit(banner(m.g))}
-		if m.g.StatusLine != "" {
-			boot = append(boot, m.commit(render.MuteStyle.Render("["+m.g.StatusLine+"]")))
-		}
-		cmds = append(cmds, tea.Sequence(boot...))
-	}
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -395,6 +402,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// inspect prior turns. Reset the test-observable scrollback
 			// slice so it reflects what's visible after the wipe.
 			m.scrollback = nil
+			m.bannerShown = true
 			// Order matters: wipe MUST land before the re-emit, so use
 			// tea.Sequence (tea.Batch has no ordering guarantees).
 			//
@@ -439,16 +447,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case mcpConnectMsg:
 		if msg.err != nil {
-			cmds = append(cmds, m.commit(render.MuteStyle.Render(fmt.Sprintf("[mcp connect failed: %v]", msg.err))))
+			m.bootPending = append(m.bootPending, render.MuteStyle.Render(fmt.Sprintf("[mcp connect failed: %v]", msg.err)))
 		} else if msg.tools > 0 {
-			cmds = append(cmds, m.commit(render.MuteStyle.Render(fmt.Sprintf("[mcp connected: %d tools]", msg.tools))))
+			m.bootPending = append(m.bootPending, render.MuteStyle.Render(fmt.Sprintf("[mcp connected: %d tools]", msg.tools)))
 		}
 		if msg.startErr != nil {
-			cmds = append(cmds, m.commit(render.LifecycleWarn(fmt.Sprintf("hook OnSessionStart error: %v", msg.startErr))))
+			m.bootPending = append(m.bootPending, render.LifecycleWarn(fmt.Sprintf("hook OnSessionStart error: %v", msg.startErr)))
+		}
+		m.bootDone = true
+		if m.frameReady {
+			cmds = append(cmds, m.commitLines(m.takeBootLines()))
+		}
+
+	case bootFrameMsg:
+		m.frameReady = true
+		if m.bootDone {
+			cmds = append(cmds, m.commitLines(m.takeBootLines()))
 		}
 
 	case autoExitMsg:
-		cmds = append(cmds, m.commit(render.MuteStyle.Render(fmt.Sprintf("[auto-exit after %s]", m.g.AutoExit))))
+		lines := append(m.takeBootLines(), render.MuteStyle.Render(fmt.Sprintf("[auto-exit after %s]", m.g.AutoExit)))
+		cmds = append(cmds, m.commitLines(lines))
 		m.quitReason = "other"
 		cmds = append(cmds, tea.Quit)
 		return m, tea.Batch(cmds...)
@@ -476,6 +495,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) commit(line string) tea.Cmd {
 	m.scrollback = append(m.scrollback, line)
 	return tea.Println(line)
+}
+
+// commitLines commits lines as a single Println so they land in one write.
+// Returns nil for no lines.
+func (m *model) commitLines(lines []string) tea.Cmd {
+	if len(lines) == 0 {
+		return nil
+	}
+	m.scrollback = append(m.scrollback, lines...)
+	return tea.Println(strings.Join(lines, "\n"))
+}
+
+// takeBootLines drains the pending boot lines, prefixed by the banner and
+// status line unless the banner has already been shown.
+func (m *model) takeBootLines() []string {
+	var lines []string
+	if !m.bannerShown {
+		m.bannerShown = true
+		lines = append(lines, banner(m.g))
+		if m.g.StatusLine != "" {
+			lines = append(lines, render.MuteStyle.Render("["+m.g.StatusLine+"]"))
+		}
+	}
+	lines = append(lines, m.bootPending...)
+	m.bootPending = nil
+	return lines
 }
 
 // slashName returns the slash-command-as-typed for display when /clear or
@@ -617,15 +662,27 @@ func cmdHookStop(sender HookSender, last string, stopHookActive bool) tea.Cmd {
 // mcp.Connect → OnSessionStart ordering and prevents races between boot
 // SessionStart and user-driven hooks (e.g. /clear, /compact) submitted before the
 // boot goroutine resolves.
-func cmdBoot(client *mcp.Client, sender HookSender, source string) tea.Cmd {
+//
+// Connect is bounded by timeout. The connect context is cancelled
+// only on timeout, never on success: stdio MCP servers are bound to it via
+// exec.CommandContext and must outlive the boot.
+func cmdBoot(client *mcp.Client, sender HookSender, source string, timeout time.Duration) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
+		ctx, cancel := context.WithCancel(context.Background())
+		timer := time.AfterFunc(timeout, cancel)
 		connectErr := client.Connect(ctx)
+		if !timer.Stop() {
+			if connectErr != nil {
+				connectErr = fmt.Errorf("timed out after %s: %w: %v", timeout, context.DeadlineExceeded, connectErr)
+			} else {
+				connectErr = fmt.Errorf("timed out after %s: %w", timeout, context.DeadlineExceeded)
+			}
+		}
 		tools := 0
 		if connectErr == nil {
 			tools = len(client.Tools())
 		}
-		startErr := sender.OnSessionStart(ctx, source)
+		startErr := sender.OnSessionStart(context.Background(), source)
 		return mcpConnectMsg{err: connectErr, tools: tools, startErr: startErr}
 	}
 }

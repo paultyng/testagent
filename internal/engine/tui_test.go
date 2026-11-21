@@ -3,12 +3,16 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -860,4 +864,396 @@ func TestModel_CtrlCQuits(t *testing.T) {
 	if m.quitReason != "other" {
 		t.Errorf("quitReason = %q, want %q", m.quitReason, "other")
 	}
+}
+
+// collectMsgs runs cmd and flattens any BatchMsg or tea.Sequence message
+// (both are []tea.Cmd underneath) into leaf messages. Cmds
+// that don't return within 50ms (ticks, timers) are skipped.
+func collectMsgs(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	ch := make(chan tea.Msg, 1)
+	go func() { ch <- cmd() }()
+	select {
+	case msg := <-ch:
+		if v := reflect.ValueOf(msg); v.Kind() == reflect.Slice && v.Type().Elem() == reflect.TypeFor[tea.Cmd]() {
+			var out []tea.Msg
+			for i := range v.Len() {
+				out = append(out, collectMsgs(v.Index(i).Interface().(tea.Cmd))...)
+			}
+			return out
+		}
+		if msg == nil {
+			return nil
+		}
+		return []tea.Msg{msg}
+	case <-time.After(50 * time.Millisecond):
+		return nil
+	}
+}
+
+// printLines returns the fmt.Sprint of every bubbletea print-line message.
+func printLines(msgs []tea.Msg) []string {
+	var out []string
+	for _, msg := range msgs {
+		if strings.HasSuffix(fmt.Sprintf("%T", msg), "printLineMessage") {
+			out = append(out, fmt.Sprint(msg))
+		}
+	}
+	return out
+}
+
+// TestBootScrollback pins that boot scrollback is one Println emitted only
+// once both mcpConnectMsg and bootFrameMsg have arrived, in either order:
+// bubbletea v2.0.7 mis-positions Printlns issued before the first frame
+// flush, so nothing may print before then and the banner, status line, and
+// MCP result must land in a single write.
+func TestBootScrollback(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		statusLine string
+		msg        mcpConnectMsg
+		want       []string
+		wantNot    []string
+	}{
+		{
+			name:       "connected",
+			statusLine: "hooks: stop",
+			msg:        mcpConnectMsg{tools: 3},
+			want:       []string{"Test", "[hooks: stop]", "[mcp connected: 3 tools]"},
+		},
+		{
+			name:       "connect-failed",
+			statusLine: "hooks: stop",
+			msg:        mcpConnectMsg{err: errors.New("boom")},
+			want:       []string{"Test", "[hooks: stop]", "[mcp connect failed: boom]"},
+		},
+		{
+			name:       "start-error",
+			statusLine: "hooks: stop",
+			msg:        mcpConnectMsg{tools: 2, startErr: errors.New("hook down")},
+			want:       []string{"Test", "[hooks: stop]", "[mcp connected: 2 tools]", "hook OnSessionStart error: hook down"},
+		},
+		{
+			name: "no-mcp-no-status",
+			msg:  mcpConnectMsg{},
+			want: []string{"Test"},
+			wantNot: []string{
+				"mcp connect", "[hooks",
+			},
+		},
+	}
+	orders := []struct {
+		name          string
+		first, second func(mcpConnectMsg) tea.Msg
+	}{
+		{
+			name:   "boot-then-frame",
+			first:  func(c mcpConnectMsg) tea.Msg { return c },
+			second: func(mcpConnectMsg) tea.Msg { return bootFrameMsg{} },
+		},
+		{
+			name:   "frame-then-boot",
+			first:  func(mcpConnectMsg) tea.Msg { return bootFrameMsg{} },
+			second: func(c mcpConnectMsg) tea.Msg { return c },
+		},
+	}
+	for _, tc := range cases {
+		for _, ord := range orders {
+			t.Run(tc.name+"/"+ord.name, func(t *testing.T) {
+				t.Parallel()
+				m := newTestModel(nil)
+				m.g.StatusLine = tc.statusLine
+
+				newM, cmd := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+				if got := printLines(collectMsgs(cmd)); len(got) != 0 {
+					t.Fatalf("first Update printed %d lines before boot completed: %q", len(got), got)
+				}
+
+				newM, cmd = newM.(model).Update(ord.first(tc.msg))
+				if got := printLines(collectMsgs(cmd)); len(got) != 0 {
+					t.Fatalf("first boot signal printed %d lines, want 0: %q", len(got), got)
+				}
+				if sb := newM.(model).scrollback; len(sb) != 0 {
+					t.Fatalf("scrollback populated before both boot signals: %q", sb)
+				}
+
+				newM, cmd = newM.(model).Update(ord.second(tc.msg))
+				got := printLines(collectMsgs(cmd))
+				if len(got) != 1 {
+					t.Fatalf("second boot signal emitted %d print lines, want exactly 1: %q", len(got), got)
+				}
+				pos := 0
+				for _, w := range tc.want {
+					i := strings.Index(got[0][pos:], w)
+					if i < 0 {
+						t.Fatalf("want %q (in order) after offset %d in %q", w, pos, got[0])
+					}
+					pos += i + len(w)
+				}
+				for _, w := range tc.wantNot {
+					if strings.Contains(got[0], w) {
+						t.Errorf("unexpected %q in %q", w, got[0])
+					}
+				}
+				sb := newM.(model).scrollback
+				if "{"+strings.Join(sb, "\n")+"}" != got[0] {
+					t.Errorf("scrollback %q does not match printed %q", sb, got[0])
+				}
+
+				// A duplicate frame signal must not re-print.
+				_, cmd = newM.(model).Update(bootFrameMsg{})
+				if extra := printLines(collectMsgs(cmd)); len(extra) != 0 {
+					t.Errorf("repeat bootFrameMsg printed %q", extra)
+				}
+			})
+		}
+	}
+}
+
+// TestBootScrollback_RestartBeforeBoot pins that a /clear or /compact
+// landing before mcpConnectMsg latches the banner: the late boot result
+// prints only its MCP/startErr lines, never a second banner.
+func TestBootScrollback_RestartBeforeBoot(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		slashLine string
+		msg       mcpConnectMsg
+		wantLate  []string // lines in the late boot Println; nil = no Println
+	}{
+		{name: "clear-connected", slashLine: "/clear", msg: mcpConnectMsg{tools: 3}, wantLate: []string{"[mcp connected: 3 tools]"}},
+		{name: "compact-failed", slashLine: "/compact", msg: mcpConnectMsg{err: errors.New("boom")}, wantLate: []string{"[mcp connect failed: boom]"}},
+		{name: "clear-start-error", slashLine: "/clear", msg: mcpConnectMsg{startErr: errors.New("hook down")}, wantLate: []string{"hook OnSessionStart error: hook down"}},
+		{name: "clear-no-mcp", slashLine: "/clear", msg: mcpConnectMsg{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newTestModel(nil)
+			m.g.StatusLine = "hooks: stop"
+			newM, _ := m.Update(bootFrameMsg{})
+			m = newM.(model)
+
+			m = typeInto(m, tc.slashLine)
+			m, cmd := pressEnter(m)
+			done := firstMsgOfType[slashDoneMsg](t, cmd)
+			newM, cmd = m.Update(done)
+			m = newM.(model)
+			printed := printLines(collectMsgs(cmd))
+
+			newM, cmd = m.Update(tc.msg)
+			m = newM.(model)
+			late := printLines(collectMsgs(cmd))
+			printed = append(printed, late...)
+
+			if tc.wantLate == nil {
+				if len(late) != 0 {
+					t.Errorf("late boot printed %q, want nothing", late)
+				}
+			} else {
+				if len(late) != 1 {
+					t.Fatalf("late boot printed %d lines, want 1: %q", len(late), late)
+				}
+				if want := strings.Join(tc.wantLate, "\n"); !strings.Contains(late[0], want) {
+					t.Errorf("late boot = %q, want %q", late[0], want)
+				}
+			}
+			for name, text := range map[string]string{
+				"scrollback": strings.Join(m.scrollback, "\n"),
+				"printed":    strings.Join(printed, "\n"),
+			} {
+				if n := strings.Count(text, "sid-test"); n != 1 {
+					t.Errorf("%s has %d banners, want 1: %q", name, n, text)
+				}
+				if n := strings.Count(text, "[hooks: stop]"); n != 1 {
+					t.Errorf("%s has %d status lines, want 1: %q", name, n, text)
+				}
+			}
+		})
+	}
+}
+
+// TestBootScrollback_AutoExitFlushesPending pins that --auto-exit firing
+// before boot printing completes flushes the pending boot lines and the
+// auto-exit marker in one Println ahead of tea.Quit.
+func TestBootScrollback_AutoExitFlushesPending(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		pre     []tea.Msg
+		want    []string
+		wantNot []string
+	}{
+		{
+			name: "nothing-arrived",
+			want: []string{"sid-test", "[hooks: stop]", "[auto-exit after 1s]"},
+		},
+		{
+			name: "boot-arrived-no-frame",
+			pre:  []tea.Msg{mcpConnectMsg{tools: 2}},
+			want: []string{"sid-test", "[hooks: stop]", "[mcp connected: 2 tools]", "[auto-exit after 1s]"},
+		},
+		{
+			name: "frame-arrived-no-boot",
+			pre:  []tea.Msg{bootFrameMsg{}},
+			want: []string{"sid-test", "[hooks: stop]", "[auto-exit after 1s]"},
+		},
+		{
+			name:    "already-flushed",
+			pre:     []tea.Msg{bootFrameMsg{}, mcpConnectMsg{tools: 2}},
+			want:    []string{"[auto-exit after 1s]"},
+			wantNot: []string{"sid-test", "mcp connected"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newTestModel(nil)
+			m.g.StatusLine = "hooks: stop"
+			m.g.AutoExit = time.Second
+			for _, msg := range tc.pre {
+				newM, _ := m.Update(msg)
+				m = newM.(model)
+			}
+
+			newM, cmd := m.Update(autoExitMsg{})
+			msgs := collectMsgs(cmd)
+			got := printLines(msgs)
+			if len(got) != 1 {
+				t.Fatalf("auto-exit printed %d lines, want 1: %q", len(got), got)
+			}
+			pos := 0
+			for _, w := range tc.want {
+				i := strings.Index(got[0][pos:], w)
+				if i < 0 {
+					t.Fatalf("want %q (in order) after offset %d in %q", w, pos, got[0])
+				}
+				pos += i + len(w)
+			}
+			for _, w := range tc.wantNot {
+				if strings.Contains(got[0], w) {
+					t.Errorf("unexpected %q in %q", w, got[0])
+				}
+			}
+			quit := false
+			for _, msg := range msgs {
+				if _, ok := msg.(tea.QuitMsg); ok {
+					quit = true
+				}
+			}
+			if !quit {
+				t.Error("auto-exit did not return tea.Quit")
+			}
+			if newM.(model).quitReason != "other" {
+				t.Errorf("quitReason = %q, want other", newM.(model).quitReason)
+			}
+		})
+	}
+}
+
+// TestCmdBoot_ConnectTimeout pins that a hung MCP server cannot block the
+// boot result past the connect deadline, and that a timeout surfaces as the
+// [mcp connect failed: ...] line. Real network IO, so real (short) time.
+func TestCmdBoot_ConnectTimeout(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		hang     bool
+		wantErr  bool
+		wantLine string
+	}{
+		{name: "hung-server", hang: true, wantErr: true, wantLine: "[mcp connect failed: timed out after 100ms"},
+		{name: "no-servers", wantErr: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client := mcp.NewClient(nil)
+			if tc.hang {
+				release := make(chan struct{})
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					select {
+					case <-r.Context().Done():
+					case <-release:
+					}
+				}))
+				t.Cleanup(srv.Close)
+				t.Cleanup(func() { close(release) })
+				client = mcp.NewClient(map[string]mcp.Server{"hang": {URL: srv.URL}})
+			}
+			m := newTestModel(&testOpts{MCP: client})
+
+			ch := make(chan tea.Msg, 1)
+			go func() { ch <- cmdBoot(client, m.d.Hooks, "startup", 100*time.Millisecond)() }()
+			var msg tea.Msg
+			select {
+			case msg = <-ch:
+			case <-time.After(5 * time.Second):
+				t.Fatal("cmdBoot not bounded by the connect timeout")
+			}
+			boot, ok := msg.(mcpConnectMsg)
+			if !ok {
+				t.Fatalf("cmdBoot returned %T, want mcpConnectMsg", msg)
+			}
+			if (boot.err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", boot.err, tc.wantErr)
+			}
+			if tc.wantErr && !errors.Is(boot.err, context.DeadlineExceeded) {
+				t.Errorf("err = %v, want wrapping context.DeadlineExceeded", boot.err)
+			}
+
+			newM, _ := m.Update(bootFrameMsg{})
+			_, cmd := newM.(model).Update(boot)
+			got := printLines(collectMsgs(cmd))
+			if len(got) != 1 {
+				t.Fatalf("boot printed %d lines, want 1: %q", len(got), got)
+			}
+			if tc.wantLine != "" && !strings.Contains(got[0], tc.wantLine) {
+				t.Errorf("boot Println = %q, want %q", got[0], tc.wantLine)
+			}
+			if !tc.wantErr && strings.Contains(got[0], "mcp connect failed") {
+				t.Errorf("unexpected connect failure in %q", got[0])
+			}
+		})
+	}
+}
+
+// TestInit_SchedulesBootFrameTick pins that Init schedules bootFrameMsg at
+// bootFrameDelay, at least two ~60fps frame intervals after start.
+func TestInit_SchedulesBootFrameTick(t *testing.T) {
+	t.Parallel()
+	if bootFrameDelay < 2*time.Second/60 {
+		t.Fatalf("bootFrameDelay = %s, want >= two 60fps frames", bootFrameDelay)
+	}
+	synctest.Test(t, func(t *testing.T) {
+		cmd := newTestModel(nil).Init()
+		batch, ok := cmd().(tea.BatchMsg)
+		if !ok {
+			t.Fatalf("Init returned %T, want BatchMsg", cmd())
+		}
+		start := time.Now()
+		ch := make(chan time.Duration, len(batch))
+		for _, c := range batch {
+			go func() {
+				if _, ok := c().(bootFrameMsg); ok {
+					ch <- time.Since(start)
+				}
+			}()
+		}
+		select {
+		case d := <-ch:
+			if d != bootFrameDelay {
+				t.Errorf("bootFrameMsg after %s, want %s", d, bootFrameDelay)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Init never produced bootFrameMsg")
+		}
+	})
 }
